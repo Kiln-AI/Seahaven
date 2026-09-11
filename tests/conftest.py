@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from seahaven.clock import Clock
+from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, open_instance
+from seahaven.ids import Ids, instance_seed
 
 # Milliseconds on purpose: a clock whose instant is a whole second hides the
 # rounding mistakes that a world's canonical timestamps would trip over.
@@ -32,3 +34,19 @@ def db(db_path: Path, clock: Clock) -> Iterator[Db]:
         yield database
     finally:
         database.close()
+
+
+@pytest.fixture
+def ctx(db: Db, clock: Clock) -> Ctx:
+    """An instance context as a call receives it, without an instance behind it.
+
+    Everything in the call path takes a `Ctx` and nothing else, which is what
+    lets it be tested before `instances.py` exists.
+    """
+    return Ctx(
+        db=db,
+        clock=clock,
+        ids=Ids(instance_seed("test")),
+        state={},
+        instance=InstanceInfo(id="i_test", fixture=None, seed=instance_seed("test")),
+    )

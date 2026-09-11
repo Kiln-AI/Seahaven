@@ -14,7 +14,7 @@ specs; nothing here restates them.
       for dependencies. `db.py`, `clock.py`, `ids.py`, `sandbox.py`, `errors.py` per
       `components/runtime_db.md` and `world_and_dispatch.md` §5, with the sandbox attack suite of
       `architecture.md` §10. No `LICENSE` file (sign-off gated).
-- [ ] **Phase 2: world definition and dispatch.** `world.py`, `tool.py`, `call.py`, `ctx.py` per
+- [x] **Phase 2: world definition and dispatch.** `world.py`, `tool.py`, `call.py`, `ctx.py` per
       `components/world_and_dispatch.md`: registration verbs, pydantic argument models (strict),
       the middleware chain, `invoke`, serialisation, the framework errors. Tests as listed there.
 - [ ] **Phase 3: fixtures, instances, changesets.** `fixtures.py`, `instances.py` (creation, startup

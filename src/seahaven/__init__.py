@@ -7,7 +7,9 @@ else is internal.
 from importlib.metadata import PackageNotFoundError, version
 
 from seahaven import sandbox
+from seahaven.call import Call
 from seahaven.clock import Clock
+from seahaven.ctx import Ctx
 from seahaven.db import Db
 from seahaven.errors import (
     ArgumentError,
@@ -18,6 +20,8 @@ from seahaven.errors import (
     WorldBug,
 )
 from seahaven.ids import Ids
+from seahaven.tool import Tool
+from seahaven.world import World
 
 try:
     __version__ = version("seahaven")
@@ -26,13 +30,17 @@ except PackageNotFoundError:  # imported from a source tree that was never insta
 
 __all__ = [
     "ArgumentError",
+    "Call",
     "Clock",
+    "Ctx",
     "Db",
     "DbError",
     "Ids",
     "SeahavenError",
+    "Tool",
     "ToolError",
     "UnknownTool",
+    "World",
     "WorldBug",
     "sandbox",
 ]
