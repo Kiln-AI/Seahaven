@@ -12,6 +12,10 @@ We use the `/spec` skill for agentic development: https://github.com/scosman/vib
 phases are in `specs/projects/seahaven_framework/implementation_plan.md`; each phase is one coding
 round, one code review, one commit.
 
+`BACKLOG.md` holds real issues in already-committed code or artifacts that are out of scope for the
+phase that found them. Add to it rather than widening the diff under review; do not pick from it
+without asking.
+
 ## Environment
 
 If you are running in a VM or a fresh container, check the interpreter before anything else:
