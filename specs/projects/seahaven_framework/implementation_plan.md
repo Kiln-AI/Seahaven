@@ -17,7 +17,7 @@ specs; nothing here restates them.
 - [x] **Phase 2: world definition and dispatch.** `world.py`, `tool.py`, `call.py`, `ctx.py` per
       `components/world_and_dispatch.md`: registration verbs, pydantic argument models (strict),
       the middleware chain, `invoke`, serialisation, the framework errors. Tests as listed there.
-- [ ] **Phase 3: fixtures, instances, changesets.** `fixtures.py`, `instances.py` (creation, startup
+- [x] **Phase 3: fixtures, instances, changesets.** `fixtures.py`, `instances.py` (creation, startup
       hooks, the lock discipline and the concurrency gate, working directory and sweep, `bulk`,
       destroy), `changes.py`, `conformance.py` per `components/fixtures_instances.md`. In-process API
       complete after this phase: `world.instance(...)`, `call`, `inspect`, `changes`, `freeze`.
