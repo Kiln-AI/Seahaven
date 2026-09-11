@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/scosman/Seahaven"
+Homepage = "https://github.com/Kiln-AI/Seahaven"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/seahaven"]
