@@ -9,7 +9,7 @@ specs; nothing here restates them.
 
 ## Phases
 
-- [ ] **Phase 1: skeleton and the runtime database layer.** Package layout (`architecture.md` §1),
+- [x] **Phase 1: skeleton and the runtime database layer.** Package layout (`architecture.md` §1),
       `pyproject.toml` with the `serve` extra, uv, ruff, ty, pytest on 3.14 in CI, the licence check
       for dependencies. `db.py`, `clock.py`, `ids.py`, `sandbox.py`, `errors.py` per
       `components/runtime_db.md` and `world_and_dispatch.md` §5, with the sandbox attack suite of

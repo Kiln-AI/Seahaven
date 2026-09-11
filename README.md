@@ -3,7 +3,10 @@ A framework for building synthetic worlds/environments for AI agents. Useful for
 
 ## Status
 
-Early development. This release reserves the package name; there is no public API yet.
+Early development, and nothing here is stable yet. The runtime database layer exists today:
+`Db`, `Clock`, `Ids`, the error hierarchy and the `seahaven.sandbox` module for running SQL an
+agent wrote. The world, tool and instance API is being built on top of it; the specification is
+in `specs/projects/seahaven_framework/`.
 
 ## Installation
 

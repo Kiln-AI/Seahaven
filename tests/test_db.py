@@ -1,0 +1,325 @@
+"""The connection wrapper, the two doors onto an instance, and schema reflection."""
+
+import time
+from pathlib import Path
+
+import apsw
+import pytest
+
+from seahaven.clock import Clock
+from seahaven.db import Db, build_blank, open_inspection, open_instance, shadow_tables, world_tables
+from seahaven.errors import DbError, WorldBug
+
+NOTES = "CREATE TABLE notes (id TEXT NOT NULL PRIMARY KEY, body TEXT NOT NULL) STRICT"
+
+SEARCHABLE = """
+CREATE TABLE notes (id TEXT NOT NULL PRIMARY KEY, body TEXT NOT NULL) STRICT;
+CREATE VIRTUAL TABLE notes_fts USING fts5(body, content='notes');
+CREATE VIRTUAL TABLE memos_fts USING fts5(body);
+"""
+
+
+@pytest.fixture
+def notes(db: Db) -> Db:
+    db.execute(NOTES)
+    db.executemany("INSERT INTO notes (id, body) VALUES (?, ?)", [("a", "first"), ("b", "second")])
+    return db
+
+
+def test_rows_come_back_as_dicts(notes: Db) -> None:
+    assert notes.rows("SELECT id, body FROM notes ORDER BY id") == [
+        {"id": "a", "body": "first"},
+        {"id": "b", "body": "second"},
+    ]
+
+
+def test_a_single_column_row_is_still_a_dict(notes: Db) -> None:
+    # One column is where a row shape would give way if APSW ever handed back a
+    # bare value instead of a tuple.
+    assert notes.rows("SELECT id FROM notes ORDER BY id") == [{"id": "a"}, {"id": "b"}]
+    assert notes.one("SELECT count(*) AS total FROM notes") == {"total": 2}
+
+
+def test_no_rows_is_an_empty_list_and_none(notes: Db) -> None:
+    assert notes.rows("SELECT id FROM notes WHERE id = 'z'") == []
+    assert notes.one("SELECT id FROM notes WHERE id = 'z'") is None
+
+
+def test_duplicate_column_names_keep_the_last(notes: Db) -> None:
+    assert notes.one("SELECT 1 AS x, 2 AS x") == {"x": 2}
+
+
+def test_one_leaves_no_statement_in_flight(notes: Db) -> None:
+    assert notes.one("SELECT id FROM notes ORDER BY id") == {"id": "a"}
+
+    # A statement left half-stepped would fail this commit.
+    with notes.transaction():
+        notes.execute("INSERT INTO notes (id, body) VALUES ('c', 'third')")
+
+    assert len(notes.rows("SELECT id FROM notes")) == 3
+
+
+def test_execute_reports_what_the_statement_did(db: Db) -> None:
+    db.execute("CREATE TABLE events (body TEXT NOT NULL)")
+
+    inserted = db.execute("INSERT INTO events (body) VALUES ('one')")
+    assert inserted == (1, 1)
+
+    updated = db.execute("UPDATE events SET body = 'two'")
+    assert updated.rowcount == 1
+
+
+def test_rowid_zero_is_a_rowid(db: Db) -> None:
+    db.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, body TEXT NOT NULL) STRICT")
+
+    # SQLite's own value, passed through: 0 is a legal rowid, not "no insert".
+    executed = db.execute("INSERT INTO events VALUES (0, 'zero')")
+
+    assert executed == (1, 0)
+    # An `int`, so world code can use it without proving it is not `None`.
+    assert executed.last_rowid + 1 == 1
+
+
+def test_execute_discards_returned_rows(notes: Db) -> None:
+    assert notes.execute("DELETE FROM notes RETURNING id").rowcount == 2
+
+
+def test_executemany_counts_every_row_it_changed(db: Db) -> None:
+    db.execute(NOTES)
+
+    changed = db.executemany(
+        "INSERT INTO notes (id, body) VALUES (?, ?)",
+        [("a", "one"), ("b", "two"), ("c", "three")],
+    )
+
+    assert changed == 3
+
+
+def test_params_bind_positionally(notes: Db) -> None:
+    assert notes.rows("SELECT id FROM notes WHERE body = ? OR id = ?", "first", "b") == [
+        {"id": "a"},
+        {"id": "b"},
+    ]
+
+
+def test_sqlite_errors_arrive_as_db_errors(notes: Db) -> None:
+    with pytest.raises(DbError) as raised:
+        notes.rows("SELECT * FROM missing")
+
+    assert "no such table" in raised.value.sqlite_message
+    assert raised.value.message == "database error"
+    assert isinstance(raised.value.__cause__, apsw.Error)
+
+
+def test_a_db_error_carries_the_extended_result_code(notes: Db) -> None:
+    with pytest.raises(DbError) as raised:
+        notes.execute("INSERT INTO notes (id, body) VALUES ('a', 'again')")
+
+    assert raised.value.sqlite_code == apsw.SQLITE_CONSTRAINT_PRIMARYKEY
+
+
+def test_a_nested_transaction_is_a_savepoint(notes: Db) -> None:
+    with notes.transaction():
+        notes.execute("INSERT INTO notes (id, body) VALUES ('c', 'third')")
+        with pytest.raises(RuntimeError), notes.transaction():
+            notes.execute("INSERT INTO notes (id, body) VALUES ('d', 'fourth')")
+            raise RuntimeError("the tool gave up")
+
+    assert [row["id"] for row in notes.rows("SELECT id FROM notes ORDER BY id")] == ["a", "b", "c"]
+
+
+def test_a_failed_transaction_rolls_everything_back(notes: Db) -> None:
+    with pytest.raises(RuntimeError), notes.transaction():
+        notes.execute("DELETE FROM notes")
+        raise RuntimeError("the tool gave up")
+
+    assert len(notes.rows("SELECT id FROM notes")) == 2
+
+
+def test_a_commit_that_fails_is_a_db_error(db: Db) -> None:
+    db.execute("CREATE TABLE parents (id TEXT NOT NULL PRIMARY KEY) STRICT")
+    db.execute(
+        "CREATE TABLE children ("
+        "  id TEXT NOT NULL PRIMARY KEY,"
+        "  parent TEXT NOT NULL REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED"
+        ") STRICT"
+    )
+
+    # The violation is only noticed at COMMIT, which the wrapper owns.
+    with pytest.raises(DbError) as raised, db.transaction():
+        db.execute("INSERT INTO children (id, parent) VALUES ('c', 'nobody')")
+
+    assert raised.value.sqlite_code == apsw.SQLITE_CONSTRAINT_FOREIGNKEY
+    assert db.rows("SELECT id FROM children") == []
+
+
+def test_in_transaction_tracks_the_block(notes: Db) -> None:
+    assert not notes.in_transaction
+    with notes.transaction():
+        assert notes.in_transaction
+    assert not notes.in_transaction
+
+
+def test_the_raw_connection_keeps_its_own_errors_inside_a_transaction(notes: Db) -> None:
+    with notes.transaction():
+        # Not a DbError: the wrapper only wraps what it ran itself.
+        with pytest.raises(apsw.Error):
+            notes.conn.execute("SELECT * FROM missing")
+        notes.execute("INSERT INTO notes (id, body) VALUES ('c', 'third')")
+
+    assert len(notes.rows("SELECT id FROM notes")) == 3
+
+
+def test_the_raw_connection_is_the_live_one(notes: Db) -> None:
+    notes.conn.execute("INSERT INTO notes (id, body) VALUES ('c', 'third')")
+
+    assert notes.one("SELECT body FROM notes WHERE id = 'c'") == {"body": "third"}
+
+
+def test_an_instance_connection_is_hardened(db: Db) -> None:
+    assert db.conn.pragma("journal_mode") == "wal"
+    assert db.conn.pragma("synchronous") == 1
+    assert db.conn.pragma("foreign_keys") == 1
+    assert db.conn.config(apsw.SQLITE_DBCONFIG_DEFENSIVE, -1) == 1
+    assert db.conn.config(apsw.SQLITE_DBCONFIG_TRUSTED_SCHEMA, -1) == 0
+
+
+def test_world_code_keeps_sqlites_own_limits(db: Db) -> None:
+    plain = apsw.Connection(":memory:")
+    limits = (
+        apsw.SQLITE_LIMIT_LENGTH,
+        apsw.SQLITE_LIMIT_SQL_LENGTH,
+        apsw.SQLITE_LIMIT_EXPR_DEPTH,
+        apsw.SQLITE_LIMIT_COMPOUND_SELECT,
+        apsw.SQLITE_LIMIT_LIKE_PATTERN_LENGTH,
+        apsw.SQLITE_LIMIT_VARIABLE_NUMBER,
+    )
+
+    try:
+        for limit in limits:
+            assert db.conn.limit(limit) == plain.limit(limit)
+    finally:
+        plain.close()
+
+
+def test_extensions_cannot_be_loaded(db: Db) -> None:
+    with pytest.raises(DbError):
+        db.rows("SELECT load_extension('anything')")
+
+
+def test_a_second_writer_fails_instead_of_waiting(notes: Db, db_path: Path) -> None:
+    other = apsw.Connection(str(db_path))
+    try:
+        other.execute("BEGIN IMMEDIATE")
+
+        started = time.monotonic()
+        with pytest.raises(DbError):
+            notes.execute("INSERT INTO notes (id, body) VALUES ('c', 'third')")
+
+        assert time.monotonic() - started < 0.5
+    finally:
+        other.close()
+
+
+def test_inspection_reads_but_does_not_write(notes: Db, db_path: Path, clock: Clock) -> None:
+    inspection = open_inspection(db_path, clock)
+    try:
+        assert inspection.one("SELECT body FROM notes WHERE id = 'a'") == {"body": "first"}
+        assert inspection.one("SELECT current_timestamp AS now") == {"now": clock.iso()}
+        assert inspection.rows("PRAGMA table_info('notes')")
+        # Pragma names fold the way every other SQL name does.
+        assert inspection.rows("PRAGMA TABLE_INFO('notes')")
+        assert inspection.rows("SELECT name FROM pragma_table_xinfo('notes')")
+
+        for forbidden in (
+            "INSERT INTO notes (id, body) VALUES ('c', 'third')",
+            "PRAGMA journal_mode = DELETE",
+            "PRAGMA user_version = 3",
+            "PRAGMA optimize",
+            "ATTACH DATABASE ':memory:' AS other",
+            "CREATE TABLE sneaky (x)",
+            "DROP TABLE notes",
+        ):
+            with pytest.raises(DbError):
+                inspection.execute(forbidden)
+    finally:
+        inspection.close()
+
+    assert len(notes.rows("SELECT id FROM notes")) == 2
+
+
+def test_build_blank_writes_the_ddl_and_nothing_else(tmp_path: Path) -> None:
+    path = tmp_path / "blank.sqlite"
+
+    conn = build_blank(path, NOTES)
+
+    assert world_tables(conn) == ["notes"]
+    assert conn.pragma("foreign_keys") == 1
+    conn.close()
+    assert path.exists()
+
+
+def test_build_blank_runs_every_statement(tmp_path: Path) -> None:
+    # APSW runs a multi-statement string only as far as the first statement that
+    # returns a row, unless the cursor is iterated. A world's schema file may
+    # hold such a statement, and everything below it has to run.
+    ddl = f"SELECT 1;\n{NOTES};\nCREATE TABLE later (x TEXT NOT NULL PRIMARY KEY) STRICT"
+
+    conn = build_blank(tmp_path / "blank.sqlite", ddl)
+
+    assert world_tables(conn) == ["later", "notes"]
+    conn.close()
+
+
+def test_build_blank_in_memory_needs_no_file(tmp_path: Path) -> None:
+    conn = build_blank(":memory:", NOTES)
+
+    assert world_tables(conn) == ["notes"]
+    assert list(tmp_path.iterdir()) == []
+    conn.close()
+
+
+def test_build_blank_refuses_to_overwrite(tmp_path: Path) -> None:
+    path = tmp_path / "blank.sqlite"
+    path.write_bytes(b"")
+
+    with pytest.raises(WorldBug, match="existing file"):
+        build_blank(path, NOTES)
+
+
+def test_build_blank_reports_ddl_that_does_not_execute(tmp_path: Path) -> None:
+    path = tmp_path / "blank.sqlite"
+
+    with pytest.raises(apsw.SQLError, match="syntax error"):
+        build_blank(path, "CREATE TABLE (")
+
+    # Nothing left behind: a retry at the same path reports the DDL's error
+    # again rather than "refusing to build over an existing file".
+    assert not path.exists()
+    build_blank(path, NOTES).close()
+
+
+def test_fts5_shadow_tables_are_found_by_prefix(tmp_path: Path) -> None:
+    conn = build_blank(tmp_path / "blank.sqlite", SEARCHABLE)
+
+    shadow = shadow_tables(conn)
+
+    assert {"notes_fts_data", "notes_fts_idx", "notes_fts_config"} <= shadow
+    # `content=` changes which shadow tables exist, which is why they are derived
+    # rather than listed.
+    assert "memos_fts_content" in shadow
+    assert "notes_fts_content" not in shadow
+    assert {"notes", "notes_fts", "memos_fts"} & shadow == set()
+    conn.close()
+
+
+def test_world_tables_keep_the_virtual_table_and_drop_the_rest(
+    tmp_path: Path, clock: Clock
+) -> None:
+    path = tmp_path / "state.sqlite"
+    build_blank(path, SEARCHABLE).close()
+    db = open_instance(path, clock)
+    try:
+        assert world_tables(db.conn) == ["memos_fts", "notes", "notes_fts"]
+    finally:
+        db.close()

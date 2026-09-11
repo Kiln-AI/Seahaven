@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and Python 3.14
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --locked
+
+      - name: Format
+        run: uv run ruff format --check
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Types
+        run: uv run ty check
+
+      - name: Tests
+        run: uv run pytest
+
+      # Seahaven is vendored into other people's products: what it installs at
+      # runtime stays MIT, Apache-2.0 or BSD-class.
+      - name: Dependency licences
+        run: uv run python scripts/check_licences.py

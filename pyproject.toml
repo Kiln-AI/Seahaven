@@ -7,7 +7,7 @@ name = "seahaven"
 version = "0.0.1"
 description = "A framework for building synthetic worlds/environments for AI agents. Useful for RL and evaluations."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 authors = [{ name = "Steve Cosman" }]
 keywords = ["ai", "agents", "rl", "evaluation", "environments", "simulation"]
 classifiers = [
@@ -16,9 +16,36 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+dependencies = [
+    "apsw>=3.53",
+    "pydantic>=2.12,<3",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+serve = ["openenv>=0.4.2,<0.5"]
 
 [project.urls]
 Homepage = "https://github.com/Kiln-AI/Seahaven"
 
+[dependency-groups]
+dev = ["packaging>=24", "pytest>=8", "ruff>=0.14", "ty>=0.0.1a21"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/seahaven"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "scripts"]
+# The specs are documents. Their code blocks are sketches, not code that runs.
+extend-exclude = ["specs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ty.src]
+include = ["src", "tests", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
