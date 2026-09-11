@@ -49,3 +49,6 @@ include = ["src", "tests", "scripts"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# An exception on a thread a test started is otherwise a warning printed beside
+# a passing test, which is no way to test a lock.
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]

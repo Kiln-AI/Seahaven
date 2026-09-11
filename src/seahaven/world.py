@@ -17,8 +17,10 @@ import hashlib
 import inspect
 import re
 import sys
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -29,6 +31,8 @@ from seahaven.call import Handler, Middleware, build_chain, invoke
 from seahaven.ctx import Ctx
 from seahaven.db import build_blank
 from seahaven.errors import WorldBug
+from seahaven.fixtures import Fixture, load_all
+from seahaven.instances import Instance, InstanceManager
 from seahaven.tool import Tool
 
 __all__ = [
@@ -117,6 +121,11 @@ class World:
         self._middlewares: list[Middleware] = []
         self._startup_hooks: list[RegisteredStartupHook] = []
         self.chain: Handler = build_chain((), invoke)
+        # Made on the first instance, not here: a world that is only imported --
+        # to be linted, to have its tools listed, to be scaffolded against --
+        # never touches the working directory at all.
+        self._manager: InstanceManager | None = None
+        self._manager_lock = threading.Lock()
 
     @property
     def tools(self) -> Mapping[str, Tool]:
@@ -174,6 +183,36 @@ class World:
         if obj is None:
             return self._register_startup_hook
         return self._register_startup_hook(obj)
+
+    def instance(
+        self,
+        fixture: str | None = None,
+        *,
+        seed: int | bytes | None = None,
+        now: str | datetime | None = None,
+        **startup_kwargs: Any,
+    ) -> Instance:
+        """Make a live instance: a private copy of a fixture, or a blank one.
+
+        `now` sets a blank instance's clock and is refused with a fixture, which
+        carries its own. Everything else keyword is passed to the startup hooks
+        that named it. The instance is a context manager and leaving the block
+        destroys it.
+        """
+        return self._instances().create(fixture, seed=seed, now=now, startup_kwargs=startup_kwargs)
+
+    def fixtures(self) -> list[Fixture]:
+        """Every fixture in the world's fixtures directory, by id.
+
+        A world with no fixtures directory has no fixtures; that is not an error.
+        """
+        return sorted(load_all(self.fixtures_dir).values(), key=lambda fixture: fixture.id)
+
+    def _instances(self) -> InstanceManager:
+        with self._manager_lock:
+            if self._manager is None:
+                self._manager = InstanceManager(self)
+            return self._manager
 
     def _register_tool(
         self,

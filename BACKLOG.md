@@ -55,6 +55,94 @@ implementer will read it as the spec. Left unedited because editing a completed 
 its dependents to `draft`; the fix needs a maintainer's call on whether to take that cascade or to
 annotate the section in place.
 
+### B3. Working directories from the bare-`<pid>` layout are never swept
+
+**Found:** Phase 3 code review, round 5. **Owner:** unassigned. **Risk:** low — a disk leak, no
+correctness or security consequence.
+
+Phase 3 round 4 changed the default working directory from `<tempdir>/seahaven-<uid>/<pid>/` to
+`<tempdir>/seahaven-<uid>/<pid namespace>-<pid>/`, because `os.kill(pid, 0)` answers in the
+caller's pid namespace and two containers sharing a `<tempdir>` were sweeping each other's live
+instances.
+
+`instances.py:_pid_of` matches a directory name only when it starts with this namespace's prefix, so
+on a machine where procfs exists a directory left by an earlier build — a bare `999999/` — returns
+`None` and is stepped over. Nothing else removes it either: the sweep is the only thing that ever
+deletes a working directory it did not create. Verified: a bare-numeric directory is still PRESENT
+after a sweep. The behaviour is deliberate and safe (an unprefixed name cannot be judged against
+this namespace's pids), but it silently leaks disk for anyone who ran an earlier build.
+
+A fix would sweep a bare-numeric sibling too, but only where the name can be judged safely: where
+`/proc/self/ns/pid` is unreadable the prefix is empty and bare names *are* this layout, so the
+condition is "procfs exists, the name is bare numeric, and the pid is not alive" — which is exactly
+the cross-namespace hazard the prefix was added to remove, and is therefore a decision about a
+one-off migration, not a rule to add to the sweep. A one-shot cleanup at the root, or documented
+`rm -rf`, is the likelier answer.
+
+### B4. `world.name` is an unvalidated path component
+
+**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — not attacker
+reachable; a world's name is written by the world's author and never arrives off the wire.
+
+The default working directory is `<tempdir>/seahaven-<uid>/<namespace>-<pid>/<world name>/`.
+`instances.py:_open_child` hardens the *lookup* of each component — `O_NOFOLLOW`, an owner check,
+`dir_fd` — and assumes the component it is given is a single path segment. `World.__init__` in
+`world.py` never checks that. `O_NOFOLLOW` is no help here: `..` is not a symlink.
+
+Verified by making a real instance of each:
+
+- `World("..")` puts the instance directly in the working root, beside the per-process directories.
+- `World("../..")` puts a live `state.sqlite` **outside the working root entirely**, where the sweep
+  will never see it — a permanent leak of the world's data into `<tempdir>`.
+- `World("../escaped")` lands inside the root but outside any per-process directory, likewise
+  never swept.
+- `World("a/b")` and `World("")` are refused, but only incidentally, as `ENOENT` wrapped in the
+  working-directory `WorldBug`.
+
+The fix is validation shaped like `fixtures.check_id` — one path segment, no leading dot, not `.`
+or `..` — in `World.__init__`, refusing with a `WorldBug` that names `World(name=...)`. It is
+recorded here rather than fixed in Phase 3 because the *use* is Phase 3's but the *validation*
+belongs in `world.py`, which is Phase 2's and already committed. A world name is also likely to end
+up in more than a path (a log line, a sidecar, a URL in Phase 6/7), so the rule belongs where the
+name is accepted.
+
+### B5. The default working root is created `0o777` and only then tightened
+
+**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — hardening, not a
+hole; every consequence of winning the window is refused by something else.
+
+`instances.py:_make_instance_dir` does `root.mkdir(parents=True, exist_ok=True)` and then
+`os.fchmod(root_fd, 0o700)` on a checked descriptor. `mkdir`'s default mode is `0o777`, masked by
+the umask, so under `umask 000` the root exists world-writable between the two calls (confirmed:
+mode at creation `0o777`, mode after the `fchmod` `0o700`). Anything planted in that window is
+refused when it is used — `_open_child` checks owner and `O_NOFOLLOW` at every level, which is what
+round 5 and round 6 verified with a second uid — so this is depth, not a live defect.
+
+`root.mkdir(mode=0o700, parents=True, exist_ok=True)` costs nothing and makes the ceiling `0o700`
+instead of `0o777` for the window. Note that the docstring's "`mkdir`'s mode is masked by the umask,
+so it is a ceiling and not a setting" argument is the reason the `fchmod` exists, not a reason to
+leave the ceiling at `0o777`; whoever makes this change should extend that paragraph to say both are
+used and why.
+
+### B6. The descriptor-anchored final `mkdir` is claimed by a docstring and pinned by no test
+
+**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — harmless on today's
+code; a test gap around a structural property.
+
+`instances.py:_make_instance_dir` ends with `os.mkdir(instance_id, 0o700, dir_fd=world_fd)`, and its
+docstring says the instance directory is created relative to the checked `<world>` descriptor rather
+than composed as a string and resolved again. Replacing that line with a composed-path
+`(root / process / world / instance_id).mkdir(0o700)` survives the entire suite under both umasks.
+It is harmless today because every component above it has just been checked and is `0o700` and ours,
+so there is nothing to redirect the composed path — the same position the `S_ISDIR` guard in the
+sweep is in, where the structural property was pinned rather than the line dropped.
+
+Two ways to close it, and the choice is the point: stage the swap (rename the checked `<world>`
+directory away and leave a symlink at its name between the `_open_child` and the `mkdir`, in the
+monkeypatch style `test_the_sweep_removes_through_the_descriptor_it_judged_through` uses) and assert
+the instance is not made through the link; or soften the docstring to claim only what is tested.
+Pinning it is the better answer if the anchoring is meant to survive later edits.
+
 ---
 
 ## Method notes

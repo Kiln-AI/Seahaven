@@ -21,7 +21,7 @@ from seahaven.tool import Tool
 if TYPE_CHECKING:  # `ctx.py` is below this module; the annotation is all that is needed here
     from seahaven.ctx import Ctx
 
-__all__ = ["Call", "Handler", "Middleware", "build_chain", "invoke"]
+__all__ = ["Call", "Handler", "Middleware", "build_chain", "invoke", "serialise"]
 
 type Handler = Callable[["Ctx", "Call"], Any]
 type Middleware = Callable[["Ctx", "Call", Handler], Any]
@@ -85,8 +85,8 @@ def invoke(ctx: Ctx, call: Call) -> Any:
                 # Inside the transaction: a result that cannot be serialised
                 # rolls the call back rather than committing a write whose
                 # answer never reached the caller.
-                return _serialise(tool.fn(ctx, **call.arguments))
-        return _serialise(tool.fn(ctx, **call.arguments))
+                return serialise(tool.fn(ctx, **call.arguments))
+        return serialise(tool.fn(ctx, **call.arguments))
     except ToolError:
         raise
     except Exception:
@@ -99,7 +99,7 @@ def invoke(ctx: Ctx, call: Call) -> Any:
         raise
 
 
-def _serialise(result: Any) -> Any:
+def serialise(result: Any) -> Any:
     """A tool's return value as JSON-able data.
 
     `to_jsonable_python` renders models, dataclasses and datetimes, and would
@@ -165,7 +165,7 @@ def _children(value: Any) -> Iterable[Any] | None:
         # other sequences pydantic builds a serialiser for -- which the model's
         # own serialiser renders as a list. Materialised, because it is walked
         # now and rendered later. (A bare one, outside a model, `to_jsonable_python`
-        # refuses, and `_serialise` turns that refusal into a `WorldBug`.)
+        # refuses, and `serialise` turns that refusal into a `WorldBug`.)
         return list(value)
     return None
 
