@@ -17,8 +17,11 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
+      # `--extra serve` installs OpenEnv, which the `seahaven.openenv` module and
+      # its tests need. Without it the type check and the transport tests would
+      # be skipped here and run nowhere.
       - name: Install the project
-        run: uv sync --locked
+        run: uv sync --locked --extra serve
 
       - name: Format
         run: uv run ruff format --check

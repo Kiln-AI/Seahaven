@@ -333,6 +333,199 @@ does not work.
 Phase 5 changed nothing: the layout is what `functional_spec.md` §2.1 specifies, and the choice is
 not a placeholder slice's to make.
 
+**Phase 6 did not close it either, and can be struck off the owner line.** `components/openenv.md`
+gives neither `app(world, ...)` nor `serve(world, ...)` a fixtures argument, so there is nothing in
+this component's spec for `serve` to pass: a world reaches the server already built, and where its
+fixtures live was decided before `serve` saw it. What Phase 6 adds is the consequence — a served
+world that is an install rather than a checkout answers every fixture-backed `reset` with the
+`WorldBug` above, over the wire, to an agent that cannot do anything about it. The choice is Phase
+7's, where the `--hub` `Dockerfile` makes it whether or not anyone writes it down.
+
+---
+
+### B12. `components/openenv.md` contradicts itself on tool listing, and its two code sketches are wrong
+
+**Found:** Phase 6 implementation. **Owner:** unassigned. **Risk:** the §5 sketch is the higher of
+the two — it is copied verbatim into the per-world client that the same section schedules for a
+later release, and it is broken in exactly the mode a training harness runs in.
+
+Three statements in an artifact that is otherwise accurate line by line. Each is recorded with what
+the code does instead and why, in
+`specs/projects/seahaven_framework/phase_plans/phase_6.md`; none of them was worked around silently.
+
+- **§2 `:61` and `:71` cannot both hold.** `:61` says `ListToolsAction` → `ListToolsObservation(tools=instance.tools())`
+  is "checked first", which needs an instance; `:71` says "A `step` before `reset` raises
+  `WorldBug("reset first")`". OpenEnv's own `/mcp` `tools/list` handler steps a `ListToolsAction` on
+  a session that has never been reset, and MCP's contract is that discovery does not require one, so
+  a literal reading makes every standard MCP client fail against every Seahaven world. The code
+  answers the listing before the guard and derives it from `world.tools` when there is no instance,
+  with a test pinning that the two derivations agree. Whichever way a maintainer settles it, one of
+  the two sentences has to go.
+- **§2 `:67` writes the generic internal error with two keys**, `{"code": "internal", "message": "internal error"}`,
+  where `architecture.md` §6 defines the wire shape of every error as `{"code", "message", "details"}`.
+  Architecture wins on a cross-component shape, and a client that reads `error["details"]` should not
+  have to special-case the one error a world did not write. The code builds it through
+  `ToolError.to_dict()` so that it cannot drift from the others.
+- **§5 `:146` sketches `call` as `self.step(CallToolAction(...)).observation`.** `EnvClient.step` is
+  dual-mode: in asynchronous code it answers an awaitable, and `.observation` on an awaitable is not
+  an observation. The sketch is right about the signature and wrong about the mechanism; `call` and
+  `list_tools` go through `EnvClient._dispatch`, which is how the base client produces a value in
+  synchronous code and an awaitable in asynchronous code from one method. This is not a theoretical
+  reading: Phase 6 ran the sketch as a hand mutation, and it passes the synchronous end-to-end test
+  and fails only the asynchronous one. §5 is also silent on `__enter__`/`__aenter__`, which
+  `EnvClient` annotates as returning `EnvClient`, so `with SeahavenClient(...) as env` type-checks
+  as a value with neither `call` nor `list_tools` until the subclass narrows them — worth a sentence
+  wherever the first is fixed.
+- **§5 `:146` also writes the tool name as an ordinary parameter, `def call(self, tool, **arguments)`.**
+  `Instance.call` is `def call(self, name: str, /, **arguments)` — positional-only, deliberately, so
+  that `**arguments` can carry an argument the world happened to call `name`. A world may equally
+  call one `tool`, or `self`; without the `/` such a tool lists, works through
+  `step(CallToolAction(...))` and raises `TypeError: got multiple values for argument 'tool'` through
+  the documented convenience, which is a tool no harness can call. Found in Phase 6's code review,
+  round 1, and fixed in the code there with a test; the sketch should grow the `/` wherever §5 is
+  next touched, since a per-world generated client written from it would reintroduce the same hole
+  for every world.
+
+`components/openenv.md` is `status: complete`, so this is the same call B2, B7 and B8 leave open:
+editing a completed artifact cascades its dependents to `draft`, and whether to take that cascade or
+annotate in place is a maintainer's.
+
+---
+
+### B13. Three OpenEnv behaviours a Seahaven world cannot fix from its own side
+
+**Found:** Phase 6 code review, rounds 1 and 3. **Owner:** unassigned — upstream, or a Seahaven
+workaround if upstream will not move. **Risk:** the log one is the higher: it makes a 500-session
+server's log useless for finding real errors, which is the log an operator reaches for first.
+
+All three were reproduced against a real server; none is in Seahaven's code, and none has a fix
+that belongs inside this framework as it stands. The first two are one root cause at two endpoints:
+OpenEnv uses the base `State` type where the environment's own subclass was meant.
+
+- **`GET /schema` publishes the base `State`, so a client never sees the state model it is
+  driving.** `create_app` takes an action class and an observation class and no state class, and
+  `get_schemas` answers `state=State.model_json_schema()`
+  (`openenv/core/env_server/http_server.py:1451` in 0.4.2), so the state block of `/schema` describes
+  `episode_id` and `step_count` and nothing else — for every environment, whatever its state
+  declares. Same root cause as the bullet below, one endpoint over: the base type is used where the
+  environment's own was meant. Found in Phase 6 code review, round 3, by a test written to assert
+  that `SeahavenState`'s field descriptions reach a client; they cannot, so that half of the rule is
+  asserted in process instead and `/schema`'s state block is deliberately not pinned — asserting it
+  would make upstream's answer Seahaven's contract. A fix upstream is one parameter.
+- **`GET /state` strips every field the environment's state declares.** Over the websocket a state
+  frame carries `world`, `fixture`, `now`, `episode_id` and `step_count`; over HTTP the same server
+  answers `{"episode_id": null, "step_count": 0}`. OpenEnv's HTTP route is annotated
+  `response_model=State`, so FastAPI serialises the base model and drops every subclass field, and
+  the route is not session-bound in the first place, so the numbers it does answer are a fresh
+  environment's rather than any session's — confirmed against a live session that had reset and
+  stepped once: the websocket answered `step_count: 1` and a real episode id while HTTP answered
+  `null` and `0` at the same moment. A harness that reads state over HTTP therefore sees
+  nothing about the world it is driving. Nothing in Phase 6 pins this, deliberately: a test asserting
+  the two-key answer would pin upstream's defect as Seahaven's contract. The websocket path — which
+  is the path `SeahavenClient` and every eval use — is fully tested.
+- **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
+  OpenEnv's `/ws` handler calls `await websocket.close()` on a connection the client has already
+  closed (`openenv/core/env_server/http_server.py:1694` in 0.4.2) and lets the resulting
+  `starlette.websockets.WebSocketDisconnect` escape into uvicorn's ASGI error path. `components/openenv.md` §4 has `serve` run at `log_level="info"`, so every session
+  that ends normally leaves a traceback in the log. Workarounds, none of them free: a `logging`
+  filter installed by `serve` (which would have to match on uvicorn's logger and the exception type,
+  and would hide a real error of the same shape), running at `warning` (which loses the startup line
+  that tells an operator the port, and contradicts §4), or an upstream `try/except` around that one
+  `close`. Recorded rather than chosen, because filtering another library's error logs from inside
+  `serve` is a decision with a blast radius, not a tidy-up.
+
+---
+
+### B14. "First paragraph of README" is four rules, and `components/openenv.md` states it as a phrase
+
+**Found:** Phase 6 code review, rounds 1, 2 and 3. **Owner:** unassigned. **Risk:** low as a
+defect, high as a time sink — the phrase cost three review rounds and is the only line of the
+component document that a reader would not know was under-specified.
+
+`components/openenv.md` §2 `:79` says the metadata's `description` is the "first paragraph of README
+or `f"Seahaven world {name}"`". §6 `:180` then says that same `README.md` is the Space card. A Space
+card does not begin with a paragraph: it begins with YAML front matter between `---` fences, usually
+followed by a heading. So the phrase has to be read as four rules, and Phase 6 wrote all four:
+
+- front matter is skipped as a block — closing fence searched for across the whole file *first*, and
+  only if there is none does the block end at the first blank line or at the end of the file;
+- a line that is furniture rather than prose is not the description, and "furniture" is two rules
+  and not one: a thematic break is three or more `-`, `_` or `*` with spaces allowed between them,
+  and a setext underline is a run of `=` or of `-` with no interior space. A rule is the whole line
+  or nothing, so `- a bullet` and `--- not a rule ---` stay prose, and `**` and `* *` stay prose
+  because two characters are not a break;
+- a line with furniture under it is a heading, skipped as `# Title` is, scoped to the line that
+  would start the paragraph;
+- a UTF-8 byte-order mark is decoded away, because `str.strip()` does not remove it.
+
+Each rule exists because the naive reading published something worse than no description: the card's
+own YAML, a `---`, a `***`, or the world's title. Three review rounds were spent on two of the
+rules — round 1 on a block with no end, round 2 on a well-formed block with a blank line in it, and
+round 3 on `*`, the one thematic-break character the rule test did not name. The implementation and
+the reasoning are in `specs/projects/seahaven_framework/phase_plans/phase_6.md`; fifty-four
+parametrized cases and just under a million generated documents pin them.
+
+Worth a sentence in the component document wherever §2 is next touched, because the next world
+server written from that phrase will start from the naive reading. `components/openenv.md` is
+`status: complete`, so this is the same maintainer's call as B2, B7, B8 and B12.
+
+---
+
+### B15. CI installs the `serve` extra, and the licence gate does not cover it
+
+**Found:** Phase 6 code review, round 3. **Owner:** unassigned. **Risk:** low today, and the
+decision is a policy one rather than a code one.
+
+`scripts/check_licences.py` evaluates dependency markers with `{"extra": ""}` and says so in its own
+docstring: it gates "what `pip install seahaven` pulls in, extras excluded". That was the right
+scope while every extra was a development tool. Phase 6 made `serve` a *runtime* extra — CI now runs
+`uv sync --locked --extra serve` because the OpenEnv server tests need it — so there is now an
+installed, shipped-to-users closure that no gate looks at. Its licences are not all in the
+MIT/Apache-2.0/BSD set `AGENTS.md` names: MPL-2.0 (certifi, orjson, tqdm), CC0-1.0 inside numpy's
+licence expression, and MIT-CMU (pillow). None of those is copyleft-viral for linking a server
+process, which is why this is recorded rather than fixed.
+
+Two things have to be decided together, and both are a maintainer's call:
+
+- **Does an extra's closure need a licence policy at all?** An extra is opt-in and not part of
+  `pip install seahaven`, so a defensible answer is "no, and the docstring already says so".
+- **If it does, which policy?** Widening `check_licences.py` to every extra would fail the gate
+  today on the four licences above, so the change is not a one-line marker edit: it needs an
+  allowed-set decision (permissive plus MPL-2.0 and CC0-1.0, say) or a per-extra scope.
+
+Not fixed in Phase 6 on purpose: the phase's diff is the OpenEnv subpackage, and quietly widening a
+project-wide gate — or quietly loosening its allowed set to keep it green — is the kind of change
+that should be its own review. What Phase 6 does owe is that the gap is not invisible, which is this
+entry.
+
+---
+
+### B16. The README rules are a quarter of `seahaven/openenv/env.py` and belong in their own module
+
+**Found:** Phase 6 code review, round 4. **Owner:** unassigned. **Risk:** low as a defect, real as a
+maintenance shape — every defect this phase's reviews found was in this one block.
+
+`_first_paragraph` and its five helpers — `_after_front_matter`, `_is_rule`, `_is_underline`,
+`_is_thematic_break`, `_is_title_line`, `_is_prose` — are about 130 lines and a large share of
+`env.py`'s 106 statements. What they implement is a small CommonMark reader: front matter as a
+block, thematic breaks, setext underlines, a byte-order mark. What the module they live in is *for*
+is the server side of the wire: sessions, actions, observations, state. The block is there because
+`get_metadata` needs a one-line description, which is a one-line need answered by a hundred and
+thirty lines of someone else's format.
+
+Four review rounds found four defects, and all four were in this block: an unbounded block skip
+(round 1), that fix regressing the well-formed case (round 2), `*` missing from the break set
+(round 3), and two miscounted kill rows for its own mutants (round 4). None of them was in `reset`,
+`step`, `state`, `close` or the client. That is not a coincidence about difficulty so much as about
+*locality*: the rules are the only part of this module that is a parser, and a parser wants its own
+file, its own suite and its own name.
+
+The move is small and mechanical — `seahaven/openenv/readme.py`, `_first_paragraph` re-exported or
+imported by `env.py`, and `tests/test_readme.py` taking the fifty-four parametrized cases with it.
+It is filed rather than done because `components/openenv.md` §1 names the subpackage's module list,
+so adding a module changes the surface a `status: complete` artifact describes. Same maintainer's
+call as B2, B7, B8 and B12, and worth pairing with whichever of those is answered first.
+
 ---
 
 ## Method notes
@@ -352,6 +545,16 @@ verified.
   `Instance.changes()` for the life of an instance — was found this way and by nothing else: the
   unit tests were green, because the session had already been shown every table a world's own
   fixtures seeded.
+- **A mutation harness that edits the repository must never be killed; it must be waited out.** The
+  harnesses that mutate the working tree rather than a copy — the `ty` survivor check, and the pass
+  that names every test a mutant kills — restore each file in a `finally`, which protects against a
+  failing mutant and not against a signal. Phase 6 killed one by `pkill` and left a mutated
+  `_after_front_matter` in `src/`, where it survived until the next `pytest` run and would have
+  survived into a commit if that run had been a green one. Two rules follow: wait for such a harness
+  instead of signalling it, and make `git status` plus a full suite run part of finishing with one,
+  not part of debugging it. A file the harness owns that is *untracked* — as a new phase's source
+  is — cannot be recovered with `git checkout`, which is what makes this worth a note rather than a
+  shrug.
 - **Before trusting a mutation survivor, prove the mutant is the code that ran.** Assert
   `module.__file__` points inside the mutation tree, from the same process the tests run in. Phase 4
   produced two independent false-survivor runs, each from a different cause and each reporting

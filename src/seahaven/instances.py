@@ -58,6 +58,7 @@ __all__ = [
     "WORK_DIR_PREFIX",
     "Instance",
     "InstanceManager",
+    "concurrency",
     "default_concurrency",
     "gate",
     "set_concurrency",
@@ -96,7 +97,8 @@ def default_concurrency() -> int:
     return min(os.process_cpu_count() or 4, 16)
 
 
-_gate: threading.BoundedSemaphore | None = threading.BoundedSemaphore(default_concurrency())
+_concurrency: int = default_concurrency()
+_gate: threading.BoundedSemaphore | None = threading.BoundedSemaphore(_concurrency)
 
 
 def set_concurrency(concurrency: int) -> None:
@@ -104,10 +106,24 @@ def set_concurrency(concurrency: int) -> None:
 
     Calls already running are unaffected: each releases the gate it took.
     """
-    global _gate
+    global _concurrency, _gate
     if concurrency < 0:
         raise WorldBug(f"concurrency must not be negative: {concurrency}")
+    _concurrency = concurrency
     _gate = threading.BoundedSemaphore(concurrency) if concurrency else None
+
+
+def concurrency() -> int:
+    """The gate's size as it was last set, or `0` when there is no gate.
+
+    The counterpart of `set_concurrency`, kept because there was no way to read
+    the size back: a caller that wanted it had to reach for
+    `instances._gate._initial_value`, which is one module's private name and one
+    standard-library class's private attribute in a single expression. Recorded
+    beside the gate rather than derived from it for that reason -- a
+    `BoundedSemaphore` does not publish the value it was built with.
+    """
+    return _concurrency
 
 
 @contextmanager

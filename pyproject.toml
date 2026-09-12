@@ -61,3 +61,6 @@ addopts = "-q"
 # An exception on a thread a test started is otherwise a warning printed beside
 # a passing test, which is no way to test a lock.
 filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
+# `slow` is the 500-session smoke test and anything else that is measured in
+# tens of seconds: always run in CI, deselectable with `-m "not slow"` locally.
+markers = ["slow: takes tens of seconds; deselect with -m 'not slow'"]

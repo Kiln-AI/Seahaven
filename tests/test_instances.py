@@ -731,6 +731,24 @@ def test_the_default_concurrency_follows_the_cpu_count() -> None:
     assert 1 <= default_concurrency() <= 16
 
 
+def test_the_gates_size_can_be_read_back() -> None:
+    """`concurrency()` answers what `set_concurrency` was given, `0` included.
+
+    The accessor exists so that a caller wanting the size does not have to read
+    `_gate._initial_value`; the assertion that `0` really stops gating is
+    `test_concurrency_zero_removes_the_gate` above, and this one is only that
+    the number is reported.
+    """
+    assert instances.concurrency() == default_concurrency()
+    set_concurrency(3)
+    assert instances.concurrency() == 3
+    set_concurrency(0)
+    assert instances.concurrency() == 0
+    with pytest.raises(WorldBug):
+        set_concurrency(-1)
+    assert instances.concurrency() == 0, "a refused resize leaves the size alone"
+
+
 @pytest.fixture
 def temp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """A private system temporary directory, so the default working directory is testable."""
