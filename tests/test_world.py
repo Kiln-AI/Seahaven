@@ -32,6 +32,15 @@ def echo(ctx: Ctx, word: str) -> dict[str, str]:
     return {"word": word}
 
 
+def registered(world: World) -> list[str]:
+    """The names this world registered, in order.
+
+    Every world also carries the framework's two control tools, registered at
+    construction; they are not what these tests are about.
+    """
+    return [name for name, tool in world.tools.items() if not tool.control]
+
+
 def world_built_in(module_path: Path) -> World:
     """Build a world from a module on disk, so the derivation has a real file to walk up from."""
     module_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,7 +132,7 @@ def test_the_registry_is_ordered_and_read_only(world: World) -> None:
         """Second."""
         return {}
 
-    assert list(world.tools) == ["echo", "second"]
+    assert registered(world) == ["echo", "second"]
     with pytest.raises(TypeError):
         world.tools["third"] = world.tools["echo"]  # ty: ignore[invalid-assignment]
 
@@ -220,7 +229,7 @@ def test_the_verbs_also_work_called_with_parentheses_and_nothing_else(world: Wor
     def startup(ctx: Ctx) -> None:
         return None
 
-    assert list(world.tools) == ["tool"]
+    assert registered(world) == ["tool"]
     assert world.middlewares == (middleware,)
     assert [hook.fn for hook in world.startup_hooks] == [startup]
 
@@ -283,7 +292,7 @@ def test_a_tool_registered_later_joins_the_registry(world: World) -> None:
         """Late."""
         return {}
 
-    assert list(world.tools) == ["echo", "late"]
+    assert registered(world) == ["echo", "late"]
 
 
 def test_startup_hooks_record_the_reset_arguments_they_accept(world: World) -> None:
@@ -343,13 +352,21 @@ def test_a_startup_hook_takes_the_context_and_nothing_else_positionally(world: W
             world.instance_startup(hook)
 
 
-def test_a_control_tool_may_take_a_control_tools_name(world: World) -> None:
-    """The seam `control.py` registers through: reserved for a world, not for the framework."""
-    control_tool = replace(Tool.from_function(echo, name="controller_changes"), control=True)
+def test_every_world_carries_the_two_control_tools(world: World) -> None:
+    """Registered at construction, flagged, and none of the world's own doing."""
+    assert [name for name, tool in world.tools.items() if tool.control] == [
+        "controller_run_sql",
+        "controller_changes",
+    ]
+    assert registered(world) == []
 
-    world.tool(control_tool)
 
-    assert world.tools["controller_changes"].control is True
+def test_a_control_tools_name_is_taken_even_by_another_control_tool(world: World) -> None:
+    """The framework registered it, so even a second control tool is a duplicate."""
+    second = replace(Tool.from_function(echo, name="controller_changes"), control=True)
+
+    with pytest.raises(WorldBug, match="registered twice"):
+        world.tool(second)
 
 
 def test_not_even_a_control_tool_may_take_an_environment_verb(world: World) -> None:

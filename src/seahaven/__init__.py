@@ -1,12 +1,12 @@
 """Seahaven: a framework for building synthetic worlds.
 
-The public API is exactly the names below, plus the `sandbox` module. Everything
-else is internal.
+The public API is exactly the names below, plus the `helpers` and `sandbox`
+modules. Everything else is internal.
 """
 
 from importlib.metadata import PackageNotFoundError, version
 
-from seahaven import sandbox
+from seahaven import helpers, sandbox
 from seahaven.call import Call
 from seahaven.changes import Change
 from seahaven.clock import Clock
@@ -48,5 +48,6 @@ __all__ = [
     "UnknownTool",
     "World",
     "WorldBug",
+    "helpers",
     "sandbox",
 ]

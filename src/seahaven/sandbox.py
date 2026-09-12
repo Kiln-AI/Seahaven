@@ -62,9 +62,10 @@ __all__ = [
 #     `total_changes`, `sqlite_offset` -- these describe the host and the
 #     instance's write history, neither of which is part of the world.
 #
-# FTS5's auxiliary functions (`bm25`, `snippet`, `highlight`) are absent because
-# the shadow tables they need are denied. A world that exposes search through SQL
-# passes its own `functions` and allows those tables explicitly.
+# FTS5's functions are absent because the shadow tables they need are denied: its
+# auxiliaries (`bm25`, `snippet`, `highlight`) and `match`, which is what SQLite
+# calls the `MATCH` operator when it asks about it. A world that exposes search
+# through SQL passes all four as `functions` and allows those tables explicitly.
 ALLOWED_FUNCTIONS = frozenset(
     {
         # aggregates
@@ -152,6 +153,63 @@ _ACTIONS = {
     apsw.SQLITE_UPDATE: "UPDATE",
 }
 
+# The one pragma agent SQL may reach. FTS5 reads `data_version` while *preparing*
+# a `MATCH`, so denying it makes the documented "list the shadow tables and
+# search through `run_sql`" path (`helpers_and_control.md` §4) impossible however
+# a world spells its allowlists.
+#
+# The authorizer cannot tell FTS5's question from the agent's, so this does let
+# an agent write `PRAGMA data_version` and read the integer back. That is the
+# whole of what it buys: the counter changes only when *another* connection
+# commits to the file, an instance has one writer, and so the answer is the same
+# number on every run -- nothing of the world, and nothing that makes a run
+# irreproducible. Every other pragma stays an `action PRAGMA` refusal, including
+# the introspection ones: `PRAGMA table_info` is the schema door's job
+# (`describe_schema`), not the SQL door's. That holds for `table_xinfo` below as
+# well -- what is allowed there is not a pragma agent SQL can ask.
+_PRAGMAS = frozenset({"data_version"})
+
+# The changeset session's own question, and only its own. When a statement makes
+# the first change to a table the instance's session has not recorded before,
+# SQLite's session extension prepares `PRAGMA table_xinfo(<that table>)` to learn
+# the table's shape -- *inside* the agent's statement, so it arrives here like
+# anything else the statement asks for. Denied, the session stores the
+# `SQLITE_AUTH` and every later `changeset()` fails with it: one agent write to a
+# table the world's own fixtures never touched, and `Instance.changes()` -- the
+# eval's score -- is gone for the life of the instance.
+#
+# `_wrote_a_row` is what keeps this from being a pragma the agent can ask. The
+# session's question can only follow a row write that was already allowed, so the
+# allowance is spelled that way: the name, the table (one the door lists, since
+# the write was allowed), and a write already authorized. A payload that is itself
+# `PRAGMA table_xinfo(issues)` authorizes no row write first and stays an
+# `action PRAGMA` refusal, on a read-only door and a writable one alike.
+#
+# The flag's scope is the *call*, not the statement: it goes up during a prepare
+# and down only in `reset()`, which `run_statement` calls once. So in a
+# two-statement payload -- `INSERT ...; PRAGMA table_xinfo(issues)` -- the second
+# statement's prepare does reach `SQLITE_OK` here. What stops it is
+# `_StatementTracer`, unconditionally, before that statement steps; the refusal an
+# agent reads is "statement after the first in one call". Narrowing the flag to
+# one statement is not available: the tracer fires after a statement is prepared
+# and before it steps, and the session asks its question *during* the first
+# statement's execution -- after that statement's trace call and before the next
+# statement is prepared -- so there is no callback at the boundary between them to
+# put the flag down at. The single-statement rule is the tracer's, and this
+# allowance is inside it rather than beside it.
+_SESSION_PRAGMA = "table_xinfo"
+
+
+def _allowed_pragma(third: str | None, fourth: str | None) -> bool:
+    """An allowed pragma, asked as a question. `fourth` is the argument it was given.
+
+    The argument form is refused even for an allowed name: `PRAGMA data_version =
+    3` happens to be a no-op in SQLite, but "reads this counter" is what is being
+    allowed, and a pragma that is set is a different thing to allow.
+    """
+    return third is not None and fourth is None and _fold_ascii(third) in _PRAGMAS
+
+
 # The three actions that write rows; everything else on a connection is DDL or
 # a connection-level verb, and is refused as an action.
 _ROW_WRITES = frozenset({apsw.SQLITE_DELETE, apsw.SQLITE_INSERT, apsw.SQLITE_UPDATE})
@@ -203,6 +261,7 @@ class Authorizer:
         self._functions = frozenset(_fold_ascii(name) for name in functions)
         self.read_only = read_only
         self._refusals: list[str] = []
+        self._wrote_a_row = False
 
     @property
     def refusals(self) -> tuple[str, ...]:
@@ -211,6 +270,7 @@ class Authorizer:
 
     def reset(self) -> None:
         self._refusals.clear()
+        self._wrote_a_row = False
 
     def __call__(
         self,
@@ -231,11 +291,34 @@ class Authorizer:
             if fourth is not None and _fold_ascii(fourth) in self._functions:
                 return apsw.SQLITE_OK
             return self._refuse(f"function {fourth!r}")
+        if action == apsw.SQLITE_PRAGMA and _allowed_pragma(third, fourth):
+            return apsw.SQLITE_OK
+        if action == apsw.SQLITE_PRAGMA and self._session_asking(third, fourth):
+            return apsw.SQLITE_OK
         if action in _ROW_WRITES and not _is_schema_table(third):
             if self.read_only:
                 return self._refuse(f"write of table {third!r} in a read-only query")
-            return self._table("write", third)
+            allowed = self._table("write", third)
+            self._wrote_a_row = self._wrote_a_row or allowed == apsw.SQLITE_OK
+            return allowed
         return self._refuse(_describe(action, third, fourth))
+
+    def _session_asking(self, third: str | None, fourth: str | None) -> bool:
+        """The changeset session reading the shape of a table this call wrote.
+
+        Never the agent's own pragma: it is answered only once this call has
+        already been allowed a row write, which the session's question always
+        follows, and only for a table the door lists. `this call` is exact --
+        see `_SESSION_PRAGMA` above for why the second statement of a payload
+        is the tracer's to refuse and not this method's.
+        """
+        return (
+            self._wrote_a_row
+            and third is not None
+            and _fold_ascii(third) == _SESSION_PRAGMA
+            and fourth is not None
+            and _fold_ascii(fourth) in self._tables
+        )
 
     def _table(self, what: Literal["read", "write"], name: str | None) -> int:
         # Folded, because SQLite canonicalises the table name for a *column* read
@@ -319,14 +402,20 @@ def run_statement(
     authorizer.reset()
     tracer = _StatementTracer(authorizer.read_only)
     conn = db.conn
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
+        # Both of these only read. Every change to the connection happens inside
+        # the second `try`, so there is no window in which the sandbox's
+        # authorizer or its tighter limit is left behind on a long-lived
+        # connection with no `finally` to put it back.
+        previous_authorizer = conn.authorizer
+        previous_length = conn.limit(apsw.SQLITE_LIMIT_LENGTH)
+    except apsw.Error as error:
+        # Nothing has been borrowed yet, so there is nothing to give back -- but
+        # a caller of this function is owed a `DbError` whatever went wrong, not
+        # whichever APSW exception the connection was in a state to raise.
+        raise _failure(error, authorizer, tracer) from error
     cursor.exec_trace = tracer
-    # Both of these only read. Every change to the shared connection happens
-    # inside the `try`, so there is no window in which the sandbox's authorizer or
-    # its tighter limit is left behind on the instance's long-lived connection
-    # with no `finally` to put it back.
-    previous_authorizer = conn.authorizer
-    previous_length = conn.limit(apsw.SQLITE_LIMIT_LENGTH)
     try:
         conn.limit(apsw.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
         conn.authorizer = authorizer
@@ -334,13 +423,19 @@ def run_statement(
     except apsw.Error as error:
         raise _failure(error, authorizer, tracer) from error
     finally:
-        # Restored first, so that nothing after this line can leave the sandbox's
-        # authorizer or its tighter limit behind on the world's connection.
-        conn.authorizer = previous_authorizer
-        conn.limit(apsw.SQLITE_LIMIT_LENGTH, previous_length)
-        # Truncation leaves the statement half-stepped. Retire it before the
-        # caller's transaction tries to commit over the top of it.
-        cursor.close(force=True)
+        # Nested, not three statements in a row: each of these has to run even if
+        # the one before it raises. A restore skipped because its predecessor
+        # failed is the sandbox's authorizer, or its tighter limit, left on the
+        # world's connection for the life of the process.
+        try:
+            conn.authorizer = previous_authorizer
+        finally:
+            try:
+                conn.limit(apsw.SQLITE_LIMIT_LENGTH, previous_length)
+            finally:
+                # Truncation leaves the statement half-stepped. Retire it before
+                # the caller's transaction tries to commit over the top of it.
+                cursor.close(force=True)
     return SqlResult(columns=tracer.columns, rows=rows, truncated=truncated)
 
 

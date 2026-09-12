@@ -5,12 +5,15 @@ makes no claim about the text -- only about what SQLite is allowed to do with it
 """
 
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import suppress
+from types import SimpleNamespace
+from typing import Any, cast
 
 import apsw
 import pytest
 
+from seahaven import sandbox
 from seahaven.db import Db, SqlValue
 from seahaven.errors import DbError, WorldBug
 from seahaven.sandbox import (
@@ -52,6 +55,20 @@ DENIED = [
     ("ATTACH DATABASE ':memory:' AS other", "action ATTACH ':memory:'"),
     ("DETACH DATABASE other", "action DETACH 'other'"),
     ("PRAGMA journal_mode = DELETE", "action PRAGMA 'journal_mode'"),
+    # Including the introspection ones: what the schema looks like is
+    # `describe_schema`'s to answer, not the SQL door's.
+    ("PRAGMA table_info(notes)", "action PRAGMA 'table_info'"),
+    # `table_xinfo` is the one the changeset session asks for, and the allowance
+    # for it is spelled so that only the session can reach it. Asked as the
+    # agent's own statement it is refused by the name, like its sibling above.
+    ("PRAGMA table_xinfo(notes)", "action PRAGMA 'table_xinfo'"),
+    ("PRAGMA data_version = 3", "action PRAGMA 'data_version'"),
+    # Asked with no argument at all, which is the shape the one allowed pragma
+    # has: these two are refused by the name and by nothing else. Widen the
+    # allowlist by either name and this file says so -- `database_list` hands out
+    # the instance's absolute path on the host, `compile_options` the build.
+    ("PRAGMA database_list", "action PRAGMA 'database_list'"),
+    ("PRAGMA compile_options", "action PRAGMA 'compile_options'"),
     ("BEGIN", "action transaction control 'BEGIN'"),
     ("SAVEPOINT s", "action SAVEPOINT 's'"),
     ("REINDEX notes", "action REINDEX 'sqlite_autoindex_notes_1'"),
@@ -146,6 +163,126 @@ def test_the_sandbox_refuses(world: Db, sql: str, refusal: str) -> None:
     # The first refusal is the one the agent reads, and some statements ask
     # several questions before SQLite gives up on them.
     assert refusals(world, sql, tables=("notes", "notes_fts"))[0] == refusal
+
+
+def test_the_one_pragma_that_is_allowed_is_the_data_version_question(world: Db) -> None:
+    """FTS5 asks it while *preparing* a `MATCH`, and the authorizer cannot tell who asked.
+
+    So an agent may ask it too, and this pins what that is worth: a counter that
+    only another connection's commit moves, which in an instance with one writer
+    is the same number on every run. Every other pragma, and this one in its
+    assignment form, are in `DENIED` above.
+    """
+    before = run(world, "PRAGMA data_version").rows
+    world.execute("INSERT INTO notes (id, body) VALUES ('n9', 'written since')")
+
+    # Two, not one: the schema was written through the connection `build_blank`
+    # used, and another connection's commit is exactly what this counter counts.
+    assert before == [[2]]
+    # Unmoved by this connection's own write: an instance has one writer, so the
+    # agent reads the same number all run.
+    assert run(world, "PRAGMA data_version").rows == before
+    # SQLite hands the authorizer the pragma name as the agent spelled it, so the
+    # allowlist folds it the way every other name in this module is folded.
+    assert run(world, "PRAGMA DATA_VERSION").rows == before
+    # The upper bound, which no query can state: the refusals above say that
+    # these two names are not in the set, and this says that nothing else is
+    # either. A pragma allowed here is allowed to every agent in every world.
+    assert set(sandbox._PRAGMAS) == {"data_version"}
+
+
+def test_the_session_shape_question_is_allowed_only_after_a_write_it_follows() -> None:
+    """The changeset session's `PRAGMA table_xinfo`, and nothing else, gets through.
+
+    SQLite asks it from inside the agent's statement, the first time the
+    instance's session records a change to a table, and a denial poisons the
+    session: every later `changeset()` raises `SQLITE_AUTH`. The allowance is
+    written as the shape that question always has -- after a row write this same
+    statement was already allowed -- so an agent's own `PRAGMA table_xinfo` never
+    matches it. `DENIED` above holds the read-only half; this is the writable one.
+    """
+    authorizer = Authorizer(("notes",), read_only=False)
+
+    # Before any write, on a door that permits writes: still refused.
+    assert authorizer(apsw.SQLITE_PRAGMA, "table_xinfo", "notes", "main", None) == apsw.SQLITE_DENY
+    assert authorizer.refusals == ("action PRAGMA 'table_xinfo'",)
+    authorizer.reset()
+
+    assert authorizer(apsw.SQLITE_INSERT, "notes", None, "main", None) == apsw.SQLITE_OK
+    assert authorizer(apsw.SQLITE_PRAGMA, "table_xinfo", "notes", "main", None) == apsw.SQLITE_OK
+    # Only the session's question, and only about a table the door lists: the
+    # write that was allowed is what says the table is one of them.
+    assert (
+        authorizer(apsw.SQLITE_PRAGMA, "table_xinfo", "secrets", "main", None) == apsw.SQLITE_DENY
+    )
+    assert authorizer(apsw.SQLITE_PRAGMA, "table_info", "notes", "main", None) == apsw.SQLITE_DENY
+    assert authorizer(apsw.SQLITE_PRAGMA, "table_xinfo", None, "main", None) == apsw.SQLITE_DENY
+    assert authorizer.refusals == (
+        "action PRAGMA 'table_xinfo'",
+        "action PRAGMA 'table_info'",
+        "action PRAGMA 'table_xinfo'",
+    )
+
+    # Spelled as SQLite hands it over, which is as the asker wrote it.
+    assert authorizer(apsw.SQLITE_PRAGMA, "TABLE_XINFO", "NOTES", "main", None) == apsw.SQLITE_OK
+
+    # `reset` is per call, and the permission goes back with it.
+    authorizer.reset()
+    assert authorizer(apsw.SQLITE_PRAGMA, "table_xinfo", "notes", "main", None) == apsw.SQLITE_DENY
+
+
+def test_the_shape_question_is_the_tracers_to_refuse_in_the_second_statement(world: Db) -> None:
+    """The flag's scope is the call, and the single-statement rule is what bounds it.
+
+    `run_statement` resets the authorizer once per call, not once per statement,
+    and SQLite prepares the second statement of a payload before the tracer gets
+    to veto it -- so the second statement's `PRAGMA table_xinfo(notes)` really
+    does reach `SQLITE_OK` from `_session_asking`. It never steps: the tracer
+    refuses it unconditionally, which is the refusal the agent reads. This pins
+    the invariant the code has rather than the stronger one the comment used to
+    claim, and it pins that the tracer is load-bearing for it.
+    """
+    listed = ("notes", "sqlite_master")
+
+    def payload(key: str, tail: str) -> str:
+        return f"INSERT INTO notes (id, body) VALUES ('{key}', 'zed'); {tail}"
+
+    # A table the door does not list is refused by the authorizer, as ever: the
+    # flag is not the only condition, and the other three still hold.
+    assert refusals(
+        world, payload("k1", "PRAGMA table_xinfo(secrets)"), tables=listed, read_only=False
+    ) == ("action PRAGMA 'table_xinfo'",)
+
+    # A table it does list gets through the authorizer, and no further. Both
+    # spellings, because folding and schema-qualification take the same door.
+    for key, tail in (
+        ("k2", "PRAGMA table_xinfo(notes)"),
+        ("k3", 'PRAGMA main.table_xinfo("Notes")'),
+    ):
+        assert refusals(world, payload(key, tail), tables=listed, read_only=False) == (
+            "statement after the first in one call",
+        )
+
+    # The first statement of each payload did step -- the veto is on the second,
+    # not a rollback of the first, and `run_statement` leaves the undo to the
+    # caller's transaction. What never ran is the pragma: three payloads, three
+    # rows, and no fourth statement's worth of anything.
+    assert run(world, "SELECT id FROM notes WHERE id LIKE 'k%' ORDER BY id").rows == [
+        ["k1"],
+        ["k2"],
+        ["k3"],
+    ]
+
+
+def test_a_write_a_read_only_door_refused_does_not_open_the_shape_question() -> None:
+    """The flag follows the write that was *allowed*, not the write that was asked for."""
+    refused = Authorizer(("notes",), read_only=True)
+    assert refused(apsw.SQLITE_INSERT, "notes", None, "main", None) == apsw.SQLITE_DENY
+    assert refused(apsw.SQLITE_PRAGMA, "table_xinfo", "notes", "main", None) == apsw.SQLITE_DENY
+
+    unlisted = Authorizer(("notes",), read_only=False)
+    assert unlisted(apsw.SQLITE_INSERT, "secrets", None, "main", None) == apsw.SQLITE_DENY
+    assert unlisted(apsw.SQLITE_PRAGMA, "table_xinfo", "notes", "main", None) == apsw.SQLITE_DENY
 
 
 def test_a_refusal_is_what_the_agent_reads(world: Db) -> None:
@@ -410,3 +547,81 @@ def test_a_plain_sql_mistake_is_not_a_refusal(world: Db) -> None:
     assert raised.value.refusals == ()
     assert raised.value.message == "database error"
     assert raised.value.sqlite_message == "no such column: missing_column"
+
+
+def test_a_connection_that_cannot_even_be_asked_is_still_a_db_error(world: Db) -> None:
+    """Everything out of this function is a `DbError`, including what goes wrong before the SQL.
+
+    Opening a cursor and reading the connection's current authorizer and limit
+    happen before anything has been borrowed, which is why they sit outside the
+    restoring `try` -- but a caller is owed the same error shape there as
+    anywhere else, rather than whichever APSW exception the connection happened
+    to be in a state to raise.
+    """
+    world.close()
+
+    with pytest.raises(DbError) as raised:
+        run(world, "SELECT id FROM notes")
+
+    assert raised.value.refusals == ()
+    assert "closed" in raised.value.sqlite_message
+
+
+class _Cursor:
+    """Enough of an APSW cursor for `run_statement` to drive."""
+
+    def __init__(self) -> None:
+        self.exec_trace: Any = None
+        self.closed = False
+
+    def execute(self, sql: str, params: Sequence[SqlValue]) -> Iterator[tuple[Any, ...]]:
+        return iter([(1,)])
+
+    def close(self, force: bool = False) -> None:
+        self.closed = True
+
+
+class _RefusesToRestore:
+    """A connection whose authorizer will not go back to what it was.
+
+    APSW will not do this -- which is the point: the ordering being pinned is
+    only reachable if one of the three things `run_statement` has to put back
+    fails, and the whole risk of a failing restore is that it is unforeseen.
+    """
+
+    def __init__(self) -> None:
+        self.authorizer: Any = None
+        self.lengths: list[int] = [4242]
+        self.cursor_ = _Cursor()
+
+    def cursor(self) -> _Cursor:
+        return self.cursor_
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "authorizer" and value is None and "authorizer" in self.__dict__:
+            raise apsw.MisuseError("this connection will not take its authorizer back")
+        super().__setattr__(name, value)
+
+    def limit(self, which: int, value: int | None = None) -> int:
+        if value is None:
+            return self.lengths[-1]
+        self.lengths.append(value)
+        return self.lengths[-2]
+
+
+def test_every_restore_runs_even_when_one_of_them_fails() -> None:
+    """The limit goes back and the cursor is retired even if the authorizer restore raises.
+
+    Three restores in a row would stop at the first failure, leaving the
+    sandbox's tighter limit pinned on a long-lived connection for the rest of the
+    process and a half-stepped statement outstanding inside the caller's
+    transaction. The failure itself is not swallowed.
+    """
+    conn = _RefusesToRestore()
+    db = cast(Db, SimpleNamespace(conn=conn))
+
+    with pytest.raises(apsw.MisuseError):
+        run_statement(db, "SELECT 1", authorizer=Authorizer(["notes"]))
+
+    assert conn.lengths == [4242, MAX_VALUE_BYTES, 4242]
+    assert conn.cursor_.closed

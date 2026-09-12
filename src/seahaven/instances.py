@@ -9,10 +9,12 @@ instances: two instances of one fixture are two copies of one file.
 Three rules hold the concurrency together.
 
 *One lock per instance.* `call`, `changes`, `freeze`, `bulk`, `destroy` and the
-open inside `inspect()` take it, so calls into one instance serialise and a
-destroy waits for the call in flight. Reads through the `inspect()` handle
-afterwards do not take it, which is why a control tool can read the instance it
-is being called on without deadlocking, and why the lock is an `RLock`.
+opens inside `inspect()` and `_control_db()` take it, so calls into one instance
+serialise and a destroy waits for the call in flight. Reads through the `inspect()` handle
+afterwards do not take it: that handle is the caller's, to read from whatever
+thread it likes. The lock is an `RLock` because a control tool is called with it
+already held and then asks the instance for something -- its changeset, its
+control handle -- that takes it again on the same thread.
 
 *The gate before the lock.* The concurrency gate bounds how many tool calls run
 at once across the process. It is taken before the instance lock, so a call
@@ -23,7 +25,6 @@ touched only in short moments that take nothing else.
 """
 
 import atexit
-import dataclasses
 import errno
 import logging
 import os
@@ -41,7 +42,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 import apsw
 
-from seahaven.call import Call, serialise
+from seahaven.call import Call
 from seahaven.changes import Change, render, start_session
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx, InstanceInfo
@@ -156,12 +157,13 @@ class Instance:
         self.dir = dir
         self.world = world
         self.closed = False
-        # Re-entrant: a control tool holds this lock and then calls `inspect()`,
-        # which takes it again.
+        # Re-entrant: a control tool holds this lock and then asks the instance
+        # for its changeset or its control handle, which take it again.
         self.lock = threading.RLock()
         self._session = session
         self._manager = manager
         self._inspection: Db | None = None
+        self._control: Db | None = None
 
     @property
     def state_path(self) -> Path:
@@ -272,34 +274,36 @@ class Instance:
             call = Call(name, arguments, tool)
             ctx = self.ctx.with_call(call)
             if tool.control:
-                return self._dispatch_control(ctx, call)
+                # Imported here, not at the top: `control.py` is written against
+                # `Instance`, so the dependency runs that way round and this is
+                # the one place the call path needs it back.
+                from seahaven import control
+
+                return control.dispatch(self, ctx)
             # The chain is read from the world here rather than held, so a
             # middleware registered after this instance was made applies to it.
             return world.chain(ctx, call)
 
-    def _dispatch_control(self, ctx: Ctx, call: Call) -> Any:
-        """Run a control tool: validate, run, serialise, and nothing else.
+    def _control_db(self) -> Db:
+        """A second read-only handle, opened once, for the control tools alone.
 
-        No middleware, no error handler, no transaction and no gate -- an eval
-        asking what the instance holds wants the real answer and the real
-        message. Under the instance lock like any call, so it never interleaves
-        with a step on the same instance.
+        Not the `inspect()` handle, though it is opened the same way. A control
+        read runs through `sandbox.run_statement`, which sets the connection's
+        authorizer and its value limit for the length of one statement; the
+        `inspect()` handle is the one a caller reads through *without* taking the
+        instance lock. Two threads on one connection, one of them changing its
+        authorizer while the other steps a cursor, is a deadlock inside SQLite --
+        and one that takes the interpreter with it, because the thread waiting on
+        the connection is holding the GIL.
 
-        What it *is* is `invoke`'s own steps, in `invoke`'s own order: the
-        validated arguments replace the call's (so the context a control tool
-        reads says what it was really given), and the result goes through the
-        same serialiser as every other call, so a control tool that answers with
-        `bytes` or a `set` is the same `WorldBug` a regular tool would be rather
-        than silently-decoded text or an order that changes between runs.
-
-        Phase 4 moves this body to `control.dispatch(instance, ctx)` in
-        `control.py`, where the two control tools themselves live; the behaviour
-        `components/fixtures_instances.md` §2.4 states is here already, so the
-        seam is real and tested rather than promised.
+        Reached only from the control tools, which `Instance.call` runs with the
+        instance lock held, so this connection has one statement on it at a time
+        and the state `run_statement` borrows is state nobody else can see.
         """
-        call = dataclasses.replace(call, arguments=call.tool.validate(call.arguments))
-        ctx = ctx.with_call(call)
-        return serialise(call.tool.fn(ctx, **call.arguments))
+        with self._held():
+            if self._control is None:
+                self._control = open_inspection(self.state_path, self.clock)
+            return self._control
 
     @contextmanager
     def _bulk(self) -> Iterator[Ctx]:
@@ -326,10 +330,15 @@ class Instance:
         other order (it finalises a session with its connection), but a session
         is a growing buffer of every row the instance changed, and releasing it
         first is what makes a destroyed instance cost nothing.
+
+        Both read-only handles -- the caller's, from `inspect()`, and the control
+        tools' own -- are closed here as well; either may never have been opened.
         """
-        if self._inspection is not None:
-            self._inspection.close()
-            self._inspection = None
+        for handle in (self._inspection, self._control):
+            if handle is not None:
+                handle.close()
+        self._inspection = None
+        self._control = None
         self._session.close()
         self.db.close()
 

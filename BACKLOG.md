@@ -143,6 +143,69 @@ monkeypatch style `test_the_sweep_removes_through_the_descriptor_it_judged_throu
 the instance is not made through the link; or soften the docstring to claim only what is tested.
 Pinning it is the better answer if the anchoring is meant to survive later edits.
 
+### B7. The FTS5 recipe does not work as written, in both artifacts that state it
+
+**Found:** Phase 4 implementation. **Owner:** unassigned. **Risk:** low — the code is right and the
+phase plan records it; a later reader of the artifact would follow the recipe and be stuck.
+
+The table in §4 tells a world that wants `MATCH` through `run_sql` to list the FTS5 table's shadow
+tables and "add `bm25`, `snippet`, `highlight` to the function allowlist". A world that does exactly
+that gets `not allowed: function 'match'`: SQLite asks the authorizer about the `MATCH` *operator*
+under the function name `match`, which the sentence omits. With `match` added it then gets
+`action PRAGMA 'data_version'`, because FTS5 reads that pragma while preparing the statement —
+which §4 does not mention at all, and which no spelling of the allowlists in the published API could
+have allowed.
+
+Phase 4 closed both in code: `sandbox.ALLOWED_FUNCTIONS`'s comment names `match` as the fourth
+function to pass, and `sandbox._PRAGMAS` allows the `PRAGMA data_version` question (never its
+assignment form) with the reasoning in place; `tests/test_fts5.py` drives the whole recipe through a
+real world and pins both refusals a world that lists too little gets. What is left is the artifact:
+§4 is `status: complete` and still carries the three-function sentence, and says nothing about the
+pragma. Same shape as B2, and the same call to make — editing a complete artifact cascades its
+dependents to `draft`, so whether to take that cascade or annotate in place is a maintainer's.
+
+**Two artifacts, not one.** `components/runtime_db.md` §4 carries the same three-function sentence
+("FTS5 auxiliary functions (`bm25`, `snippet`, `highlight`) are not in the default list"), so the
+`match` omission is in both places and a fix to one leaves the other. `runtime_db.md` is also where
+the pragma claim lives, and that side of it is B8.
+
+### B8. Three `complete` artifacts describe the control path the Phase 4 Critical replaced
+
+**Found:** Phase 4 code review, round 2. **Owner:** unassigned. **Risk:** the
+`helpers_and_control.md` entry is the highest in this register: a later-phase implementer who
+follows it as written reintroduces an interpreter-wide deadlock.
+
+Phase 4's round-1 review raised a Critical: `controller_run_sql` ran `sandbox.run_statement` on the
+`inspect()` handle, which the spec documents as readable *without* the instance lock. Two threads on
+one connection, one setting the authorizer while the other steps a cursor, wedge inside SQLite — and
+take the interpreter with them, because the thread waiting on the connection holds the GIL. The fix
+gave the control tools a second read-only handle of their own (`Instance._control_db()`), opened once
+and closed with the instance. Three committed artifacts still describe the connection that was
+replaced, or facts that followed from it:
+
+- `components/helpers_and_control.md` §3: "thin wrappers over `Instance.inspect()` and
+  `Instance.changes()`", and "`controller_run_sql` runs on the instance's inspection `Db`
+  (`Instance.inspect()`, opened on first use)". Both false now, and false in the direction that
+  reintroduces the deadlock.
+- `components/fixtures_instances.md` §2.4: the control-dispatch bullet repeats the same claim; the
+  `RLock`'s stated reason ("the reads it then makes through the `inspect()` handle do not [take the
+  lock]") has changed — the conclusion still holds, but the reason is now same-thread re-entry, a
+  control tool asking the instance for its changeset and its control handle with the lock already
+  held; and the `destroy()` bullet's list of what is closed ("close inspection, session, db") is
+  missing the fourth handle.
+- `components/runtime_db.md` §4: an `Authorizer` "carries per-statement mutable state (`refusals`)"
+  is now incomplete — it also carries `_wrote_a_row`, whose scope is the call, not the statement.
+  §5's test plan says "`ATTACH`/`PRAGMA` refused", which is contradicted for `PRAGMA data_version`
+  (see B7) and needs a sentence for the changeset session's `table_xinfo` allowance.
+
+Everything else in those sections holds word for word — one statement, positional params, no
+authorizer beyond the connection's permanent write denial, no caps, `run_sql`'s result shape,
+SQLite's message, and the lock-free `inspect()` reads, which are now true where they were not. All
+three are `status: complete`, so this is the same call B2 and B7 leave open: editing a completed
+artifact cascades its dependents to `draft`, and whether to take that cascade or annotate in place
+is a maintainer's. The reasoning behind each change is recorded in
+`specs/projects/seahaven_framework/phase_plans/phase_4.md`.
+
 ---
 
 ## Method notes
@@ -157,4 +220,16 @@ verified.
   re-ran every recorded survivor in phases 1–3 and found no concealed kills, so the existing records
   stand.
 - **Verify end-to-end, through the real entry point.** Every defect that has cost a review round on
-  this project passed its unit test and failed on a real call.
+  this project passed its unit test and failed on a real call. Phase 4's second-worst defect — a
+  denied authorizer call latching `SQLITE_AUTH` into the changeset session and voiding
+  `Instance.changes()` for the life of an instance — was found this way and by nothing else: the
+  unit tests were green, because the session had already been shown every table a world's own
+  fixtures seeded.
+- **Before trusting a mutation survivor, prove the mutant is the code that ran.** Assert
+  `module.__file__` points inside the mutation tree, from the same process the tests run in. Phase 4
+  produced two independent false-survivor runs, each from a different cause and each reporting
+  perfectly plausible output: a workspace path passed relative, so `PYTHONPATH` resolved against the
+  subprocess's own `cwd` and every one of 37 mutants "survived"; and a workspace copied with its
+  `.venv`, so an installed-package finder resolved `seahaven` back to the real tree and a restored
+  Critical "survived". A whole sweep at 0% kills is obvious. One survivor in a sweep that otherwise
+  looks right is not, and that is the one this check catches.

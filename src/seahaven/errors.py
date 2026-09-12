@@ -78,8 +78,15 @@ class DbError(ToolError):
         sqlite_message: str,
         sqlite_code: int | None = None,
         refusals: tuple[str, ...] = (),
+        *,
+        message: str | None = None,
     ) -> None:
-        message = f"not allowed: {refusals[0]}" if refusals else "database error"
+        # `message=` is how a helper "explicitly does" include engine text
+        # (`world_and_dispatch.md` §5): a SQL door mimics a product whose error
+        # text *is* SQLite's, so `run_sql` and `controller_run_sql` pass
+        # `sqlite_message` here. Nothing else does, and the default is unchanged.
+        if message is None:
+            message = f"not allowed: {refusals[0]}" if refusals else "database error"
         super().__init__("db_error", message, {"refusals": list(refusals)} if refusals else None)
         self.sqlite_message = sqlite_message
         self.sqlite_code = sqlite_code

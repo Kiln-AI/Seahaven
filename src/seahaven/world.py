@@ -27,6 +27,7 @@ from typing import Any
 
 import apsw
 
+from seahaven import control
 from seahaven.call import Handler, Middleware, build_chain, invoke
 from seahaven.ctx import Ctx
 from seahaven.db import build_blank
@@ -126,6 +127,12 @@ class World:
         # never touches the working directory at all.
         self._manager: InstanceManager | None = None
         self._manager_lock = threading.Lock()
+        # The framework's own two tools, on every world and before anything the
+        # world registers: `Instance.call` reaches them through the registry like
+        # any tool, `Instance.tools()` filters them out of the listing, and a
+        # world that registers either name is refused by `_add`.
+        for tool in control.TOOLS:
+            self._add(tool)
 
     @property
     def tools(self) -> Mapping[str, Tool]:
@@ -247,8 +254,6 @@ class World:
         return obj
 
     def _add(self, tool: Tool) -> None:
-        if tool.name in self._tools:
-            raise WorldBug(f"tool {tool.name!r} is registered twice")
         # OpenEnv's verbs are refused whoever is registering: they are the wire's,
         # and no flag of this framework's can reclaim them.
         if tool.name in RESERVED_TOOL_NAMES:
@@ -256,8 +261,14 @@ class World:
                 f"tool {tool.name!r} uses a name OpenEnv reserves for the environment "
                 f"({', '.join(sorted(RESERVED_TOOL_NAMES))})"
             )
+        # Before the duplicate check, which every world would hit instead: the
+        # two control tools are registered here at construction, so a world tool
+        # by one of their names is already taken. What is wrong with it is that
+        # the name is the framework's, and that is what it is told.
         if tool.name in CONTROL_TOOL_NAMES and not tool.control:
             raise WorldBug(f"tool {tool.name!r} uses the name of a control tool")
+        if tool.name in self._tools:
+            raise WorldBug(f"tool {tool.name!r} is registered twice")
         self._tools[tool.name] = tool
 
     def _register_middleware(self, obj: Middleware) -> Middleware:

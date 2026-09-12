@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -26,7 +26,7 @@ import apsw
 import pytest
 from pydantic import Field
 
-from seahaven import instances
+from seahaven import control, instances
 from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
 from seahaven.db import Db
@@ -36,34 +36,7 @@ from seahaven.ids import instance_seed
 from seahaven.instances import Instance, default_concurrency, set_concurrency
 from seahaven.tool import Tool
 from seahaven.world import World
-from tests.conftest import INSTANT_ISO, NOTES_SCHEMA, Boom, build_world
-
-WAIT = 5.0  # every thread test's patience, in seconds
-
-
-class Caller(threading.Thread):
-    """A call on another thread, whose failure is the test's failure.
-
-    An exception in a bare `Thread` is a warning pytest prints and a test that
-    passes anyway, which is no way to test a lock.
-    """
-
-    def __init__(self, run: Callable[[], Any]) -> None:
-        super().__init__(daemon=True)
-        self._run = run
-        self.failure: BaseException | None = None
-
-    def run(self) -> None:
-        try:
-            self._run()
-        except BaseException as error:
-            self.failure = error
-
-    def finish(self, timeout: float = WAIT) -> None:
-        self.join(timeout)
-        assert not self.is_alive(), "the call never finished"
-        if self.failure is not None:
-            raise self.failure
+from tests.conftest import INSTANT_ISO, NOTES_SCHEMA, WAIT, Boom, Caller, build_world
 
 
 def add(instance: Instance, id: str, body: str = "a body") -> None:
@@ -80,8 +53,15 @@ def frozen_fixture(world: World, fixture_id: str = "start", notes: int = 1) -> s
 
 
 def control_tool(fn: Any, name: str | None = None) -> Tool:
-    """A framework control tool, as `control.py` will register two of in Phase 4."""
-    return dataclasses.replace(Tool.from_function(fn, name=name), control=True)
+    """A framework control tool, built the way `control.py` builds its own two.
+
+    The real builder, so these tests hold the dispatch path to the shape the
+    framework's own control tools have: the instance is the first parameter and
+    is bound away before the signature becomes the argument model, and `dispatch`
+    passes the live instance back to the function.
+    """
+    tool = control._control_tool(fn)
+    return tool if name is None else dataclasses.replace(tool, name=name)
 
 
 def contents(directory: Path) -> list[str]:
@@ -324,12 +304,14 @@ def test_what_a_hook_puts_in_state_is_there_for_every_call(tmp_path: Path) -> No
 def test_tools_lists_the_worlds_tools_with_their_schemas(instance: Instance) -> None:
     listed = instance.tools()
 
-    assert {tool["name"] for tool in listed} == set(instance.world.tools)
+    assert {tool["name"] for tool in listed} == {
+        name for name, tool in instance.world.tools.items() if not tool.control
+    }
     assert sorted(listed[0]) == ["description", "input_schema", "name"]
 
 
 def test_tools_never_lists_a_control_tool(world: World) -> None:
-    def peek(ctx: Ctx) -> dict[str, int]:
+    def peek(live: Instance, ctx: Ctx) -> dict[str, int]:
         """Look inside."""
         return {"seen": 1}
 
@@ -453,7 +435,7 @@ def test_a_control_tool_bypasses_the_chain(world: World) -> None:
         seen.append(call.name)
         return next_(ctx, call)
 
-    def peek(ctx: Ctx) -> dict[str, bool]:
+    def peek(live: Instance, ctx: Ctx) -> dict[str, bool]:
         """Look inside."""
         return {"peeked": True}
 
@@ -467,7 +449,7 @@ def test_a_control_tool_bypasses_the_chain(world: World) -> None:
 
 
 def test_a_control_tool_validates_its_arguments(world: World) -> None:
-    def peek(ctx: Ctx, limit: int) -> dict[str, int]:
+    def peek(live: Instance, ctx: Ctx, limit: int) -> dict[str, int]:
         """Look inside, up to a point."""
         return {"limit": limit}
 
@@ -489,7 +471,9 @@ def test_a_control_tool_is_called_with_exactly_the_validated_arguments(world: Wo
     """
     seen: list[Any] = []
 
-    def peek(ctx: Ctx, limit: Annotated[int, Field(alias="max")] = 5) -> dict[str, int]:
+    def peek(
+        live: Instance, ctx: Ctx, limit: Annotated[int, Field(alias="max")] = 5
+    ) -> dict[str, int]:
         """Look inside, up to a point."""
         assert ctx.call is not None
         seen.append(dict(ctx.call.arguments))
@@ -515,7 +499,7 @@ def test_a_control_tools_result_is_held_to_the_rules_every_result_is(
 ) -> None:
     """A control tool skips the chain, not the serialiser: it is no way around determinism."""
 
-    def peek(ctx: Ctx) -> dict[str, Any]:
+    def peek(live: Instance, ctx: Ctx) -> dict[str, Any]:
         """Answer with something no world may return."""
         return result
 
@@ -527,19 +511,17 @@ def test_a_control_tools_result_is_held_to_the_rules_every_result_is(
 
 def test_a_control_tool_may_read_the_instance_it_is_called_on(world: World) -> None:
     """The re-entrancy case: the lock is held, and `inspect()` takes it again."""
-    live: list[Instance] = []
 
-    def controller_run_sql(ctx: Ctx, sql: str) -> list[dict[str, Any]]:
-        """A thin wrapper over `Instance.inspect()`, as Phase 4's will be."""
-        return live[0].inspect().rows(sql)
+    def peek_rows(live: Instance, ctx: Ctx, sql: str) -> list[dict[str, Any]]:
+        """A thin wrapper over `Instance.inspect()`, as the real control tools are."""
+        return live.inspect().rows(sql)
 
-    world.tool(control_tool(controller_run_sql))
+    world.tool(control_tool(peek_rows))
 
     with world.instance(None) as instance:
-        live.append(instance)
         add(instance, "n1")
 
-        assert instance.call("controller_run_sql", sql="SELECT id FROM notes") == [{"id": "n1"}]
+        assert instance.call("peek_rows", sql="SELECT id FROM notes") == [{"id": "n1"}]
 
 
 def test_bulk_commits_once_at_the_end(instance: Instance) -> None:
@@ -705,7 +687,7 @@ def test_a_control_tool_passes_an_exhausted_gate(tmp_path: Path) -> None:
         assert release.wait(WAIT)
         return {"done": True}
 
-    def peek(ctx: Ctx) -> dict[str, bool]:
+    def peek(live: Instance, ctx: Ctx) -> dict[str, bool]:
         """Look inside."""
         return {"peeked": True}
 

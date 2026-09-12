@@ -1,6 +1,7 @@
 """Shared fixtures: a frozen instant, a hardened database on it, and a small world."""
 
-from collections.abc import Iterator
+import threading
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from seahaven.ids import Ids, instance_seed
 from seahaven.instances import Instance
 from seahaven.world import World
 
+WAIT = 5.0  # every thread test's patience, in seconds
+
 # Milliseconds on purpose: a clock whose instant is a whole second hides the
 # rounding mistakes that a world's canonical timestamps would trip over.
 INSTANT = datetime(2024, 3, 5, 12, 0, 0, 123000, tzinfo=UTC)
@@ -28,6 +31,31 @@ CREATE TABLE notes (
     n INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 """
+
+
+class Caller(threading.Thread):
+    """A call on another thread, whose failure is the test's failure.
+
+    An exception in a bare `Thread` is a warning pytest prints and a test that
+    passes anyway, which is no way to test a lock.
+    """
+
+    def __init__(self, run: Callable[[], Any]) -> None:
+        super().__init__(daemon=True)
+        self._run = run
+        self.failure: BaseException | None = None
+
+    def run(self) -> None:
+        try:
+            self._run()
+        except BaseException as error:
+            self.failure = error
+
+    def finish(self, timeout: float = WAIT) -> None:
+        self.join(timeout)
+        assert not self.is_alive(), "the call never finished"
+        if self.failure is not None:
+            raise self.failure
 
 
 @pytest.fixture
