@@ -527,9 +527,39 @@ Round three's eleven, all killed:
 What survives, and why each is a mutant with no behaviour to kill:
 
 - **`from collections.abc import Sequence`, `from types import FunctionType`,
-  `from collections.abc import Callable`, `from seahaven.db import Db`** — annotations are lazy on
-  Python 3.14, and every one of these names is used only in an annotation. Deleting the import
-  changes nothing the suite can observe. (`ty` observes it, and is part of the gate.)
+  `from collections.abc import Callable`, `from seahaven.db import Db`** — every one of these names
+  appears only in the annotations of functions that nothing registers as a tool, so nothing
+  evaluates it at runtime. Deleting the import changes nothing the suite can observe. (`ty` observes
+  it, and is part of the gate.)
+
+  *(Amended twice in Phase 5, and the second amendment is the one to read.* The reason first
+  recorded here was "annotations are lazy on Python 3.14". That is false as a general rule: PEP 649
+  defers evaluation, it does not prevent it, and Seahaven evaluates annotations at registration in
+  two places — `World.middleware` calls `inspect.signature(obj)`, and `Tool.from_function` calls
+  `inspect.signature(fn, eval_str=True)` (`tool.py:150`) to build the argument model.
+
+  The first amendment replaced that with "modules nothing registers", and named these modules as
+  such. That is false too, and more dangerously, because it licenses a deletion that breaks the
+  package at import. `control.py:177` registers **at import time**: `TOOLS = (_control_tool(
+  controller_run_sql), _control_tool(controller_changes))` runs through `Tool.from_function` while
+  the module is still being executed. `helpers/run_sql.py` and `helpers/describe_schema.py` define
+  the functions worlds register. Under the "modules nothing registers" rule, `control.py`'s
+  `from typing import Any` would be droppable; delete it and `import seahaven.control` raises
+  `WorldBug: tool 'controller_run_sql' is annotated with 'Any', which does not exist at runtime`,
+  and every suite fails to collect.
+
+  The distinction that is actually true is narrower: **a name that appears only in the annotations of
+  functions nothing registers**. These four qualify for that reason and not the other one, and here
+  is where each is actually used: `FunctionType` is in `_control_tool`'s own signature
+  (`control.py:155`), a factory nobody registers; `Callable` is in `_ControlAuthorizer.__init__`
+  (`control.py:104`), a constructor that is called but never registered, so nothing evaluates its
+  annotations; and `Sequence` and `Db` are in the `run_sql` and `describe_schema` factories and their
+  private helpers, not in the annotations of the inner functions those factories turn into tools.
+  Each was confirmed by deleting the import and running both suites.
+
+  The conclusion stands unchanged through both amendments: these four imports really do survive and
+  are still equivalent mutants. It was the stated reason that was wrong, twice, and each time in a
+  direction a later phase could have read as licence.)
 - **`__all__` in all three modules** — it steers `from module import *`, which nothing in this
   package or its tests does.
 - **`ORDER BY cid` in `describe_schema`'s column query** — `pragma_table_xinfo` yields rows in `cid`

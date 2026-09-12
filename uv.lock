@@ -7,6 +7,12 @@ resolution-markers = [
     "sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "projecttracker",
+    "seahaven",
+]
+
 [[package]]
 name = "aiofile"
 version = "3.12.3"
@@ -1336,6 +1342,26 @@ wheels = [
 ]
 
 [[package]]
+name = "projecttracker"
+version = "1.0.0"
+source = { editable = "worlds/projecttracker" }
+dependencies = [
+    { name = "seahaven" },
+]
+
+[package.optional-dependencies]
+serve = [
+    { name = "seahaven", extra = ["serve"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "seahaven", editable = "." },
+    { name = "seahaven", extras = ["serve"], marker = "extra == 'serve'", editable = "." },
+]
+provides-extras = ["serve"]
+
+[[package]]
 name = "py-key-value-aio"
 version = "0.4.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1763,6 +1789,7 @@ serve = [
 [package.dev-dependencies]
 dev = [
     { name = "packaging" },
+    { name = "projecttracker" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
@@ -1780,6 +1807,7 @@ provides-extras = ["serve"]
 [package.metadata.requires-dev]
 dev = [
     { name = "packaging", specifier = ">=24" },
+    { name = "projecttracker", editable = "worlds/projecttracker" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.14" },
     { name = "ty", specifier = ">=0.0.1a21" },

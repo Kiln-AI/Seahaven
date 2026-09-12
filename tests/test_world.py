@@ -1,17 +1,28 @@
 """The world object: construction, the three registration verbs, and what each of them refuses."""
 
+import importlib.resources
 import importlib.util
+import os
+import subprocess
+import sys
+import zipfile
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pytest
 
+import seahaven
 from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
 from seahaven.tool import Tool
-from seahaven.world import World
+from seahaven.world import World, sql_files
+
+# `src/`, for the one test that runs `seahaven` in a subprocess of its own: it
+# must import the tree under test, not whatever is installed.
+SRC_DIR = str(Path(seahaven.__file__).parent.parent)
 
 SCHEMA = "CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;"
 
@@ -402,3 +413,777 @@ def test_a_world_built_where_there_is_no_module_file_falls_back_to_the_directory
 
     expected = tmp_path if has_project_file else working_dir
     assert namespace["world"].fixtures_dir == expected / "fixtures"
+
+
+# --- `sql_files`: the schema a world package ships ----------------------------
+
+
+def a_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path]:
+    """An importable package on disk, as a world is. Returns its name and directory.
+
+    The name is unique per package built, because `sys.modules` outlives a test
+    and a second package by one name would resolve to the first one's directory.
+    """
+    global _packages_built
+    _packages_built += 1
+    name = f"shipped{_packages_built}"
+    package = tmp_path / name
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    return name, package
+
+
+_packages_built = 0
+
+
+def a_zipped_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A package importable from a zip, with the same schema directory as `a_package`.
+
+    The pair is what makes the portability promise testable: `pathlib` and
+    `zipfile.Path` disagree about how several spellings of `directory` resolve,
+    and the disagreement is only visible by asking both.
+    """
+    global _packages_built
+    _packages_built += 1
+    name = f"zipped{_packages_built}"
+    source = tmp_path / f"src{_packages_built}"
+    package = source / name
+    (package / "schema").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "schema" / "001_core.sql").write_text(SCHEMA)
+    archive = tmp_path / f"{name}.zip"
+    with zipfile.ZipFile(archive, "w") as zipped:
+        for path in sorted(source.rglob("*")):
+            zipped.write(path, path.relative_to(source))
+    monkeypatch.syspath_prepend(str(archive))
+    importlib.invalidate_caches()
+    return name
+
+
+def test_sql_files_reads_every_sql_file_in_filename_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `001_`, `002_` convention is the whole of the ordering, and it is sorted by name.
+
+    Written out of order on disk and with two digits either side of ten, so a
+    test cannot pass on directory order or on a string comparison that puts
+    `010` before `002`.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "010_last.sql").write_text("SELECT 'third';")
+    (schema / "001_first.sql").write_text("SELECT 'first';")
+    (schema / "002_second.sql").write_text("SELECT 'second';")
+
+    assert sql_files(name, "schema") == "SELECT 'first';\nSELECT 'second';\nSELECT 'third';"
+
+
+def test_sql_files_reads_only_sql_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A README beside the DDL, or an editor's backup, is not part of the schema."""
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "001_core.sql").write_text("SELECT 1;")
+    (schema / "README.md").write_text("not DDL")
+    (schema / "001_core.sql.bak").write_text("SELECT 2;")
+    (schema / "notes.txt").write_text("SELECT 3;")
+
+    assert sql_files(name, "schema") == "SELECT 1;"
+
+
+def test_sql_files_builds_a_world_from_a_package_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end, the way a world's `world.py` calls it: DDL in, a live schema out."""
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "001_core.sql").write_text("CREATE TABLE a (id TEXT PRIMARY KEY) STRICT;")
+    # The second file depends on the first, which is what the ordering is for.
+    (schema / "002_more.sql").write_text("CREATE INDEX a_id ON a (id);")
+
+    world = World("w", "1.0.0", sql_files(name, "schema"), fixtures_dir=tmp_path)
+
+    with world.instance(None) as instance:
+        names = instance.inspect().rows(
+            "SELECT name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    assert [row["name"] for row in names] == ["a", "a_id"]
+
+
+def test_sql_files_keeps_the_text_of_each_file_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Comments and layout survive: the schema hash is of the DDL as written."""
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "001_core.sql").write_text("-- a comment\nCREATE TABLE a (id TEXT PRIMARY KEY);\n")
+
+    assert sql_files(name, "schema") == "-- a comment\nCREATE TABLE a (id TEXT PRIMARY KEY);\n"
+
+
+def test_a_schema_directory_that_is_not_there_is_a_world_bug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mistyped directory name, which would otherwise be a world with no tables."""
+    name, _ = a_package(tmp_path, monkeypatch)
+
+    with pytest.raises(WorldBug) as raised:
+        sql_files(name, "schemas")
+
+    assert "'schemas'" in str(raised.value)
+    assert f"'{name}'" in str(raised.value)
+
+
+def test_a_schema_directory_holding_no_sql_is_a_world_bug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The adjacent mistake: the directory is there and the DDL is not in it."""
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "README.md").write_text("the DDL goes here")
+
+    with pytest.raises(WorldBug, match=r"no \*\.sql file"):
+        sql_files(name, "schema")
+
+
+def test_a_file_where_the_schema_directory_should_be_is_a_world_bug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The author who put the DDL in `schema.sql` and named it `schema`.
+
+    "Does not exist" would send them looking for a missing file; the file is
+    right there, so the message says what it found instead.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    (package / "schema").write_text("CREATE TABLE a (id TEXT PRIMARY KEY);")
+
+    with pytest.raises(WorldBug, match="is a file, not a directory"):
+        sql_files(name, "schema")
+
+
+def test_a_directory_named_like_a_sql_file_is_a_world_bug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `*.sql` that is not a file is named, not skipped.
+
+    Skipping it reports "holds no *.sql file" about a directory whose listing
+    shows one, which is a worse thirty minutes than any message here.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "001_core.sql").mkdir()
+
+    with pytest.raises(WorldBug, match="which is not a file"):
+        sql_files(name, "schema")
+
+
+def test_a_schema_file_that_is_not_utf8_text_is_a_world_bug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DDL saved in a byte encoding names itself, rather than raising a `UnicodeDecodeError`.
+
+    Before the guard this reached a world author as a traceback out of an import
+    with neither the package nor the file in it.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "001_core.sql").write_bytes(b"-- \xff\xfe latin\nSELECT 1;")
+
+    with pytest.raises(WorldBug) as raised:
+        sql_files(name, "schema")
+
+    assert "'001_core.sql'" in str(raised.value)
+    assert f"'{name}'" in str(raised.value)
+    assert "UTF-8" in str(raised.value)
+
+
+def test_a_schema_file_that_cannot_be_read_is_a_world_bug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of the read: an `OSError` names the file too.
+
+    The failure is injected rather than arranged on disk, because the suite runs
+    as a user who can read an unreadable file; what is being pinned is that the
+    `OSError` family is converted at all, which no permission bit can show here.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "001_core.sql").write_text("SELECT 1;")
+    real_read_text = Path.read_text
+
+    def refuse(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.name == "001_core.sql":
+            raise PermissionError(13, "Permission denied")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+
+    with pytest.raises(WorldBug, match="could not be read"):
+        sql_files(name, "schema")
+
+
+def test_a_schema_directory_that_cannot_be_listed_is_a_world_bug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And the listing, for the same reason and injected the same way."""
+    name, package = a_package(tmp_path, monkeypatch)
+    schema = package / "schema"
+    schema.mkdir()
+    (schema / "001_core.sql").write_text("SELECT 1;")
+    real_iterdir = Path.iterdir
+
+    def refuse(self: Path) -> Any:
+        if self.name == "schema":
+            raise PermissionError(13, "Permission denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", refuse)
+
+    with pytest.raises(WorldBug, match="cannot read schema directory"):
+        sql_files(name, "schema")
+
+
+@pytest.mark.parametrize(
+    "directory",
+    [
+        "..",
+        "../elsewhere",
+        "/etc",
+        "schema/../..",
+        "C:/etc",
+        # Backslashes too, and on POSIX as well: `schema\..\..` is a legal
+        # filename here and a traversal on Windows, so a world that used one
+        # would build differently on different machines -- which is the one
+        # thing this function promises does not happen.
+        "..\\elsewhere",
+        "schema\\..\\..",
+        # The two shapes `PureWindowsPath.is_absolute()` calls relative because
+        # it wants a drive *and* a root: a root with no drive, and a drive with
+        # no root, which resolves against that drive's working directory.
+        "\\etc",
+        "C:schema",
+        "\\",
+        # And in a later segment, where it is easiest to think it has been made
+        # safe by the segment in front of it: `PureWindowsPath("schema") /
+        # "C:evil"` is `C:evil`, because joining a drive-relative path replaces
+        # what came before it rather than appending to it.
+        "schema/C:evil",
+    ],
+)
+def test_a_schema_directory_that_leaves_the_package_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: str
+) -> None:
+    """The portability promise, enforced rather than claimed.
+
+    `files(pkg) / directory` is `joinpath`, so `..` and an absolute path are
+    followed on a filesystem and cannot be resolved in a zip at all: a world
+    that used one would build from a checkout and fail once installed. Refused
+    where the mistake is, not where it surfaces -- and refused on both
+    separators and both Windows spellings of a root, because the mistake is not
+    the platform the author is on.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    (tmp_path / "elsewhere").mkdir(exist_ok=True)
+    (tmp_path / "elsewhere" / "001.sql").write_text("SELECT 'escaped';")
+    (package / "schema").mkdir()
+
+    with pytest.raises(WorldBug, match="leaves the package"):
+        sql_files(name, directory)
+
+
+@pytest.mark.parametrize("directory", ["./schema", "schema/.", "schema//", "schema/", ".//schema"])
+def test_a_schema_directory_spelled_with_a_dot_or_a_bare_separator_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: str
+) -> None:
+    """The spellings that do not leave the package and still break the promise.
+
+    `./schema` is what an author writes who is thinking about relative paths at
+    all. `pathlib` normalises a `.` and a repeated or trailing separator away,
+    so it builds from a source tree; `zipfile.Path.joinpath` is `posixpath.join`
+    and keeps them, so the same world fails from an installed wheel. Refused,
+    and told apart from a traversal in the message, because it is a different
+    mistake with the same consequence.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    (package / "schema").mkdir()
+    (package / "schema" / "001_core.sql").write_text(SCHEMA)
+
+    with pytest.raises(WorldBug, match="is not spelled as a path inside it"):
+        sql_files(name, directory)
+
+
+@pytest.mark.parametrize(
+    "directory", ["schema", "./schema", "schema/.", "schema//", "schema/", "..", "/etc", "C:schema"]
+)
+def test_a_schema_directory_resolves_the_same_from_a_source_tree_and_from_a_zip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: str
+) -> None:
+    """The whole promise, asked of both readers at once.
+
+    Every spelling must give the same answer from a package on disk and from the
+    same package in a zip -- the DDL, or a `WorldBug`. This is the test the
+    guard exists for: each defect in this function so far has been a spelling
+    that built from a source tree and raised from a wheel, and no unit test of
+    the guard on its own can see that, because the disagreement is between the
+    two `joinpath` implementations underneath it.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    (package / "schema").mkdir()
+    (package / "schema" / "001_core.sql").write_text(SCHEMA)
+    zipped = a_zipped_package(tmp_path, monkeypatch)
+
+    def answer(anchor: str) -> str:
+        try:
+            return sql_files(anchor, directory)
+        except WorldBug:
+            return "refused"
+
+    from_disk, from_zip = answer(name), answer(zipped)
+    assert from_disk == from_zip
+    # And it is one of the two answers, not two different failures reported alike.
+    assert from_disk in (SCHEMA, "refused")
+
+
+def a_namespace_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, portions: int
+) -> tuple[str, list[Path]]:
+    """A namespace package (no `__init__.py`) spread over `portions` sys.path entries.
+
+    `files()` answers a `MultiplexedPath` however many portions there are, so the
+    portion count is not the axis anything turns on. What `sql_files` refuses is
+    a *segment* that resolves to more than one directory, which is what
+    `joinpath` answers: a segment present in one portion joins to a real `Path`
+    however many portions the package has, and only a segment present in two or
+    more joins to another `MultiplexedPath`. The tests below build both sides of
+    that line, and a two-portion package on each side of it.
+    """
+    global _packages_built
+    _packages_built += 1
+    name = f"namespaced{_packages_built}"
+    roots = []
+    for portion in range(portions):
+        root = tmp_path / f"path{portion}"
+        (root / name).mkdir(parents=True)
+        roots.append(root / name)
+        monkeypatch.syspath_prepend(str(root))
+    importlib.invalidate_caches()
+    return name, roots
+
+
+def test_sql_files_reads_a_package_that_has_no_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A namespace package in one place, which is the third kind of `Traversable`.
+
+    `importlib.resources.files()` answers a `Path` for a package on disk, a
+    `zipfile.Path` for one in a zip, and a `MultiplexedPath` for a namespace
+    package -- and only the first of those three is a `pathlib.Path`. The
+    symlink guard asks `isinstance(entry, Path)` before it asks `is_symlink()`
+    for exactly that reason: `zipfile.Path` happens to answer `is_symlink` and
+    `MultiplexedPath` does not, so a guard that trusted the `Traversable`
+    protocol to carry it would raise `AttributeError` here instead of reading
+    the schema.
+
+    One portion always joins to a real `Path`, so it reads. What decides the
+    other cases is not the portion count but whether the segment itself is in
+    more than one portion -- see the two tests below, which are a two-portion
+    package that reads and a two-portion package that does not.
+    """
+    name, roots = a_namespace_package(tmp_path, monkeypatch, portions=1)
+    (roots[0] / "schema").mkdir()
+    (roots[0] / "schema" / "001_core.sql").write_text(SCHEMA)
+
+    assert not (roots[0] / "__init__.py").exists()
+    assert sql_files(name, "schema") == SCHEMA
+
+
+def test_a_schema_directory_in_one_portion_of_a_split_package_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The permissive half of the rule, which is the half that says what it is.
+
+    The package has two portions; only one of them holds `schema`. Joining
+    `schema` onto the two-portion `MultiplexedPath` therefore answers a real
+    `Path` -- `MultiplexedPath._follow` resolves to the single portion that has
+    it -- and the schema is in one place, so it is read.
+
+    Without this test the implemented rule is indistinguishable from a rule that
+    refuses any package of more than one portion: that wider guard, with a
+    byte-identical message, passes every other test in this file. The narrowness
+    is the point. A world may legitimately be a namespace package whose schema
+    happens to live in one of its portions, and refusing it would be refusing
+    something an installed wheel reproduces exactly.
+    """
+    name, roots = a_namespace_package(tmp_path, monkeypatch, portions=2)
+    (roots[0] / "schema").mkdir()
+    (roots[0] / "schema" / "001_core.sql").write_text(SCHEMA)
+    (roots[1] / "elsewhere").mkdir()
+
+    assert len(importlib.import_module(name).__path__) == 2
+    assert sql_files(name, "schema") == SCHEMA
+
+
+def test_a_schema_directory_split_across_two_sys_path_entries_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two portions, and the schema is no longer in one place.
+
+    `files()` on a two-portion namespace package answers a `MultiplexedPath`
+    whose `joinpath` answers another one, and whose `iterdir` merges the
+    children of two real directories. No wheel can reproduce it -- installing
+    both portions lands them in one directory under `site-packages` -- so it is
+    the failure `sql_files` exists to prevent, arriving through the one shape
+    that is not spelled in `directory` at all.
+
+    It is also what makes the sort key observable: merged children do not share
+    a parent, so ordering them by `str` rather than by `name` would put
+    `path1/.../002_b.sql` before `path0/.../001_a.sql` and run the schema out of
+    order. Refusing the root is what keeps that unreachable.
+    """
+    name, roots = a_namespace_package(tmp_path, monkeypatch, portions=2)
+    for root, sql in zip(roots, ["002_b.sql", "001_a.sql"], strict=True):
+        (root / "schema").mkdir()
+        (root / "schema" / sql).write_text(SCHEMA)
+
+    with pytest.raises(WorldBug, match="resolves to more than one directory"):
+        sql_files(name, "schema")
+
+
+def test_a_schema_directory_reached_through_a_split_directory_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ambiguity can be in a directory on the way, not only in the last one.
+
+    `sql` exists in both portions and `sql/schema` in only one, so joining
+    resolves `sql` to a `MultiplexedPath` and `sql/schema` back to a single real
+    `Path`. Checking only the directory the schema is in would accept that, and
+    it should not be accepted: which `schema` the world gets depends on the order
+    of `sys.path`, and installing both portions merges them, so the answer is not
+    the one the checkout gave. Refused at the segment that is ambiguous, which is
+    also the segment the author has to change.
+    """
+    name, roots = a_namespace_package(tmp_path, monkeypatch, portions=2)
+    (roots[0] / "sql" / "schema").mkdir(parents=True)
+    (roots[0] / "sql" / "schema" / "001_core.sql").write_text(SCHEMA)
+    (roots[1] / "sql").mkdir()
+
+    with pytest.raises(WorldBug, match=r"segment 'sql'.*resolves to more than one directory"):
+        sql_files(name, "sql/schema")
+
+
+def test_a_schema_directory_split_across_two_entries_cannot_smuggle_in_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bypass the refusal above closes, stated as the attack it is.
+
+    A `MultiplexedPath` is not a `pathlib.Path` and *is* on a filesystem, so the
+    symlink guard cannot answer for it and would skip it in silence. One portion
+    is then free to be a symlink pointing anywhere, and its files are merged into
+    the schema as if the package shipped them. The root is refused before the
+    symlink guard is asked, so this never gets that far -- and the assertion
+    that matters is the second one: whatever the error says, the text from
+    outside the package is not in the schema.
+    """
+    name, roots = a_namespace_package(tmp_path, monkeypatch, portions=2)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "001_core.sql").write_text("-- FROM OUTSIDE THE PACKAGE")
+    (roots[0] / "schema").symlink_to(outside, target_is_directory=True)
+    (roots[1] / "schema").mkdir()
+    (roots[1] / "schema" / "002_ok.sql").write_text(SCHEMA)
+
+    with pytest.raises(WorldBug) as raised:
+        sql_files(name, "schema")
+
+    assert "FROM OUTSIDE THE PACKAGE" not in str(raised.value)
+
+
+class _BareTraversable:
+    """A `Traversable` and nothing more: the protocol's members, and no others.
+
+    `Traversable` does not require `is_symlink`. The three implementations in
+    play happen to differ about it -- `pathlib.Path` has it, `zipfile.Path` has
+    it and always answers `False`, `MultiplexedPath` does not have it at all --
+    and `MultiplexedPath` never reaches the symlink guard, because joining a
+    segment onto one yields a real `Path`. So nothing on this interpreter shows
+    what the guard's `isinstance` test is for. This does.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    @property
+    def name(self) -> str:
+        return self._path.name
+
+    def __truediv__(self, other: str) -> _BareTraversable:
+        return _BareTraversable(self._path / other)
+
+    def joinpath(self, other: str) -> _BareTraversable:
+        return self / other
+
+    def is_dir(self) -> bool:
+        return self._path.is_dir()
+
+    def is_file(self) -> bool:
+        return self._path.is_file()
+
+    def iterdir(self) -> Iterator[_BareTraversable]:
+        return (_BareTraversable(child) for child in self._path.iterdir())
+
+    def open(self, *args: Any, **kwargs: Any) -> IO[Any]:
+        return self._path.open(*args, **kwargs)
+
+    def read_text(self, encoding: str | None = None) -> str:
+        return self._path.read_text(encoding=encoding)
+
+
+def test_a_traversable_that_is_not_a_path_is_not_asked_about_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The symlink guard's `isinstance` test, which nothing else reaches.
+
+    Symlinks belong to a filesystem, so the guard asks `isinstance(entry, Path)`
+    before it asks `is_symlink()`. Drop that test and a `Traversable` that does
+    not implement `is_symlink` -- which the protocol does not require -- raises
+    `AttributeError` out of an import instead of building the world. Pinned with
+    a `Traversable` that implements the protocol and nothing else, because no
+    implementation that ships with Python is both reachable here and missing
+    `is_symlink`.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    (package / "schema").mkdir()
+    (package / "schema" / "001_core.sql").write_text(SCHEMA)
+    monkeypatch.setattr(importlib.resources, "files", lambda anchor: _BareTraversable(package))
+
+    assert sql_files(name, "schema") == SCHEMA
+
+
+def test_a_schema_directory_that_is_a_symlink_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workaround the `..` guard hands an author, closed in the same words.
+
+    `is_dir()` follows a symlink, so refusing `../shared_schema` and then reading
+    `schema -> ../shared_schema` would take the path away and leave the door. A
+    zip holds no symlink and a checkout without symlink support holds a text
+    file where one should be, so it breaks the same promise.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    shared = tmp_path / "shared_schema"
+    shared.mkdir()
+    (shared / "001_core.sql").write_text(SCHEMA)
+    (package / "schema").symlink_to(shared, target_is_directory=True)
+
+    with pytest.raises(WorldBug, match="is a symlink, which leaves the package"):
+        sql_files(name, "schema")
+
+
+def test_a_schema_directory_reached_through_a_symlink_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every directory on the way, not only the last one.
+
+    `sql` may be a symlink and `sql/schema` an ordinary directory inside it; the
+    escape is the same, and checking only the leaf would miss it.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    shared = tmp_path / "shared_tree"
+    (shared / "schema").mkdir(parents=True)
+    (shared / "schema" / "001_core.sql").write_text(SCHEMA)
+    (package / "sql").symlink_to(shared, target_is_directory=True)
+
+    with pytest.raises(WorldBug, match="is a symlink, which leaves the package"):
+        sql_files(name, "sql/schema")
+
+
+def test_a_schema_file_that_is_a_symlink_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symlinked `*.sql` is read and concatenated like any other, so it is refused too."""
+    name, package = a_package(tmp_path, monkeypatch)
+    (package / "schema").mkdir()
+    (package / "schema" / "001_core.sql").write_text(SCHEMA)
+    outside = tmp_path / "outside.sql"
+    outside.write_text("SELECT 'escaped';")
+    (package / "schema" / "002_link.sql").symlink_to(outside)
+
+    with pytest.raises(WorldBug, match="is a symlink, which leaves the package"):
+        sql_files(name, "schema")
+
+
+@pytest.mark.parametrize("directory", [None, "", 42])
+def test_a_schema_directory_that_is_not_a_name_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: Any
+) -> None:
+    name, _ = a_package(tmp_path, monkeypatch)
+
+    with pytest.raises(WorldBug, match="needs the name of a directory"):
+        sql_files(name, directory)
+
+
+def test_a_schema_directory_inside_the_package_may_be_nested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the traversal rule must not break: a directory below the package's own."""
+    name, package = a_package(tmp_path, monkeypatch)
+    nested = package / "sql" / "schema"
+    nested.mkdir(parents=True)
+    (nested / "001_core.sql").write_text("SELECT 'nested';")
+
+    assert sql_files(name, "sql/schema") == "SELECT 'nested';"
+
+
+def test_a_module_inside_a_package_is_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`__name__` instead of `__package__`, which is one keystroke and one word away.
+
+    `importlib.resources.files` answers for a module with an object that has no
+    directory behind it, so the failure would otherwise be "does not exist",
+    about a directory that does, quoting an importlib internal as the place it
+    looked.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    (package / "schema").mkdir()
+    (package / "schema" / "001_core.sql").write_text("SELECT 1;")
+    (package / "world.py").write_text("")
+
+    with pytest.raises(WorldBug, match="is a module inside one"):
+        sql_files(f"{name}.world", "schema")
+
+
+def test_sql_files_reads_a_package_from_a_zip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The portability promise, from the other side: a zipimported world builds.
+
+    `importlib.resources` is what makes this true and `__file__` would not, so
+    the claim is worth a test rather than a sentence.
+    """
+    source = tmp_path / "src"
+    package = source / "zipped_world"
+    (package / "schema").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "schema" / "001_core.sql").write_text("CREATE TABLE a (id TEXT PRIMARY KEY);")
+    (package / "schema" / "002_more.sql").write_text("CREATE INDEX a_id ON a (id);")
+    archive = tmp_path / "world.zip"
+    with zipfile.ZipFile(archive, "w") as zipped:
+        for path in sorted(source.rglob("*")):
+            zipped.write(path, path.relative_to(source))
+    monkeypatch.syspath_prepend(str(archive))
+    importlib.invalidate_caches()
+
+    assert sql_files("zipped_world", "schema") == (
+        "CREATE TABLE a (id TEXT PRIMARY KEY);\nCREATE INDEX a_id ON a (id);"
+    )
+
+
+def test_a_schema_file_is_read_as_utf8_whatever_the_locale_says(tmp_path: Path) -> None:
+    """UTF-8 because the call says so, not because the machine happened to agree.
+
+    `Path.read_text()` with no `encoding` uses the locale's encoding, which on a
+    developer's machine and in CI is UTF-8 and under `LC_ALL=C` is ASCII. A world
+    whose schema carried an accented comment would then build in one place and
+    raise a `UnicodeDecodeError` in another, which is the same portability
+    promise the `..` guard above keeps. A subprocess is the only way to assert
+    it: the encoding is fixed when the interpreter starts.
+    """
+    package = tmp_path / "accented_world"
+    (package / "schema").mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    # Written as bytes, so this test does not depend on the encoding of the
+    # machine that runs it either.
+    (package / "schema" / "001_core.sql").write_bytes(
+        "-- caf\u00e9\nCREATE TABLE a (id TEXT PRIMARY KEY);".encode()
+    )
+    program = (
+        "import sys, seahaven\n"
+        "schema = seahaven.sql_files('accented_world', 'schema')\n"
+        # Back to UTF-8 bytes before anything touches stdout, whose encoding is
+        # ASCII here too -- printing the text would fail for the wrong reason.
+        "sys.stdout.buffer.write(schema.encode())\n"
+    )
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([str(tmp_path), SRC_DIR]),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "LC_ALL": "C",
+        "LANG": "C",
+        # Both of the escape hatches CPython has for exactly this situation, off:
+        # UTF-8 mode and the C-locale coercion that would quietly make it UTF-8.
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0",
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", program], capture_output=True, env=environment, check=False
+    )
+    assert done.returncode == 0, done.stderr.decode(errors="replace")
+    assert done.stdout.decode() == "-- caf\u00e9\nCREATE TABLE a (id TEXT PRIMARY KEY);"
+
+
+def test_a_package_that_cannot_be_imported_is_a_world_bug() -> None:
+    """A typo in the package name is named, not raised as an `ImportError`."""
+    with pytest.raises(WorldBug, match="cannot read schema of package"):
+        sql_files("no_such_package_anywhere", "schema")
+
+
+@pytest.mark.parametrize("package", [".relative", ".", "..", ".projecttracker", "pkg.", "a-b"])
+def test_a_package_name_that_is_not_a_python_name_is_refused(package: str) -> None:
+    """The one spelling that escaped the handler below, and the family it is in.
+
+    `import_module(".projecttracker")` does not raise `ImportError`. A leading
+    dot is a *relative* import, and with no anchor to be relative to it raises
+    `TypeError` from inside `importlib._bootstrap` -- past the `except
+    ImportError` that turns a bad package name into a `WorldBug`, and out to the
+    author as a traceback naming neither the world, the directory, nor Seahaven.
+
+    Checked as an allowlist, so the answer does not depend on having thought of
+    the spelling: every dotted part of a package name is a Python name.
+    """
+    with pytest.raises(WorldBug, match="sql_files needs the name of a package"):
+        sql_files(package, "schema")
+
+
+def test_a_world_that_fails_on_import_fails_as_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The width of the import handler, in the direction the other test cannot see.
+
+    `except ImportError` is narrow on purpose. A world package whose own module
+    body raises -- a bad SQL constant, a missing dependency of its own, a typo at
+    module level -- is not a world that "cannot be read"; relabelling it
+    `WorldBug: cannot read schema of package` would take the author's own
+    exception away and hand back a message pointing at the schema directory,
+    which is the one place the bug is not. Widen the handler to `except
+    Exception` and this test is what notices.
+    """
+    name, package = a_package(tmp_path, monkeypatch)
+    (package / "schema").mkdir()
+    (package / "schema" / "001_core.sql").write_text(SCHEMA)
+    (package / "__init__.py").write_text('raise ValueError("the world owns this bug")')
+
+    with pytest.raises(ValueError, match="the world owns this bug"):
+        sql_files(name, "schema")
+
+
+@pytest.mark.parametrize("package", [None, "", 42])
+def test_a_package_that_is_not_a_package_name_is_refused_by_name(package: Any) -> None:
+    """`__package__` is `None` in a module that is not in a package, and that is the hazard.
+
+    `importlib.resources.files(None)` does not fail: with no anchor it resolves
+    to the *caller's* package, which is this framework, and a world would be
+    built from whatever `seahaven/<dir>` happened to hold. It is refused here,
+    where the name of the argument can be said.
+    """
+    with pytest.raises(WorldBug, match="needs the name of a package"):
+        sql_files(package, "schema")

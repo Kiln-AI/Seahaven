@@ -32,6 +32,11 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+      # The reference world is its own package with its own suite, and its own
+      # pytest rootdir: a world is tested the way a world's author tests one.
+      - name: Reference world tests
+        run: uv run pytest worlds/projecttracker
+
       # Seahaven is vendored into other people's products: what it installs at
       # runtime stays MIT, Apache-2.0 or BSD-class.
       - name: Dependency licences

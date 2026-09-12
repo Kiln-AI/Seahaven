@@ -186,7 +186,13 @@ replaced, or facts that followed from it:
 - `components/helpers_and_control.md` §3: "thin wrappers over `Instance.inspect()` and
   `Instance.changes()`", and "`controller_run_sql` runs on the instance's inspection `Db`
   (`Instance.inspect()`, opened on first use)". Both false now, and false in the direction that
-  reintroduces the deadlock.
+  reintroduces the deadlock. A **third** sentence in the same section, at `:98-100`, states the
+  `RLock`'s reason exactly as `fixtures_instances.md` §2.4 does: "the reads it then makes through
+  the `inspect()` handle do not take it, which is why the lock is a `threading.RLock` and why the
+  first control call does not deadlock." It is listed here because the next bullet attributes that
+  sentence to the other file alone, and an amendment worked from this list would fix two sentences
+  here and leave the third — which is this register's own recurring finding, that a fix closes the
+  demonstrated case and leaves the adjacent one.
 - `components/fixtures_instances.md` §2.4: the control-dispatch bullet repeats the same claim; the
   `RLock`'s stated reason ("the reads it then makes through the `inspect()` handle do not [take the
   lock]") has changed — the conclusion still holds, but the reason is now same-thread re-entry, a
@@ -205,6 +211,127 @@ three are `status: complete`, so this is the same call B2 and B7 leave open: edi
 artifact cascades its dependents to `draft`, and whether to take that cascade or annotate in place
 is a maintainer's. The reasoning behind each change is recorded in
 `specs/projects/seahaven_framework/phase_plans/phase_4.md`.
+
+### B9. SH405 as specified fires on every fresh clone of a world that commits a fixture
+
+**Found:** Phase 5, freezing the reference world's `empty` fixture. **Owner:** unassigned.
+**Risk:** `seahaven check` (Phase 7) reports an error on a correct world; a world author's first
+`check` after cloning their own repository fails.
+
+`components/cli_and_check.md` §3 defines SH405 as "state file not read-only or has `-wal`/`-shm`
+companions", and `components/fixtures_instances.md` §1 has `freeze` `chmod 0o444` the state file.
+Both are right about the file `freeze` writes. Neither survives version control: git records only
+the executable bit, so `fixtures/<id>/state.sqlite` comes out of a clone with whatever the umask
+gave it — `0o644` under the usual `umask 022` — and the read-only half of SH405 reports an error on
+a fixture that is byte-for-byte the one that was frozen.
+
+The information SH405 wants is not lost, it is just not in the mode: the sidecar's `file_sha256`
+(SH402) and `schema_hash` (SH403) already prove the bytes are the frozen ones, and the journal-file
+half of SH405 is genuine and unaffected. Options, for whoever owns the lint: drop the mode check;
+keep it as a warning rather than an error; or keep it as an error but only for a file the *running*
+process froze, which in practice means dropping it. Nothing about `freeze` should change — a live
+instance must not be able to write a fixture in place.
+
+This affects Phase 7 (the lint) and Phase 10 (three fixtures instead of one).
+`worlds/projecttracker/tests/test_empty_fixture.py::test_the_state_file_carries_no_journal_or_lock_file_beside_it`
+asserts the half that survives a clone and says in its docstring why it does not assert the mode.
+
+### B10. `architecture.md` says every name outside `__init__` is internal, and the code does not
+
+**Found:** Phase 5, writing the reference world's `middleware/error_handler.py` — the first
+middleware written outside the framework's own tests. **Owner:** unassigned. **Risk:** ergonomic,
+and a stated rule that contradicts the shipped code; it already misled this phase.
+
+This is a conflict inside a `complete` artifact, not a blank to fill in. `architecture.md:68` says,
+of the list of names `seahaven/__init__.py` re-exports:
+
+> Everything else is internal. `Tool.from_function` is part of that public surface: it is how an
+> extension builds a tool. `seahaven.sandbox` is public too — `Authorizer`, `run_statement`,
+> `SqlResult` and the refusal names, which are a documented `Literal` and are stable.
+
+Read as written, the first sentence is the rule and the two that follow are its complete set of
+exceptions: `Tool.from_function`, and `Authorizer`, `run_statement`, `SqlResult` and the refusal
+names in `seahaven.sandbox`. Anything else a world imports from a `seahaven.*` module — the sentence
+says — is internal.
+
+The component documents then list wider interfaces, and the code implements them. `world_and_dispatch.md`
+§1 gives `Handler` and `Middleware` beside the `World` they describe, and `seahaven/world.py` duly
+re-exports both from `call.py` in its `__all__`, with a comment naming exactly the world-author case;
+`fixtures_instances.md` §1 gives `load`, `load_all`, `verify` and `freeze` in `seahaven.fixtures`.
+None of those are in `__init__`, and none are named as exceptions at `architecture.md:68`. So a world
+author who reads §1 and believes it concludes that `from seahaven.world import Handler` reaches into
+a private module, and declares a local copy of the type instead. That is what this phase's first
+draft did, and the copy is exactly the drift a world should not carry.
+
+Closing it means **amending `architecture.md` §1**, which is `complete`; a phase should not widen it
+on its own judgement, and adding a sentence elsewhere would leave line 68 still saying the opposite.
+The amendment is to replace the blanket "Everything else is internal" plus its two hand-listed
+exceptions with the rule the codebase actually follows — *a name a component document's §1 lists as
+part of a module's interface is public; `seahaven/__init__` re-exports only the subset worth a short
+import* — under which `Tool.from_function` and the `sandbox` names stop being exceptions and become
+instances. Separately, `Handler` and `Middleware` are strong candidates for that convenience subset:
+a typed middleware is the ordinary case, not an advanced one, and `seahaven new`'s `middleware/`
+template is where every world author meets it. Phase 5's world imports them from `seahaven.world`
+under the rule above, and its `middleware/error_handler.py` docstring says why.
+
+### B11. A built world wheel ships no fixtures, so `instance(id)` fails from an install
+
+**Found:** Phase 5, building `worlds/projecttracker` and installing the wheel into a clean
+environment. **Owner:** Phase 6 (`serve`) and Phase 7 (the `--hub` image). **Risk:** a world
+installed rather than checked out can only be run blank; every fixture-backed eval fails at startup.
+
+A world's `fixtures/` directory sits at the project root, beside `src/`, which is where `freeze`
+writes it and where `World`'s `fixtures_dir` default finds it by walking up to the `pyproject.toml`.
+A wheel has no project root. `uv build --project worlds/projecttracker` produces a wheel holding
+`projecttracker/` and nothing else — the schema travels because `schema/*.sql` is *inside* the
+package and `sql_files` reads it through `importlib.resources`, but `fixtures/` is outside it and is
+simply absent. Installed into a clean venv, `projecttracker.world.fixtures()` is `[]` and
+
+```
+world.instance("empty")
+WorldBug: world 'projecttracker' has no fixture 'empty' in .../site-packages/fixtures;
+freeze one, or name the directory with World(fixtures_dir=...)
+```
+
+while `world.instance()` — blank, from the schema — works. The error message is good and the
+`fixtures_dir=` escape hatch exists, so nothing here is broken as specified. What is missing is a
+statement of which way a world is meant to be deployed — and `functional_spec.md` §2.2 half-makes
+one already: `fixtures_dir` falls back "to `fixtures/` beside the package where there is none, as in
+an installed wheel", which says the installed case was thought about and leaves open how the
+directory gets there.
+
+Three ways to close it have been looked at, and **none of the three is a one-line change**; this
+entry records what each actually costs rather than proposing a fix.
+
+*Move `fixtures/` inside the package* (`src/projecttracker/fixtures/`) and read it through
+`importlib.resources` as the schema already is. This is the only shape that also survives a zipped
+wheel, but it is **framework work, not a world's directory move**: `fixtures_dir` is not a
+`Traversable` anywhere in the framework. `World.__init__` coerces whatever it is given with
+`Path(fixtures_dir)` (in `World.__init__`, `src/seahaven/world.py:117` as this phase leaves it),
+and `seahaven.fixtures` is `Path`-typed
+throughout — `Fixture.dir` and `Fixture.state_path`, `load`, `load_all`, `verify`, `freeze` and the
+copy that makes an instance all take or return `Path`, and `verify` hashes files off the filesystem.
+`importlib.resources.files()` hands back a `Traversable`, which `Path(...)` rejects for a zip member.
+Closing it this way means deciding whether fixtures are read through `Traversable` (and how `freeze`,
+which writes, fits a read-only abstraction), which is a fixtures-component change.
+
+*Keep the layout and have the build carry the directory* — hatchling's `force-include`, one line in
+the world's `pyproject.toml`, which `seahaven new` would then render. This does build and install,
+but it lands `fixtures/` **at the top of `site-packages`**, not under the package: the directory has
+no package to be inside, so there is nowhere namespaced to put it. Two installed worlds that each
+scaffolded an `empty` fixture then write to the same `site-packages/fixtures/empty/`, and the second
+install silently overwrites the first — breaking *both* worlds, since each then loads the other's
+state. That makes it unusable as the default a template renders, whatever it is worth for a single
+world pinned in its own venv.
+
+*Say plainly that a served world is a checkout and never a wheel.* This is defensible — `architecture.md`
+§6's `serve` runs from a world directory — and it is the only one of the three that costs nothing to
+state. But it needs saying explicitly, because Phase 7's `--hub` `Dockerfile` does `pip install .[serve]`
+and would otherwise decide the question by accident, in the direction the first two paragraphs show
+does not work.
+
+Phase 5 changed nothing: the layout is what `functional_spec.md` §2.1 specifies, and the choice is
+not a placeholder slice's to make.
 
 ---
 

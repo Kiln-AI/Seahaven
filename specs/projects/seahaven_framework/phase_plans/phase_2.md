@@ -288,9 +288,26 @@ unwrapping and the enum-member refusal.
 Everything this plan names as a behaviour or records as a decision is killed by at least one test.
 What survives, and why each is a mutant with no behaviour to kill:
 
-- annotation-only imports (`Db` in `ctx.py`, `Tool` in `call.py`, and the rest): annotations are
-  lazy on 3.14, so nothing evaluates them at runtime. `ty` catches these — deleting one is an
+- annotation-only imports (`Db` in `ctx.py`, `Tool` in `call.py`, and the rest): nothing in these
+  modules evaluates their annotations at runtime. `ty` catches these — deleting one is an
   `unresolved-reference` — which is why they are checked and not tested.
+  *(Amended in Phase 5.* The reason first recorded here was "annotations are lazy on 3.14, so
+  nothing evaluates them at runtime", stated as a general rule. It is not one. PEP 649 defers
+  evaluation, it does not prevent it, and Seahaven evaluates annotations at registration in two
+  places: `World.middleware` calls `inspect.signature(obj)`, and `Tool.from_function` calls
+  `inspect.signature(fn, eval_str=True)` to build the argument model. An annotation-only import that
+  a *registered* callable's annotations depend on — a world's middleware or tool module, and
+  `seahaven/control.py`, which registers the two control tools at import time — is therefore
+  load-bearing, and deleting it raises `NameError` or `WorldBug` out of the import.
+
+  The distinction that is true is **a name that appears only in the annotations of functions nothing
+  registers**. It is worth stating that narrowly rather than per-module: `ctx.py` and `call.py`
+  happen to register nothing at all, so "a module nothing registers" would hold for the imports
+  listed here, but it does not generalise — Phase 4's records were amended a second time for
+  believing it, having named three modules that all register. The conclusion stands unchanged: each
+  of these imports really does survive, and each is still an equivalent mutant. Only the stated
+  reason was wrong, and it was wrong in a way a later phase could have read as settled licence to
+  drop such an import anywhere.)
 - `__all__` lists and the `StartupHook` alias: they change `from … import *` and type checking,
   neither of which has runtime behaviour to observe.
 - `return None` at the end of `_children` and `_fixtures_dir_at_project_root`, and the

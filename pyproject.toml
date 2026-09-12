@@ -29,14 +29,23 @@ serve = ["openenv>=0.4.2,<0.5"]
 Homepage = "https://github.com/Kiln-AI/Seahaven"
 
 [dependency-groups]
-dev = ["packaging>=24", "pytest>=8", "ruff>=0.14", "ty>=0.0.1a21"]
+# `projecttracker` is the reference world, in this repository and developed with
+# the framework. It is a dev dependency of `seahaven` and never a runtime one:
+# the dependency runs the other way.
+dev = ["packaging>=24", "projecttracker", "pytest>=8", "ruff>=0.14", "ty>=0.0.1a21"]
+
+[tool.uv.workspace]
+members = ["worlds/*"]
+
+[tool.uv.sources]
+projecttracker = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/seahaven"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests", "scripts"]
+src = ["src", "tests", "scripts", "worlds/projecttracker/src", "worlds/projecttracker/tests"]
 # The specs are documents. Their code blocks are sketches, not code that runs.
 extend-exclude = ["specs"]
 
@@ -44,7 +53,7 @@ extend-exclude = ["specs"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ty.src]
-include = ["src", "tests", "scripts"]
+include = ["src", "tests", "scripts", "worlds"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

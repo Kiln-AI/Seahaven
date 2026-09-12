@@ -24,7 +24,7 @@ from seahaven.fixtures import Fixture
 from seahaven.ids import Ids
 from seahaven.instances import Instance
 from seahaven.tool import Tool
-from seahaven.world import World
+from seahaven.world import World, sql_files
 
 try:
     __version__ = version("seahaven")
@@ -50,4 +50,5 @@ __all__ = [
     "WorldBug",
     "helpers",
     "sandbox",
+    "sql_files",
 ]

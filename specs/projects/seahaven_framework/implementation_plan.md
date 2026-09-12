@@ -23,7 +23,7 @@ specs; nothing here restates them.
       complete after this phase: `world.instance(...)`, `call`, `inspect`, `changes`, `freeze`.
 - [x] **Phase 4: helpers and control tools.** `helpers/run_sql.py`, `helpers/describe_schema.py`,
       `control.py`, FTS5 awareness per `components/helpers_and_control.md`.
-- [ ] **Phase 5: ProjectTracker placeholder.** `worlds/projecttracker/` in the section 2.1 layout
+- [x] **Phase 5: ProjectTracker placeholder.** `worlds/projecttracker/` in the section 2.1 layout
       with the schema's `users` table only, one `ping` tool, `errors.py`, the error handler and an
       `empty` fixture: just enough to be a real package that later phases build and serve. The full
       world is phase 10.

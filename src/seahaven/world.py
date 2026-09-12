@@ -14,6 +14,8 @@ calls are in flight is unsupported.
 """
 
 import hashlib
+import importlib
+import importlib.resources
 import inspect
 import re
 import sys
@@ -21,6 +23,8 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from importlib.resources.abc import Traversable
+from importlib.resources.readers import MultiplexedPath
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -44,6 +48,7 @@ __all__ = [
     "RegisteredStartupHook",
     "StartupHook",
     "World",
+    "sql_files",
 ]
 
 # `Handler` and `Middleware` are defined where the chain is built, in `call.py`,
@@ -65,9 +70,12 @@ CONTROL_TOOL_NAMES = frozenset({"controller_changes", "controller_run_sql"})
 RESET_ARGUMENTS = frozenset({"fixture", "now", "seed"})
 
 FIXTURES_DIRNAME = "fixtures"
+SQL_SUFFIX = ".sql"
 
 _POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 _WHITESPACE = re.compile(r"\s+")
+# Both separators, always: a world is spelled once and read on every platform.
+_SEPARATOR = re.compile(r"[/\\]")
 
 
 @dataclass(frozen=True)
@@ -282,6 +290,266 @@ class World:
     def _register_startup_hook(self, obj: StartupHook) -> StartupHook:
         self._startup_hooks.append(_as_startup_hook(obj))
         return obj
+
+
+def sql_files(package: str | None, directory: str) -> str:
+    """The DDL a world is built from: every `*.sql` in a package directory, in order.
+
+    `schema=seahaven.sql_files(__package__, "schema")` is how a world package
+    states its schema. The files are read in sorted filename order -- which is
+    what the `001_`, `002_` prefix convention is for -- and joined with newlines,
+    so the result is one script and the order in it is the order on disk.
+
+    Read through `importlib.resources`, not from `__file__`, so a world works
+    the same installed as a wheel, from a source tree, or from a zip. That
+    promise is the reason `directory` has to be an ordinary path inside the
+    package, checked a segment at a time by `_check_schema_directory`: a
+    filesystem and a zip disagree about every other spelling, so a world that
+    used one would build from a checkout and fail once installed. Symlinks are
+    refused for the same reason and in the same words -- a zip holds none, and a
+    checkout on a machine without symlink support holds a text file where one
+    should be.
+
+    Everything a world author can get wrong here is a `WorldBug` that names the
+    package, the directory and, where there is one, the file: a directory that is
+    missing, is a file, is unreadable, or holds no `*.sql`; a `*.sql` name that is
+    a directory rather than a file; a file that is not UTF-8 text. An empty schema
+    builds a database with no tables perfectly happily, and any of these would
+    otherwise be found much later, as a missing table -- or, for the two that
+    raise `OSError` and `UnicodeDecodeError`, as a traceback out of an import with
+    no world in it.
+
+    `package` must be the name of a package, not of a module inside one:
+    `__package__`, never `__name__`. A module has no directory of its own for
+    `importlib.resources` to anchor to, and the answer it gives for one is an
+    object whose failure names neither the world nor the file.
+
+    It is typed to accept `None` because `__package__` -- which is what every
+    world passes -- is typed `str | None`, and a world should not have to silence
+    a type checker to write the one line the docs give it. `None` is refused at
+    runtime, and refusing it is the point: `importlib.resources.files(None)` does
+    not fail, it resolves the *caller's* package, which is this framework, and the
+    world would be built out of whatever `seahaven/<directory>` happened to hold.
+    """
+    if not isinstance(package, str) or not package:
+        raise WorldBug(
+            f"sql_files needs the name of a package, not {package!r}; "
+            f"pass __package__ from a module inside the world's package"
+        )
+    # Every dotted part a Python name, for the same reason `directory` is
+    # checked a segment at a time: `import_module` raises `TypeError` and not
+    # `ImportError` for a name beginning with a dot, because it reads it as a
+    # relative import and there is no package here for it to be relative to --
+    # so it goes straight past the handler below as a traceback with no world in
+    # it. Asked as an allowlist rather than as a list of the spellings that do
+    # it, because that list is the one this function has already been wrong
+    # about four times.
+    if not all(part.isidentifier() for part in package.split(".")):
+        raise WorldBug(
+            f"sql_files needs the name of a package, not {package!r}; every part of a package "
+            f"name is a Python name, as it would have to be to be written as an import statement. "
+            f"Pass __package__ from a module inside the world's package"
+        )
+    segments = _check_schema_directory(package, directory)
+    try:
+        anchor = importlib.import_module(package)
+    except ImportError as error:
+        raise WorldBug(f"cannot read schema of package {package!r}: {error}") from error
+    if not hasattr(anchor, "__path__"):
+        raise WorldBug(
+            f"sql_files needs the name of a package, and {package!r} is a module inside one; "
+            f"pass __package__ rather than __name__"
+        )
+    # Joined a segment at a time so that every directory on the way is checked,
+    # not just the last one: `schema` may be an ordinary name and still be a
+    # symlink to somewhere the package does not ship.
+    root = importlib.resources.files(anchor)
+    for segment in segments:
+        root = root / segment
+        _refuse_more_than_one_directory(root, package, directory, segment)
+        _refuse_a_symlink(root, package, directory, f"directory {segment!r}")
+    if not root.is_dir():
+        what = "is a file, not a directory" if root.is_file() else "does not exist"
+        raise WorldBug(
+            f"schema directory {directory!r} of package {package!r} {what} (looked in {root})"
+        )
+    try:
+        names = _sql_file_names(root, package, directory)
+    except OSError as error:
+        raise WorldBug(
+            f"cannot read schema directory {directory!r} of package {package!r}: {error}"
+        ) from error
+    if not names:
+        raise WorldBug(f"schema directory {directory!r} of package {package!r} holds no *.sql file")
+    return "\n".join(_read_sql(root / name, package, directory, name) for name in names)
+
+
+def _check_schema_directory(package: str, directory: str) -> list[str]:
+    """`directory`'s segments, if every one of them is an ordinary name.
+
+    An allowlist, and deliberately not a list of the ways out. The denylist this
+    replaced was extended three times, each time because a spelling nobody had
+    listed behaved one way on a filesystem and another in a zip -- `..`, then a
+    root, then a backslash, then `.` and an empty segment -- and there would have
+    been a fourth. Asking what a segment *is* ends that: an ordinary name is
+    non-empty, is not `.` or `..`, and holds no `:`.
+
+    The two families it refuses fail differently and are told apart in the
+    message. `..`, a leading separator and a drive letter leave the package, and
+    read files it does not ship. `.` and an empty segment (`schema/.`,
+    `schema//`, `schema/`) do not leave it -- `pathlib` normalises them away and
+    the world builds -- but `zipfile.Path.joinpath` is `posixpath.join`, which
+    keeps them, so the same world raises from an installed wheel. Both break the
+    one promise this function makes, so both are refused here.
+
+    A `:` is refused wherever it appears -- not only in the first segment --
+    because `PureWindowsPath` calls neither `"C:schema"` (a drive with no root,
+    resolved against that drive's working directory) nor `"\\etc"` (a root with
+    no drive) absolute, and both leave the package on Windows; and because
+    joining a drive-relative segment *replaces* what came before it rather than
+    appending to it, so `PureWindowsPath("schema") / "C:evil"` is `C:evil` and a
+    later segment is no safer than the first. The mistake is not the platform
+    the author is on.
+    """
+    if not isinstance(directory, str) or not directory:
+        raise WorldBug(
+            f"sql_files needs the name of a directory inside package {package!r}, not {directory!r}"
+        )
+    segments = _SEPARATOR.split(directory)
+    for position, segment in enumerate(segments):
+        if segment == ".." or ":" in segment or (position == 0 and not segment):
+            raise WorldBug(
+                f"schema directory {directory!r} of package {package!r} leaves the package at "
+                f"{segment!r}; name a directory inside it. A '..', a leading separator or a drive "
+                f"letter reads files the package does not ship, and cannot be read at all from a "
+                f"zipped wheel"
+            )
+        if not segment or segment == ".":
+            raise WorldBug(
+                f"schema directory {directory!r} of package {package!r} is not spelled as a path "
+                f"inside it: {segment!r} names nothing. A filesystem drops a '.' and a repeated or "
+                f"trailing separator and a zipped wheel keeps them, so a world spelled this way "
+                f"builds from a checkout and fails once installed; write the directory names alone"
+            )
+    return segments
+
+
+def _refuse_more_than_one_directory(
+    entry: Traversable, package: str, directory: str, segment: str
+) -> None:
+    """One schema directory, in one place, or the promise cannot be kept.
+
+    A namespace package whose portions lie in several `sys.path` entries makes
+    `importlib.resources` answer a `MultiplexedPath`: one name standing for two
+    or more real directories, whose `iterdir` merges their children. No installed
+    wheel can reproduce that -- the portions land in one directory under
+    `site-packages` -- so a world whose schema is reached this way is already the
+    failure this function exists to prevent, before anything else is asked.
+
+    It is refused rather than merged for a second reason: a `MultiplexedPath` is
+    not a `Path` and *is* on a filesystem, so `_refuse_a_symlink` below cannot
+    answer for it, and one portion being a symlink out of the package would go
+    unseen. Refusing it at every segment is what lets that guard stay an
+    `isinstance` test rather than an open question.
+
+    The line is not how many portions the package has. It is whether *this
+    segment* resolves to more than one directory, which is what `joinpath`
+    answers: a package of two portions whose `schema` exists in only one of them
+    joins to a real `Path` and is read, and a package of two portions whose
+    `schema` exists in both joins to another `MultiplexedPath` and is refused.
+    A one-portion package always joins to a real `Path`, which is why it reads.
+
+    The test is an `isinstance` against a class the standard library does not
+    export as API. `importlib.resources.readers.MultiplexedPath` is what
+    `importlib.resources` constructs and there is no public predicate for "this
+    `Traversable` stands for more than one directory", so the alternative is to
+    re-derive the answer from `__path__`, which is guessing at what
+    `MultiplexedPath._follow` already decided. If a future Python renames it the
+    import fails at import time and every test says so at once, which is the
+    right way for this to break.
+    """
+    if isinstance(entry, MultiplexedPath):
+        where = (
+            f"schema directory {directory!r}"
+            if segment == directory
+            else f"segment {segment!r} of schema directory {directory!r}"
+        )
+        raise WorldBug(
+            f"{where} of package {package!r} resolves to more than one directory: {package!r} is "
+            f"a namespace package whose portions lie in several sys.path entries, and {segment!r} "
+            f"is in more than one of them. Give the package an __init__.py, or put its portions "
+            f"in one directory. An installed wheel merges those entries into a single directory, "
+            f"so a world reached this way builds from a checkout and resolves differently once "
+            f"installed"
+        )
+
+
+def _refuse_a_symlink(entry: Traversable, package: str, directory: str, what: str) -> None:
+    """A symlink is the way out of a package that is left once `..` is refused.
+
+    `is_dir` and `is_file` both follow one, so the guard above would otherwise
+    hand an author the workaround as it took away the path. A zip holds no
+    symlink and git on a machine without symlink support writes a text file
+    where one should be, so a world whose schema is reached through one builds
+    in the tree it was written in and nowhere else.
+
+    The `isinstance` test is what makes this answerable rather than a guess. Of
+    the `Traversable` kinds that reach here, `Path` is on a filesystem and is
+    asked; a zip member cannot be a symlink, so leaving it alone is not a gap.
+    The third kind, `MultiplexedPath`, is neither -- it is on a filesystem and is
+    not a `Path` -- so it would be skipped silently and a symlinked portion would
+    go unseen.
+
+    The precondition is that no `MultiplexedPath` reaches here at all, and it is
+    established differently at the two call sites. On the way down to the schema
+    directory, `_refuse_more_than_one_directory` is called on the same entry
+    immediately before this one, so the pair runs together. On the `*.sql`
+    children, nothing is called first and nothing needs to be: the root those
+    children came from is already known not to be multiplexed, and `iterdir` on
+    a `Path` or a zip yields children of its own kind. That second site is sound
+    only *because* of the first -- `MultiplexedPath._follow` can answer a
+    multiplexed child -- so relaxing the root refusal would silently reopen the
+    symlinked-child gap here, not only the one above.
+    """
+    if isinstance(entry, Path) and entry.is_symlink():
+        raise WorldBug(
+            f"schema {what} of package {package!r} in {directory!r} is a symlink, which leaves the "
+            f"package; name a directory inside it. A zipped wheel holds no symlink, so a world "
+            f"whose schema is reached through one builds from a checkout and fails once installed"
+        )
+
+
+def _sql_file_names(root: Traversable, package: str, directory: str) -> list[str]:
+    """The `*.sql` files of a schema directory, sorted, and nothing else in it.
+
+    A `*.sql` entry that is not a file -- a directory named `001_core.sql` is the
+    way to make one -- is refused by name rather than skipped: skipping it would
+    report "holds no *.sql file" about a directory whose listing plainly shows
+    one, which sends the author looking in the wrong place.
+    """
+    names = []
+    for child in sorted(root.iterdir(), key=lambda child: child.name):
+        if not child.name.endswith(SQL_SUFFIX):
+            continue
+        _refuse_a_symlink(child, package, directory, f"file {child.name!r}")
+        if not child.is_file():
+            raise WorldBug(
+                f"schema directory {directory!r} of package {package!r} holds {child.name!r}, "
+                f"which is not a file; everything named *.sql in it is read as DDL"
+            )
+        names.append(child.name)
+    return names
+
+
+def _read_sql(path: Traversable, package: str, directory: str, name: str) -> str:
+    """One schema file as text, or a `WorldBug` that says which file and why."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise WorldBug(
+            f"schema file {name!r} in directory {directory!r} of package {package!r} "
+            f"could not be read as UTF-8 text: {error}"
+        ) from error
 
 
 def _schema_hash(schema: str) -> str:
