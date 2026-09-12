@@ -21,7 +21,7 @@ specs; nothing here restates them.
       hooks, the lock discipline and the concurrency gate, working directory and sweep, `bulk`,
       destroy), `changes.py`, `conformance.py` per `components/fixtures_instances.md`. In-process API
       complete after this phase: `world.instance(...)`, `call`, `inspect`, `changes`, `freeze`.
-- [ ] **Phase 4: helpers and control tools.** `helpers/run_sql.py`, `helpers/describe_schema.py`,
+- [x] **Phase 4: helpers and control tools.** `helpers/run_sql.py`, `helpers/describe_schema.py`,
       `control.py`, FTS5 awareness per `components/helpers_and_control.md`.
 - [ ] **Phase 5: ProjectTracker placeholder.** `worlds/projecttracker/` in the section 2.1 layout
       with the schema's `users` table only, one `ping` tool, `errors.py`, the error handler and an
