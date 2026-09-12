@@ -566,6 +566,23 @@ verified.
   not part of debugging it. A file the harness owns that is *untracked* — as a new phase's source
   is — cannot be recovered with `git checkout`, which is what makes this worth a note rather than a
   shrug.
+- **"Randomized order" is not something this repository can claim without bringing a shuffler.**
+  No randomization plugin is installed, so `uv run pytest` runs collection order every time and
+  `-p no:randomly` disables a plugin that is not there. Phase 6 reported "three randomized orders"
+  that were three passes of one order. Order-independence is worth checking — it is what the
+  autouse isolation fixtures exist for — and the cheap way is a `pytest_collection_modifyitems`
+  plugin kept outside the tree and loaded with `-p`, seeded from the environment: no dependency, no
+  lockfile change, and a command a reader can repeat. Note too that a mutant of an isolation
+  fixture may only be visible in *some* orders (dropping Phase 6's gate restore fails in five of
+  seven), so a single green shuffled run is not evidence a fixture is redundant.
+- **A mutation harness's tally must be reconciled with the test runner's own summary.** Phase 6
+  reported a mutant at 151 killed tests where the suite said `159 failed, 572 passed, 5 errors`:
+  the harness read pytest's `-rf` short summary, which lists failures and *not* errors, and keyed
+  its results on a `(\w+)` match that collapsed every parametrized case of one function into a
+  single name. Both defects only ever undercount, both look plausible, and neither shows up in a
+  kill/survive verdict — only in the number beside it. Ask for `-rfE`, keep whole node ids, and
+  assert the count against the summary line. A row quoting a number no run can reproduce is the
+  same class of finding as a row naming the wrong mutant.
 - **Before trusting a mutation survivor, prove the mutant is the code that ran.** Assert
   `module.__file__` points inside the mutation tree, from the same process the tests run in. Phase 4
   produced two independent false-survivor runs, each from a different cause and each reporting

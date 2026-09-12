@@ -27,7 +27,7 @@ specs; nothing here restates them.
       with the schema's `users` table only, one `ping` tool, `errors.py`, the error handler and an
       `empty` fixture: just enough to be a real package that later phases build and serve. The full
       world is phase 10.
-- [ ] **Phase 6: OpenEnv.** `openenv/env.py`, `openenv/client.py`, `app`, `serve.py` per
+- [x] **Phase 6: OpenEnv.** `openenv/env.py`, `openenv/client.py`, `app`, `serve.py` per
       `components/openenv.md`: environment class, `SeahavenClient`, end-to-end tests with the stock
       and typed clients against the placeholder, the 500-session smoke test. The placeholder needs
       only its `openenv_app.py`; the hub files are Phase 7's, as template output.

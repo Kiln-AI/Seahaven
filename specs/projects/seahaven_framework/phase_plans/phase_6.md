@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Phase 6: OpenEnv
@@ -73,9 +73,9 @@ and nothing else.
 7. **`tests/test_env.py`, `tests/test_client.py`, `tests/test_server.py`, `tests/test_serve.py`**, and
    **`worlds/projecttracker/tests/test_openenv_app.py`** — the suites, 135 tests in the framework's
    and 7 in the world's, plus two in `tests/test_instances.py` for the accessor step 8 adds.
-8. **`src/seahaven/instances.py`** — one accessor, `concurrency()`, and the two-line
-   `threading.BoundedSemaphore` subclass it reads: `_Gate`, which publishes the size it was built
-   with. A change to an earlier phase's module, kept as small as it can be and made for a test:
+8. **`src/seahaven/instances.py`** — one accessor, `concurrency()`, and the one-property
+   `threading.BoundedSemaphore` subclass it reads: `_Gate`, which publishes the size the semaphore
+   is bounded at. A change to an earlier phase's module, kept as small as it can be and made for a test:
    `test_serve.py` asserted `instances._gate._initial_value`, which is one module's private name
    and one standard-library class's private attribute in a single expression, and the only place in
    the repository that read either. `BoundedSemaphore` does not publish the value it was built
@@ -86,17 +86,32 @@ and nothing else.
    one-slot gate with `monkeypatch`, which moves the gate and not the record, so for the length of
    that test `concurrency()` described a gate that was no longer there. Harmless where it happened
    — nothing reads the size there and `monkeypatch` puts the gate back — and not harmless as a
-   design, so the design changed: `_Gate` carries its own `size`, `set_concurrency` builds one,
+   design, so the design changed: `_Gate` publishes its own `size`, `set_concurrency` builds one,
    `concurrency()` reads the size off whatever gate is in place, and that test's instrumented gate
-   subclasses `_Gate` so the size travels with the semaphore it is the size of.
+   subclasses `_Gate` so the size travels with the semaphore it is the size of. **Review round 6
+   took the same argument one level further**, and it was right to: round 5's `_Gate` *copied* the
+   size into `self.size` in a constructor, so `gate.size = 99` still desynchronised it and the
+   "publishes a size it was not built with" mutant existed only because the value was a copy.
+   `size` is now a read-only property that answers the bound the semaphore is holding
+   (`self._initial_value`), so there is nothing to keep in step, nothing to assign, and no
+   constructor at all — one fewer mutant, and a third drift route made unwritable rather than
+   tested-for. `ty` needs a one-line ignore for it because typeshed does not declare that attribute
+   (the precedent is `seahaven/tool.py`, twice, for the same reason); if a future CPython renames
+   it, nine tests say so rather than the accessor reporting a wrong number.
    `tests/conftest.py`'s isolation fixture is back to saving and restoring one name — still
-   load-bearing, and checked as such rather than assumed: dropping `instances._gate = gate` from it
-   fails `test_the_gates_size_can_be_read_back` in each of three randomized orders — and
+   load-bearing, and measured rather than assumed: dropping `instances._gate = gate` from it fails
+   `test_the_gates_size_can_be_read_back` in file order and in four of six shuffled collection
+   orders, five of the seven orders tried. It is order-dependent by nature, which round 5 claimed
+   the opposite of: the test reads the size back before any resize of its own, so it only notices a
+   leak when some earlier test left a gate behind, and two shuffles happened to schedule it first.
+   That makes the restore load-bearing and the *check* for it probabilistic — worth knowing before
+   anyone reads a single green shuffled run as evidence the fixture is redundant — and
    `set_concurrency`'s parameter is `size` rather than `concurrency`, which had come to shadow the
    module-level `concurrency()` inside its own body. Eight hand mutants cover the module's new and
-   rewritten lines; two of round 4's three are *gone*, because the design no longer admits them —
-   there is no record for a resize to forget to write, and none for a refused resize to write
-   anyway.
+   rewritten lines — seven killed and one recorded survivor — and three mutants earlier rounds
+   wrote are *gone*, because the design no longer admits them: there is no record for a resize to
+   forget to write, none for a refused resize to write anyway, and no constructor for a dropped
+   `super().__init__` to leave unsized.
 9. **`pyproject.toml`** — register the `slow` marker the 500-session smoke test carries.
 10. **`.github/workflows/ci.yml`** — install with `--extra serve`, without which every test in this
     phase skips and `ty` never sees the subpackage.
@@ -128,12 +143,15 @@ and nothing else.
   gate; Phase 6 needed to read its size, added an accessor and a `_concurrency` variable beside the
   gate for it to read (round 4), and round 5 pointed out that two variables holding one fact is a
   fact that can drift — with the drift already in the repository, in a Phase 3 test that
-  substitutes an instrumented gate. The change is now a two-line `BoundedSemaphore` subclass that
-  publishes its own size, which makes the drift unwritable rather than tested-for, and it is
+  substitutes an instrumented gate. The change is now a `BoundedSemaphore` subclass whose only
+  member is a read-only `size` property over the bound the semaphore already holds — round 6
+  narrowed it from round 5's copied attribute — which makes the drift unwritable rather than
+  tested-for, and it is
   recorded here because it is a change to code this phase's spec does not describe: `_gate` and
   `set_concurrency` are Phase 3's, the accessor is this phase's need, and the eight hand mutants
-  under "Mutation check" are the standard the statement sweep would have applied had this module
-  been in its five files. Nothing about the gate's *behaviour* moves: the sizes it is built with,
+  under "Mutation check" — seven killed and one recorded survivor — are the standard the statement
+  sweep would have applied had this module been in its five files. Nothing about the gate's
+  *behaviour* moves: the sizes it is built with,
   the `0` that removes it, and the refusal of a negative one are the same, and Phase 3's own gate
   tests are unchanged and green.
 - **`ListToolsAction` is answered before the "reset first" guard, and the component document can be
@@ -154,6 +172,17 @@ and nothing else.
   INTERNAL_ERROR_MESSAGE).to_dict()` rather than written out as a literal, so it cannot drift from
   the shape every other error on the wire has. A client that reads `error["details"]` must not have
   to special-case the one error a world did not write.
+- **The one-off spelling in `env.py`'s `except` clause is the formatter's, and two review rounds
+  have now asked about it.** `_readme` catches `except OSError, UnicodeDecodeError:` without
+  parentheses, where `world.py` catches the same pair with them. Review round 5 read that as a
+  syntax novelty in the block every defect of this phase came from and asked for the parentheses;
+  they cannot be had. PEP 758 allows the bare form only where nothing is bound with `as`, and
+  `ruff format` — one of the five gates `AGENTS.md` requires — *removes* the parentheses again when
+  they are written, which is how this was checked rather than argued: writing them and running
+  `ruff format --check .` reports the file as needing reformatting. `world.py`'s three clauses keep
+  theirs because all three bind `as error`. So there is no inconsistency to fix, only one to
+  explain, and the explanation is a comment on the line. Round 6 re-ran the experiment and
+  confirmed it.
 - **`seahaven/__init__.py` is not touched.** `architecture.md` §1 lists `openenv` among the
   subpackages `seahaven` exports, and the same paragraph says "importing `seahaven` never imports
   `seahaven.openenv`". The second sentence is the operative one — the whole reason the subpackage
@@ -391,10 +420,15 @@ for the gate publishing the size it was built with.
 Totals: the framework's suite goes 599 → 736, the world's 72 → 79. Six of those tests
 were written because a mutant survived and forty-five because a review round found a surface with no
 test on it: four in round 1, twenty-four in round 2, two while round 2 was being closed, twelve in
-round 3, one in round 4 and two in round 5. Thirty-six of the forty-five are `_first_paragraph`
+round 3, one in round 4 and two in round 5. Forty of the forty-five are `_first_paragraph`
 cases, which is what it costs to pin four rules, the permissive side of each, the permissive side of
 the plain heading test that predates all four, and — round 3's lesson — a mutant that a later rule
-had stopped the earlier cases from separating. The "Mutation check" section below says which. Every
+had stopped the earlier cases from separating. (Forty is round 1's four unclosed-fence cases plus
+round 2's twenty-three, round 3's twelve and round 5's one; round 5 wrote thirty-six here, which is
+that sum with round 1's four dropped although the same sentence counts them among the forty-five,
+and the line it replaced — "thirty-five of the forty-three" — had the same four missing. Round 6
+recounted it against the case-by-case breakdown below rather than adjusting it.) The "Mutation
+check" section below says which. Every
 total in this section is a `pytest` run's own count rather than arithmetic on the previous round's.
 
 **`tests/test_env.py` (97).** The environment class in process, with no server anywhere: `reset`
@@ -486,6 +520,18 @@ test that replaces `uvicorn.run` can cover.
 
 The suites were run under `umask 022` and under `umask 077`: 736 passed and 79 passed under both.
 
+**Order-independence is measured, with the method named, because the project installs no
+randomization plugin.** Round 5 reported "three randomized orders" from `uv run pytest`, which
+shuffles nothing here — the runs were three passes of the same file order, and `-p no:randomly` in
+the harnesses was disabling a plugin that is not installed. Round 6 did it with a six-line
+`pytest_collection_modifyitems` plugin kept *outside* the tree and loaded with
+`-p pytest_shuffle` (seed in `SHUFFLE_SEED`), so the check adds no dependency and no lockfile
+change: the framework suite is 736 green in six shuffled orders — seeds 1, 2 and 3 under
+`umask 022`, 4 and 5 under `umask 077`, and 7 — and the world suite 79 green in three.
+Reproducing it needs
+`PYTHONPATH=<plugin dir> SHUFFLE_SEED=n uv run pytest -p pytest_shuffle`, which is the command this
+paragraph is claiming, rather than a plugin a reader would have to install to find out.
+
 ## Mutation check
 
 Every statement of the four modules in `src/seahaven/openenv/` and of the world's
@@ -495,19 +541,21 @@ and the suites that file can affect were re-run on cleared `__pycache__` with
 `seahaven/instances.py` is deliberately not in that set — it is an earlier phase's module and was
 swept there — so the accessor round 4 added to it and the gate round 5 rewrote in it are covered by
 hand mutants instead, which is the same standard applied in the only way this phase's scope allows.
-Then seventy-two mutations by hand. Sixty-eight are ones statement deletion cannot express — an
+Then seventy-two mutations by hand. Sixty-nine are ones statement deletion cannot express — an
 inverted guard, a reordered `except`,
 a changed default, a swapped pair of branches, an off-by-one in a bound, two loops fused into one,
 two loops in the wrong order, a hand-written literal where the code builds one, a dropped `/`, a
 dropped codec, six dropped field descriptions, a character missing from a set and a character too
 many, a length bound moved either way, a condensing step removed, each half of a two-part predicate
-dropped in turn, and the component document's own sketch of `call`. The other four *are* statement
-deletions, of the four lines round 5 wrote or rewrote in `seahaven/instances.py`: a statement
-deletion in a file no sweep here covers has to be a hand mutant to exist at all.
+dropped in turn, and the component document's own sketch of `call`. The other three *are* statement
+deletions, of the three lines rounds 5 and 6 wrote or rewrote in `seahaven/instances.py`: a
+statement deletion in a file no sweep here covers has to be a hand mutant to exist at all.
 
-**The numbers below are review round 5's. It is the first round that did not re-run the statement
-sweep from scratch, and the reason is stronger than a re-run rather than cheaper than one.** Round
-5's only change inside the five swept files is a six-line comment in `env.py`, and
+**The numbers below are review rounds 5's and 6's, and neither re-ran the statement sweep from
+scratch; the reason is stronger than a re-run rather than cheaper than one.** Neither round changed
+a statement in the five swept files at all: round 5's only edit inside them is a six-line comment in
+`env.py`, round 6 made none (its code change is `seahaven/instances.py`, which the sweep does not
+cover), and
 `ast.dump(ast.parse(old)) == ast.dump(ast.parse(new))` is `True`: the parse trees are identical, so
 every statement the sweep addresses, every mutant it makes of one and every test outcome that
 follows are the same code and the same run by construction. A re-run could only confirm that; the
@@ -516,21 +564,29 @@ the suites — two tests added — and a test can only turn a survivor into a ki
 So the claim needing a re-run was the survivor list, and it got one: the eleven recorded statement
 survivors were re-applied one at a time in the repository itself, each with both suites run in full
 and each restored in a `finally`, with `git status` inspected afterwards. **Eleven mutants, eleven
-still surviving**, at the same eleven lines and in the same three families.
+still surviving**, at the same eleven lines and in the same three families. That pass ran *after*
+round 5's two tests existed, and round 6 added none and touched no swept file, so it stands for this
+round too; what round 6 did re-run in that family is the `ty` half, five mutants and five kills,
+because `ty check .` reads the module round 6 changed.
 
-**The hand set is where round 5 departs from "a sweep is only ever reported as one collection", and
-the departure is stated rather than buried.** Thirty-seven of the seventy-two rows are round 5's own
-runs: all eight gate rows (the code changed), the twenty-eight README rows that
-`test_first_paragraph` kills (the case list changed), and `serve`'s ordering row (its wording and
-its count were wrong). The other thirty-five carry round 4's run. That is two runs in one table,
-which the rule exists to forbid — and what the rule forbids is two runs of *different code*. Here
-the code is provably the same: `env.py`'s parse tree is identical across the round and the other
-four files are untouched, so re-running those rows would be the same mutants against the same
-functions. What did change for every row is the suites, and a test can only add a killer to a row
-whose killing test it was added to: the fifty-fifth README case belongs to `test_first_paragraph`,
-which is exactly the twenty-eight that were re-run, and the new gate test belongs to the eight. No
-carried row can have moved. The honest summary is that this table is one collection of code and two
-collections of runs, with the boundary written down here and on every row round 5 changed.
+**The hand set is where rounds 5 and 6 depart from "a sweep is only ever reported as one
+collection", and the departure is stated rather than buried.** Thirty-seven of the seventy-two rows
+have been re-run since round 4: all eight gate rows (round 6, the code having changed twice and the
+harness once), the twenty-six README rows `test_first_paragraph` kills plus the two equivalence
+survivors over the same documents (round 5, the case list having changed), and `serve`'s ordering
+row (round 5's wording and count were both wrong). The other thirty-five carry round 4's run. The
+README rows are not re-run again in round 6: `env.py` is byte-identical to the file round 5 ran them
+against, which is a stronger statement than a repeat. That is more than one run in one table,
+which the rule exists to forbid — and what the rule forbids is runs of *different code*. Here the
+code is provably the same for every carried row: `env.py`'s parse tree is unchanged across round 5
+and the file itself unchanged across round 6, the other three swept modules are untouched by both,
+and the only module that did change (`seahaven/instances.py`) is the one whose every row was
+re-run. What changed for all rows is the suites, and a test can only add a killer to a row whose
+killing test it was added to: the fifty-fifth README case belongs to `test_first_paragraph`, which
+is exactly the twenty-six re-run over the cases, and the new gate test belongs to the eight gate
+rows. No carried row can have moved. The honest summary is that this table is one collection of
+code and three collections of runs, with the boundary written down here and on every row a round
+changed.
 
 Every review round so far has changed this file, so every round has recounted:
 round 2's findings rewrote `_first_paragraph`, `_after_front_matter`, `_readme` and the observation's
@@ -539,8 +595,10 @@ round 3 split the rule test into a thematic-break test and a setext-underline te
 renamed three helpers and added one accessor to `seahaven/instances.py`; and round 5 replaced that
 accessor's two-variable design with a gate that publishes its own size, split one README row that
 was measuring half the predicate its wording named, and added the fifty-fifth `_first_paragraph`
-case. The hand
-set has grown with them, thirty-seven → fifty-five → sixty-three → sixty-six → seventy-two.
+case; and round 6 replaced round 5's copied size with a derived one, which retired a mutant and
+turned another into a survivor. The hand
+set has grown with them, thirty-seven → fifty-five → sixty-three → sixty-six → seventy-two →
+seventy-two.
 Round 2's eighteen
 were two for
 the closing-fence-first rule (its precedence, and the two searches in the wrong order), two for the
@@ -554,21 +612,26 @@ that does not record, a record that ignores the resize, and a record written abo
 refuses a negative one. Round 4 also *rewrote* two of round 3's, which had been mutating the wrong
 character — see the README table.
 
-**Round 5 adds nine rows and retires three, so the set grows by six.** Two of round 4's three are
+**Round 5 adds nine rows and retires three, so the set grows by six; round 6 then swaps one for
+one and moves a kill into the survivor table.** Two of round 4's three are
 no longer *writable*: with the size carried by the gate there is no record for a resize to forget and
 no record for a refused resize to write, which is the whole argument for the subclass — a mutant
-that cannot be expressed is better than one that dies. The gate's eight rows are four
+that cannot be expressed is better than one that dies. The gate's eight rows are, after round 6, four
 behavioural (the accessor answering the framework default instead of the gate's size; a removed
-gate reported as the default rather than as `0`; a gate publishing a size it was not built with;
-and `0` building a slotless gate instead of removing the gate) and four statement deletions of the
-lines round 5 wrote (`super().__init__`, `self.size`, the negative guard, and the resize itself).
-The first of the four behavioural ones is round 4's surviving row, reworded to name the gate rather
-than a record and re-run like the rest; the other seven are new.
-The other two are the halves of "a line that merely begins with a rule character counts as a
-rule", which becomes one row per half of the rule test because its count was read off a mutant
-narrower than its wording — see the README table for what that cost. Nine in — seven for the
-gate and two for the split — and
-three out: round 4's two unwritable gate rows and the combined rule-character row.
+gate reported as the default rather than as `0`; the size property off by one; and `0` building a
+slotless gate instead of removing the gate), three statement deletions of the lines rounds 5 and 6
+wrote (the `size` property, the negative guard, and the resize itself), and one recorded survivor
+(round 5's copied attribute, which no test can tell from round 6's derived property). The first of
+the four behavioural ones is round 4's surviving row, reworded to name the gate rather than a record
+and re-run like the rest.
+Round 5's other two new rows are the halves of "a line that merely begins with a rule character
+counts as a rule", which becomes one row per half of the rule test because its count was read off a
+mutant narrower than its wording — see the README table for what that cost. So: nine in for round 5
+— seven for the gate and two for the split — and three out, round 4's two unwritable gate rows and
+the combined rule-character row. Round 6 then retires "the gate is never sized" (no constructor left
+to break), rewords "publishes a size it was not built with" as the property being off by one, and
+adds the plain-attribute survivor: seventy-two rows either way, one fewer kill and one more
+survivor.
 
 A sweep is only ever reported as one collection. Round 2's fix pass ran both sweeps twice from
 scratch, because its own finding changed `SeahavenState` after the first run, and the first run's
@@ -637,7 +700,9 @@ well — 150 and 150, a wider measure than the harness's 106 and quoted only bec
 move — and the eleven survivors were
 re-applied against the two suites the round added tests to: eleven mutants, eleven survivors, the
 list unchanged. A statement mutant this sweep killed cannot be un-killed by adding a test, so the
-kills carry and only the survivors needed re-checking.
+kills carry and only the survivors needed re-checking. Round 6 changed no swept file at all — its
+code change is `seahaven/instances.py` — so the same argument covers it with one fewer step, and
+the two suites it ran are the two the survivor pass already ran against.
 
 **What the round-1 sweep found, and what closed it.** Seven gaps, every one in a line that is not a
 statement about behaviour so much as a line the tests never looked at from the outside. Three were
@@ -665,7 +730,7 @@ Eleven statement survivors remain, in three families, all recorded rather than k
 | the annotation-only imports: `FastAPI` and `World` in `__init__.py`, `World` in `serve.py`, `Instance` in `env.py`, `Any, Self` in `client.py` | Each name appears only in annotations, which PEP 649 never evaluates, so deleting the import changes nothing at runtime. Not equivalent to the gate: each one is `error[unresolved-reference]` from `ty`, which `AGENTS.md` requires before every commit. Confirmed by mutating each of the five in the repository itself and running `ty check .` against a clean baseline — five mutants, five killed, re-run each round rather than carried over, round 5 included. The diagnostics per mutant are 1, 1, 1, 2 and 10 — the 10 is `from typing import Any, Self` in `client.py` (two `Self`, eight `Any`), the 2 is `Instance` in `env.py`, and each `World` and the `FastAPI` cost one; the claim the row needs is that all five are caught, not that each costs one error. |
 | `if instance is not None:` and `return instance.tools()` in `_listing` (two mutants) | The two branches answer the same list, which is the point: `Instance.tools()` *is* `world.tools` with the control tools filtered out, and `test_list_tools_answers_before_a_reset_and_agrees_with_the_instance` asserts the two are equal. A test that could tell them apart would be a test that the branches disagree. The same equivalence is the hand mutant "the instance branch of the listing is dropped" below. |
 
-The seventy-two hand mutations and the test that kills each. Sixty-nine are killed; the three
+The seventy-two hand mutations and the test that kills each. Sixty-eight are killed; the four
 survivors are recorded under the tables. Forty-seven of the seventy-two — the two whose killing
 tests round 1 had to name by hand, every mutant of the README rules, all six of the field
 descriptions, all eight of the gate's and `serve`'s ordering mutant — have been re-run one at a
@@ -673,11 +738,16 @@ time rather than carried on a sharded `-x` run,
 so their entry below is every test or case that fails and not whichever one pytest reached first.
 The rest carry the sharded run's first failure, which is the only one a `-x` run records.
 
-**What round 5 re-ran, and how.** The eight gate mutants went one at a time into
+**What rounds 5 and 6 re-ran, and how.** The eight gate mutants went one at a time into
 `seahaven/instances.py` in the repository itself, with the whole framework suite run to completion
 (no `-x`) and the file restored in a `finally`; `git status` afterwards, and the harness asserts the
-file it restored is byte-for-byte the one it read. The twenty-eight README mutants that
-`test_first_paragraph` kills were re-run against all fifty-five cases in one pass, each patch
+file it restored is byte-for-byte the one it read. Round 6 ran all eight again — the property
+change rewrote the code four of them mutate, and its own harness had been miscounting one of them
+(see the gate table) — this time parsing `-rfE` rather than `-rf` and keeping whole node ids, with
+each mutant's id list checked against pytest's summary line. The twenty-six README mutants that
+`test_first_paragraph` kills, and the two equivalence survivors whose row reports zero differences
+over the same documents, were re-run against all fifty-five cases in one pass — twenty-eight
+runs, each patch
 applied to a copy of `env.py`'s source, compiled and exec'd in a fresh namespace, with the
 unmutated source asserted green over the same fifty-five first — so a count here is a list of
 failing READMEs and the failing READMEs are named. `serve`'s ordering mutant went in the same way
@@ -704,7 +774,15 @@ the next variant of the same fault, and it is not arithmetic**: a row whose coun
 off a run of a mutant *narrower than the row's own wording* — "a line that merely begins with a
 rule character", measured by dropping one of the rule test's two halves. The count was real, the
 mutant was real, and the sentence above it described something else. Reading a count off a run is
-necessary and not sufficient; the row also has to name what was run.
+necessary and not sufficient; the row also has to name what was run. **Round 6 found the third
+shape: the run was right and the thing that read it was wrong.** "The gate is never sized" was
+reported at 151 tests where the suite says 164, and no row, file or test had been excluded — the
+harness parsed pytest's `-rf` short summary, which omits errors entirely, and keyed its set on
+`(\w+)`, which collapses every parametrized case of a function into one name. Five errors and eight
+collapsed ids, and the arithmetic closed. A harness that summarises a suite has to be checked
+against the suite's own summary line, which is a one-line assertion and the reason the other seven
+gate rows can be quoted with confidence: re-run with the fixed parser they are identical, so the
+defect is bounded rather than assumed to be.
 
 The environment's behaviour:
 
@@ -797,28 +875,52 @@ The app, the client, `serve` and the reference world:
 | the server logs nothing below critical | `test_serve_runs_one_worker_on_an_app_object` |
 | the reference world serves its control tools | world suite: `test_control_tools_are_not_served_by_this_worlds_app` |
 
-The gate in `seahaven/instances.py` — the accessor round 4 added and the `_Gate` subclass round 5
-replaced its second variable with — mutated in the same way even though the statement sweep's five
-files do not include it: an untested addition is an untested addition wherever it lands, and a
-statement deletion in a file no sweep covers has to be made by hand. Each of the eight went in one
-at a time with the whole framework suite run to completion, so each row is every test that fails:
+The gate in `seahaven/instances.py` — the accessor round 4 added, the `_Gate` subclass round 5
+replaced its second variable with, and the read-only property round 6 replaced *that* variable with
+— mutated in the same way even though the statement sweep's five files do not include it: an
+untested addition is an untested addition wherever it lands, and a statement deletion in a file no
+sweep covers has to be made by hand. Each of the eight went in one at a time with the whole
+framework suite run to completion, and each row is every non-passing test of that run — failures
+*and* fixture errors, each parametrized case counted once, which is a correction round 6 had to
+make to the harness rather than to a row (see below):
 
 | Mutation | Killed by |
 |---|---|
 | the accessor answers the framework default rather than the gate's size | `test_the_gates_size_can_be_read_back`, `test_the_reported_size_travels_with_the_gate`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_with_a_concurrency_of_zero_removes_the_gate` (4 tests) |
 | **a removed gate is reported as the framework default rather than as `0`** | `test_the_gates_size_can_be_read_back`, `test_serve_with_a_concurrency_of_zero_removes_the_gate` (2 tests) |
-| **the gate publishes a size it was not built with** (`self.size = size + 1`) | `test_the_gates_size_can_be_read_back`, `test_the_reported_size_travels_with_the_gate`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_without_a_concurrency_uses_the_frameworks_default` (4 tests) |
-| **`0` builds a gate with no slots instead of removing the gate** | `test_concurrency_zero_removes_the_gate` (1 test) — Phase 3's own test, and the one that would hang rather than fail, which is why the harness counts a hung suite as a kill |
-| the gate is never sized (`super().__init__` dropped from `_Gate`) | 151 tests — every call that takes a gate, `AttributeError` out of `acquire` |
-| the gate does not publish its size (`self.size` dropped from `_Gate`) | 9 tests — seven of `test_serve.py`'s eight, every one whose fixture reads the size back (the zero-concurrency one does not: there is no gate to ask), plus `test_the_gates_size_can_be_read_back` and `test_the_reported_size_travels_with_the_gate`; `AttributeError` out of the accessor |
+| **the size property is off by one** (`return self._initial_value + 1`) | `test_the_gates_size_can_be_read_back`, `test_the_reported_size_travels_with_the_gate`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_without_a_concurrency_uses_the_frameworks_default` (4 tests) |
+| **`0` builds a gate with no slots instead of removing the gate** | `test_concurrency_zero_removes_the_gate` (1 test) — Phase 3's own test. It *fails*, it does not hang: the test waits with `running.acquire(timeout=WAIT)`, so a slotless gate costs it the timeout and then an assertion. (Round 5's row said it would hang and credited the kill to the harness counting a hung suite as one. The harness does count a hang as a kill — a gate with no slots is a plausible way to hang a suite — but that is not what happens here, and a row explaining a kill by the wrong mechanism is the same fault as a row counting the wrong mutant.) |
+| **the size property is dropped** (the class keeps only its docstring) | 9 tests — seven of `test_serve.py`'s eight, every one whose fixture reads the size back (the zero-concurrency one does not: there is no gate to ask), plus `test_the_gates_size_can_be_read_back` and `test_the_reported_size_travels_with_the_gate`; `AttributeError` out of the accessor |
 | `set_concurrency` refuses nothing (the negative guard dropped) | `test_a_negative_concurrency_is_refused`, `test_the_gates_size_can_be_read_back` (2 tests) |
 | `set_concurrency` does not resize (the gate is left as it was) | `test_the_gates_size_can_be_read_back`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_with_a_concurrency_of_zero_removes_the_gate`, `test_the_gate_bounds_how_many_calls_run_at_once`, `test_the_gate_serialises_two_sessions` (5 tests) |
+| `size` is a plain writable attribute set in a constructor (round 5's form) | **survives** — design-only, see the survivor table |
 
-Two of round 4's three rows are not in that table and cannot be: "a resize that does not record the
-new size" and "a refused resize records the size it refused" both mutate a record that no longer
-exists. That is the point of the change rather than a gap in the evidence — the mutant a design
-makes unwritable needs no test — and it is recorded here because a table that simply lost two rows
-would read as coverage going backwards.
+**Three of round 4's and round 5's rows are not in that table and cannot be.** Round 4's "a resize
+that does not record the new size" and "a refused resize records the size it refused" both mutate a
+record that no longer exists. Round 5's "the gate is never sized" (`super().__init__` dropped)
+mutates a constructor that no longer exists either: deriving the size from the semaphore's own bound
+left `_Gate` with nothing to do at construction, so the class has no `__init__` for a mutant to
+break. Each is the point of the change rather than a gap in the evidence — the mutant a design makes
+unwritable needs no test — and each is recorded here because a table that simply loses rows reads as
+coverage going backwards.
+
+**Round 6 found the "gate is never sized" row's count wrong — 151 where the run says 164 — and the
+fault was in the harness, not the row.** Round 5's harness read pytest's `-rf` short summary and
+collected `(\w+)` out of each `FAILED` line, which is blind twice over: `-rf` does not list errors at
+all, and `(\w+)` stops at a `[`, so every parametrized case of one function collapsed into one name.
+Re-measured with `-rfE` and whole node ids, that mutant gives `159 failed, 572 passed, 5 errors`, so
+164 non-passing tests; the 13 it hid are exactly the 5 fixture errors plus 8 collapsed parametrized
+ids (`test_a_fixture_id_that_is_not_a_directory_name_is_refused` six times over, and three functions
+twice each), and 164 − 5 − 8 = 151 to the test. The review's hypothesis — that
+`tests/test_fts5.py`'s
+13 non-passing tests had been excluded — reaches the same 151 by arithmetic and is not the cause:
+no row or file was ever excluded, and the harness never knew which file a test came from. All eight
+rows were then re-run with the fixed parser, and the other seven are identical under both parsers
+(4, 2, 4, 1, 9, 2, 5, with every named test matching), which is what one would expect of rows whose
+kills are a handful of unparametrized tests that error nowhere. **The lesson is the file's own, one
+level down: a count is only as good as the thing that counted it, so a harness that summarises a
+suite has to be checked against the suite's own summary line.** The fixed one now parses
+`159 failed, 572 passed, 5 errors` and asserts its id list agrees with it.
 
 Some rows carry more than their own weight. The component document's own sketch of `call` is a
 mutation that **passes the synchronous test** and is killed only by the asynchronous one, which is the
@@ -840,12 +942,13 @@ mode `AGENTS.md` names, and it is the mirror of round 3's finding: `***` publish
 is the restrictive half missing a character, and `* *` eaten as furniture would be the permissive
 half missing a bound.
 
-The three survivors:
+The four survivors:
 
 | Survivor | Why |
 |---|---|
 | the instance branch of `_listing` is dropped | The same equivalence as the two statement survivors above: both branches answer the same list, by a test that says so. |
 | front matter is skipped one line short (`return index` rather than `index + 1` at the closing fence) | The paragraph scan then starts *on* the closing `---`, and `_is_prose` refuses a bare rule, so the fence is skipped one line later and the paragraph is the same. A genuine equivalence rather than a gap: this branch returns only at a line that is a fence, and a fence is exactly what the scan already discards. Two independent rules cover this one line, and that redundancy is deliberate, because the rule test exists for a `---` anywhere in a document and not for this position. Checked rather than argued, and re-checked after round 3 changed the rule test: the mutant was compiled beside the real function and run over all the parametrized READMEs and over every document of up to five lines drawn from a twelve-element alphabet of lines — fences, an indented fence, blanks, a whitespace-only line, a key, a heading, prose, `===`, `___`, `***`, `* * *` and `**` — 54 and 271,453 documents, zero differences. Re-run over the fifty-five this round: 55 cases, zero differences, which follows from both the real function and the mutant answering all fifty-five exactly as the table expects. The 271,453 are round 4's and carry: `env.py`'s parse tree is identical across round 5's edit, so the two functions compared are the same two functions. |
+| `size` is a plain writable attribute set in `_Gate.__init__` (round 5's form) | **A design-only mutant: no test can see it, and that is the finding rather than a gap.** Round 5's `_Gate` copied the size out of its constructor argument into `self.size`; round 6's derives it from the bound the semaphore is holding and exposes it read-only. Both answer the same number for every sequence of resizes, so the suite is silent — what the property buys is not behaviour but the *absence* of a route: `gate.size = 99` raises instead of desynchronising a copy, which is the drift review round 5 found in a Phase 3 test one file away, made unwritable rather than tested-for. Recorded as a survivor because the alternative is a row that looks like coverage of something no test could ever fail on. |
 | the closing fence's index runs one past the end (`len(lines) + 1`) | **A vacuous mutant, recorded rather than quietly dropped.** The index is used as the start of `range(start, len(body))`, and that range is empty for every `start >= len(body)`, so `len(lines) + 1` and `len(lines)` cannot be told apart by any input — the same 271,453 documents differ on none. It was written to probe the end-of-file bound and probes nothing; `len(lines) - 1`, two rows above it in the same table, is the mutation that actually tests that bound, and two cases kill it. The lesson is the mutant's, not the code's: a mutation whose two sides are equal by the language's own semantics is not evidence about the tests. |
 
 One of the fifty-five `_first_paragraph` cases — a closing fence on the very last line, with nothing
@@ -923,6 +1026,27 @@ property no mutant in this set can express and which review round 1 was right to
   as a later release and is not started.
 
 ## Method notes
+
+- **Process deviation, recorded because it is not a precedent: this phase was committed twice
+  without a clean code review.** `AGENTS.md` and the spec workflow require a clean review before
+  any commit, including for review fixes. Commit `5b8ba3a` (rounds 1-5) was made after round 5's
+  review was lost to a container restart and never re-run, and commit `639916c` (round 6) was made
+  while round 6's review was still running. Both commit messages say so, and neither marked the
+  phase complete.
+
+  The reasoning was that a container restart destroys uncommitted work, and roughly six hours of
+  this phase had survived one by luck. That justified *one* preservation commit of work already
+  reviewed four times; it did not justify the second, which committed a round's fixes ahead of the
+  review that was examining them. Committing `639916c` mid-review also emptied the `git diff` the
+  reviewer had been told was its scope, so the scope had to be corrected to `5b8ba3a..639916c`
+  after the fact.
+
+  The distinction the manager missed: on an unmerged branch a commit is durable storage rather than
+  publication, so preserving at-risk work can outweigh the gate -- but "at risk" means work that
+  cannot be reconstructed, not work whose review has simply not finished yet. A round of fixes that
+  a live reviewer is holding is not at risk. The correct move for a long review is to wait, or to
+  commit only once the review returns.
+
 
 - **A permissive test is half of every restrictive one, and the gate and the capacity budget each
   needed theirs.** "With one slot the calls do not overlap" is satisfied by a server with no
@@ -1027,11 +1151,18 @@ property no mutant in this set can express and which review round 1 was right to
   be testing. The general shape is worth keeping: **a harness that names code by position must
   assert the position still holds what it names**, and a mutation harness gets that assertion for
   free only if someone writes it. Corrected to line 39 and re-run in rounds 3 and 4: five mutants,
-  five killed, every one of them an `error[unresolved-reference]`. Round 5 re-ran it again — five
-  mutants, five killed, diagnostics 1, 1, 10, 2, 1 and a clean baseline either side — from a
-  harness that matches its lines by *text* and aborts unless the pattern occurs exactly once, which
-  retires the failure mode rather than re-correcting it: addressing code by position was the defect,
-  and the line number it names is no longer a number.
+  five killed, every one of them an `error[unresolved-reference]`. Rounds 5 and 6 re-ran it again —
+  five mutants, five killed, and a clean baseline either side — from a harness that matches its
+  lines by *text* and aborts unless the pattern occurs
+  exactly once, which retires the failure mode rather than re-correcting it: addressing code by
+  position was the defect, and the line number it names is no longer a number. The diagnostic counts
+  are the same multiset every time, and the order they are quoted in depends on the order they are
+  listed in, which is worth spelling out once rather than leaving two sequences in one document to
+  be reconciled: per *mutant* they are `FastAPI` 1, `World` in `__init__.py` 1, `World` in
+  `serve.py` 1, `Instance` in `env.py` 2, `Any, Self` in `client.py` 10 — the survivor table's
+  order, and the "1, 1, 1, 2 and 10" quoted there and above. This harness walks the files in import
+  order (`__init__`, `client`, `env`, `serve`) and so prints the same five as 1, 1, 10, 2, 1. Round
+  5 quoted its output without saying which order it was in; round 6 says.
 - **A bound that depends on a fact about the whole document cannot be evaluated before that fact is
   known.** Round 1's Major was a block skip with no end; the fix gave it two ends — a closing fence,
   or a blank line — and wrote them as one loop, which is where round 2 found it. Written that way

@@ -756,8 +756,9 @@ def test_the_reported_size_travels_with_the_gate(monkeypatch: pytest.MonkeyPatch
     `set_concurrency` wrote alongside the gate. Anything that put a gate in
     place by another route -- a test substituting an instrumented one -- moved
     the gate and not the record, and the accessor then described a gate that was
-    no longer there. `_Gate` carries its own size, so there is no second place
-    for it to be wrong; this asserts that rather than leaving it to the reading.
+    no longer there. `_Gate.size` derives the size from the semaphore's own
+    bound, so there is no second place for it to be wrong; this asserts that
+    rather than leaving it to the reading.
     """
     monkeypatch.setattr(instances, "_gate", instances._Gate(1))
     assert instances.concurrency() == 1
