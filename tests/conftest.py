@@ -102,9 +102,9 @@ def _process_wide_runtime_state() -> Iterator[None]:
     design (both are about the process, not about one world), so a test that
     changes either would otherwise change the next one.
     """
-    concurrency, gate = instances._concurrency, instances._gate
+    gate = instances._gate
     yield
-    instances._concurrency, instances._gate = concurrency, gate
+    instances._gate = gate
     instances._swept = False
 
 

@@ -321,6 +321,12 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
             # line being an opening fence or a heading and publishes it as
             # prose. Decoding drops it, so no rule below has to know about it.
             return path.read_text(encoding="utf-8-sig")
+        # Unparenthesized on the formatter's insistence, not as a flourish:
+        # PEP 758 allows it where nothing is bound with `as`, and `ruff format`
+        # -- a gate this project runs before every commit -- removes the
+        # parentheses again if they are written. `world.py` catches this same
+        # pair with parentheses because it binds the error; where the binding
+        # goes, so do the brackets.
         except OSError, UnicodeDecodeError:
             return ""
 

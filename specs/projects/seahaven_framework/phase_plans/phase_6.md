@@ -13,7 +13,7 @@ API an eval harness in the same process needs, and none of the API a training ru
 adds the other side: `seahaven.openenv`, which puts one world behind an OpenEnv server so that an
 agent anywhere can `reset` a session, list the world's tools and call them over a websocket.
 
-It is a small subpackage — four modules, 781 lines including their prose — because the
+It is a small subpackage — four modules, 788 lines including their prose — because the
 mapping it implements is one sentence long. **A session is an instance.** OpenEnv makes one
 environment object per connected session and runs that session on its own thread; `SeahavenEnv` holds
 one `Instance` on that object. Everything else follows: two sessions are independent because two
@@ -49,9 +49,17 @@ and nothing else.
    of the module's surface: review round 4 found them the only two public-looking names in a module
    whose `__all__` names three classes and whose six other helpers are all private, and the survivor
    table calls `__all__` "documentation of the module's surface" — so a name outside it that reads
-   public is the documentation contradicting itself. `_is_title_line` was renamed to `_is_title_line`
-   in the same round for the same kind of reason: it sat one letter from `_is_underline` and meant
-   something else, and its docstring had to open by warning the reader about that.
+   public is the documentation contradicting itself. `_underlined` was renamed to `_is_title_line`
+   in the same round for the same kind of reason: one inflection from `_is_underline` and a
+   different question — `_is_underline` asks whether *this* line is an underline, `_underlined`
+   asked whether the line *below* it is one — and a helper that needs its docstring to tell it
+   apart from its neighbour is misnamed rather than under-documented. The old name is written out
+   here because this sentence is the only record of it, and review round 5 found the sentence with
+   `_underlined` swept out of it *by the rename it describes*: a textual sweep of `_underlined` →
+   `_is_title_line` hit the prose explaining the sweep, leaving a sentence that said a name was
+   renamed to itself and then gave two reasons that were false of the name it now named. A rename
+   is a claim about code and about the prose that records it, and prose is the half no test
+   reads.
 2. **`src/seahaven/openenv/__init__.py`** — `app(world, ...)` exactly as §3 spells it, the two
    defaults as named constants, and an `__all__` that re-exports the models, the client and the two
    MCP action types a caller needs to drive the wire by hand.
@@ -63,18 +71,32 @@ and nothing else.
 6. **`tests/serving.py`** — a context manager that starts uvicorn on a kernel-chosen port in a thread
    and answers its base URL. Not a fixture: it takes arguments, and two test modules use it.
 7. **`tests/test_env.py`, `tests/test_client.py`, `tests/test_server.py`, `tests/test_serve.py`**, and
-   **`worlds/projecttracker/tests/test_openenv_app.py`** — the suites, 134 tests in the framework's
-   and 7 in the world's, plus one in `tests/test_instances.py` for the accessor step 8 adds.
-8. **`src/seahaven/instances.py`** — one accessor, `concurrency()`, answering the gate's size as
-   `set_concurrency` last set it, and one module-level `_concurrency` recording it. A change to an
-   earlier phase's module, kept as small as it can be and made for a test: `test_serve.py` asserted
-   `instances._gate._initial_value`, which is one module's private name and one standard-library
-   class's private attribute in a single expression, and the only place in the repository that read
-   either. `BoundedSemaphore` does not publish the value it was built with, so the size is recorded
-   beside the gate rather than derived from it, `set_concurrency` writes both, and
-   `tests/conftest.py`'s isolation fixture — which already saved and restored `_gate` — now saves
-   and restores both. Three hand mutants cover the addition, including the one that matters: a
-   refused resize must not record the size it refused.
+   **`worlds/projecttracker/tests/test_openenv_app.py`** — the suites, 135 tests in the framework's
+   and 7 in the world's, plus two in `tests/test_instances.py` for the accessor step 8 adds.
+8. **`src/seahaven/instances.py`** — one accessor, `concurrency()`, and the two-line
+   `threading.BoundedSemaphore` subclass it reads: `_Gate`, which publishes the size it was built
+   with. A change to an earlier phase's module, kept as small as it can be and made for a test:
+   `test_serve.py` asserted `instances._gate._initial_value`, which is one module's private name
+   and one standard-library class's private attribute in a single expression, and the only place in
+   the repository that read either. `BoundedSemaphore` does not publish the value it was built
+   with, so round 4 recorded the size in a module-level `_concurrency` beside the gate and had
+   `set_concurrency` write both. **Review round 5 found that second source of truth already
+   drifting, in the repository, one file from the accessor**:
+   `test_a_call_queued_behind_the_gate_does_not_delay_a_destroy` substitutes an instrumented
+   one-slot gate with `monkeypatch`, which moves the gate and not the record, so for the length of
+   that test `concurrency()` described a gate that was no longer there. Harmless where it happened
+   — nothing reads the size there and `monkeypatch` puts the gate back — and not harmless as a
+   design, so the design changed: `_Gate` carries its own `size`, `set_concurrency` builds one,
+   `concurrency()` reads the size off whatever gate is in place, and that test's instrumented gate
+   subclasses `_Gate` so the size travels with the semaphore it is the size of.
+   `tests/conftest.py`'s isolation fixture is back to saving and restoring one name — still
+   load-bearing, and checked as such rather than assumed: dropping `instances._gate = gate` from it
+   fails `test_the_gates_size_can_be_read_back` in each of three randomized orders — and
+   `set_concurrency`'s parameter is `size` rather than `concurrency`, which had come to shadow the
+   module-level `concurrency()` inside its own body. Eight hand mutants cover the module's new and
+   rewritten lines; two of round 4's three are *gone*, because the design no longer admits them —
+   there is no record for a resize to forget to write, and none for a refused resize to write
+   anyway.
 9. **`pyproject.toml`** — register the `slow` marker the 500-session smoke test carries.
 10. **`.github/workflows/ci.yml`** — install with `--extra serve`, without which every test in this
     phase skips and `ty` never sees the subpackage.
@@ -101,6 +123,19 @@ and nothing else.
   and that is a maintainer's call which has not been made. This phase serves the control tools over
   the wire (`include_control_tools`), which is the first time they are reached from a thread that is
   not the caller's, so the record is made here rather than left to the next reader.
+- **This phase edits `seahaven/instances.py`, an earlier phase's committed module, and review
+  round 5 turned that edit from an addition into a design change.** Phase 3 owns the concurrency
+  gate; Phase 6 needed to read its size, added an accessor and a `_concurrency` variable beside the
+  gate for it to read (round 4), and round 5 pointed out that two variables holding one fact is a
+  fact that can drift — with the drift already in the repository, in a Phase 3 test that
+  substitutes an instrumented gate. The change is now a two-line `BoundedSemaphore` subclass that
+  publishes its own size, which makes the drift unwritable rather than tested-for, and it is
+  recorded here because it is a change to code this phase's spec does not describe: `_gate` and
+  `set_concurrency` are Phase 3's, the accessor is this phase's need, and the eight hand mutants
+  under "Mutation check" are the standard the statement sweep would have applied had this module
+  been in its five files. Nothing about the gate's *behaviour* moves: the sizes it is built with,
+  the `0` that removes it, and the refusal of a negative one are the same, and Phase 3's own gate
+  tests are unchanged and green.
 - **`ListToolsAction` is answered before the "reset first" guard, and the component document can be
   read either way** (filed as `BACKLOG.md` **B12**, with the two other findings in the same artifact). §2 says `ListToolsAction` is "checked first" and shows
   `ListToolsObservation(tools=instance.tools())`, which needs an instance; the same bullet says "A
@@ -238,6 +273,23 @@ and nothing else.
      `str.strip()` does not remove it — it is not whitespace — so left in place it stops the first
      line being an opening fence or a heading and publishes `\ufeff---` followed by the card's YAML.
 
+  **The plain heading test has a permissive half as well, and it is the one deviation from
+  CommonMark here that nobody chose.** `_is_prose` treats any line whose stripped form starts with
+  `#` as a heading. CommonMark's ATX heading needs a space — or the end of the line — after the run
+  of `#`, so `#1 priority is shipping.` is a paragraph there and furniture here:
+  `_first_paragraph("#1 priority is shipping.\n")` answers `""` and `get_metadata` falls back to
+  `f"Seahaven world {name}"`. Review round 5 found it by asking of the heading test the question
+  the four rules above had each been asked twice — what must this *not* skip? — and the answer had
+  no case among the fifty-four and no note among the rules. It is recorded and pinned (the
+  fifty-fifth case) rather than fixed, for two reasons. The cost is bounded in the safe direction:
+  such a README gets a generic description, never someone else's furniture published as prose,
+  which is the failure mode the whole rule set exists to prevent. And the block is the one this
+  phase should stop editing — four review rounds found four defects and every one of them was here
+  (B16) — so buying a fallback description back with a fifth change to it is not a trade this round
+  will make. The restrictive side of the same test has its mutant and its kill count ("a heading
+  counts as prose", ten cases plus two `get_metadata` tests); the permissive side now has the case
+  that says what it costs.
+
   One consequence is worth stating rather than leaving to be discovered: an unclosed block with a
   rule further down is read as a block closed by that rule, so the description comes from the prose
   *after* the rule rather than before it. The two readings are the same bytes and no rule can
@@ -255,7 +307,7 @@ and nothing else.
   ordinary in a card, between keys, after the opening fence, inside a list, or as a whitespace-only
   line. The same YAML, published for the opposite reason. Both times the suite was green, because
   not one of the parametrized cases had a blank line inside a *closed* block; nine do now, and
-  `test_first_paragraph` runs fifty-four READMEs in all.
+  `test_first_paragraph` runs fifty-five READMEs in all.
 
   **Round 3 then found that six of round 2's nine no longer discriminate the defect they were
   written for**, which is why three more exist. Rule 3, added in the same round, masks them: with the
@@ -264,7 +316,7 @@ and nothing else.
   rule, so the prose is reached anyway and by accident. A case only separates the fused loop from
   the correct one when the line after the block's blank line is *not* directly above the closing
   fence, and the three added for it are a gap before the fence, a tag list behind a gap, and two
-  keys behind a gap. Four of the fifty-four now fail on that mutant. The finding is not that the six
+  keys behind a gap. Four of the fifty-five now fail on that mutant. The finding is not that the six
   cases are worthless — they pin the answer for six real card shapes — but that regression coverage
   is a claim about a *mutant*, and a claim about a mutant is only worth what running it against the
   mutant says.
@@ -284,7 +336,9 @@ and nothing else.
   side has no test is not a rule. Every rule above now has a case for the thing it skips *and* a
   case for the thing it must not skip — `One\nTwo\n===\n` for rule 3's scope, `- a bullet list
   item` for rule 2's whole-line requirement, `\ufeffJust prose.\n` for rule 4 stripping the mark
-  out of the text rather than tolerating it in front.
+  out of the text rather than tolerating it in front, and — round 5's — `#1 priority is
+  shipping.\n` for the plain heading test, whose permissive side is the deviation above rather than
+  a boundary.
 - **`reset` destroys before it creates, and clears before it destroys.** `_forget()` sets
   `_instance`, `_episode_id` and `_steps` to their fresh-session values *first* and calls
   `instance.destroy()` last, so a `destroy` that raises still leaves the session in the state a fresh
@@ -308,9 +362,16 @@ and nothing else.
   calls *do* overlap. The measurement is the tool's own `perf_counter()` either side of a recursive
   CTE, and the assertion is about intervals overlapping, never about duration.
 - **`serve()` is tested with `uvicorn.run` replaced and `app` wrapped, not replaced.** What `serve`
-  adds over `app` is three decisions — the gate is sized *before* the app is built, the operator's
+  adds over `app` is three decisions — the gate is sized *before* the server starts, the operator's
   numbers reach the app, and uvicorn gets one worker and an app *object* rather than an import string
   — and a function that serves until the process is stopped is no way to read any of them. The
+  first decision is worth stating precisely, because round 5 checked it and the loose version of it
+  is unobservable: what the tests pin is that the gate is sized before `uvicorn.run`, which is what
+  matters, and not that it is sized before `app(...)` is built. The gate is read at request time, so
+  a `serve` rewritten to size it *between* the app build and `uvicorn.run` passes the whole
+  framework suite — correctly. The mutant the table carries is the swap of the two statements
+  `serve` actually has, which is the only ordering error that body can express, and it dies on
+  `test_serve_sizes_the_gate_before_the_server_starts` and two others. The
   `served` fixture replaces `uvicorn.run` outright and wraps `app`, so the real app is still built
   from the real arguments and the arguments are recorded on the way past. The one-worker rule has a
   test because a second worker process answers a session's second frame with an environment that has
@@ -324,17 +385,19 @@ and nothing else.
 
 ## Tests
 
-135 tests in the framework's suite and 7 in the world's, over four new framework modules, one new
-world module, and one test added to `tests/test_instances.py` for the `concurrency()` accessor.
-Totals: the framework's suite goes 599 → 734, the world's 72 → 79. Six of those tests
-were written because a mutant survived and forty-two because a review round found a surface with no
+137 tests in the framework's suite and 7 in the world's, over four new framework modules, one new
+world module, and two tests added to `tests/test_instances.py` for the `concurrency()` accessor and
+for the gate publishing the size it was built with.
+Totals: the framework's suite goes 599 → 736, the world's 72 → 79. Six of those tests
+were written because a mutant survived and forty-five because a review round found a surface with no
 test on it: four in round 1, twenty-four in round 2, two while round 2 was being closed, twelve in
-round 3 and one in round 4. Thirty-five of the forty-three are `_first_paragraph` cases, which is
-what it costs to pin four rules, the permissive side of each, and — round 3's lesson — a mutant that
-a later rule had stopped the earlier cases from separating. The "Mutation check" section below says
-which.
+round 3, one in round 4 and two in round 5. Thirty-six of the forty-five are `_first_paragraph`
+cases, which is what it costs to pin four rules, the permissive side of each, the permissive side of
+the plain heading test that predates all four, and — round 3's lesson — a mutant that a later rule
+had stopped the earlier cases from separating. The "Mutation check" section below says which. Every
+total in this section is a `pytest` run's own count rather than arithmetic on the previous round's.
 
-**`tests/test_env.py` (96).** The environment class in process, with no server anywhere: `reset`
+**`tests/test_env.py` (97).** The environment class in process, with no server anywhere: `reset`
 makes an instance and a second `reset` destroys the first (the directory is gone); a blank instance
 is at the wall clock, `now=` moves it and `now=` with a fixture is refused; `seed` reaches the
 instance; startup kwargs reach the hooks and an unknown one raises before any directory exists; a
@@ -350,7 +413,7 @@ is logged with its traceback; a `WorldBug` propagates; a bare `SeahavenError` pr
 own `ToolError` subclass renders; an action that is neither kind is a `WorldBug`. Then `state` before
 and after `reset`, the step count, `close`'s idempotence, `get_metadata` with a README, without one
 with an unreadable one and with one an editor saved with a byte-order mark, and `_first_paragraph`
-parametrized over fifty-four READMEs. Nineteen of the fifty-four are round 1's, four of those the
+parametrized over fifty-five READMEs. Nineteen of the fifty-five are round 1's, four of those the
 unclosed-fence cases it asked for. Round 2 added twenty-three: six with a blank line inside a
 *closed* front-matter block (between keys, after the opening fence, inside a tag list, as a
 whitespace-only line, after a comment, and with no prose after it at all), the unclosed block with a
@@ -364,6 +427,9 @@ its original six no longer do. Five are the thematic break spelled the other thr
 title over `***`, and the spaced `* * *`, `- - -` and `_ _ _`. Four are that rule's permissive side:
 `**` and `* *` are published as prose because two characters are not a break, and `* a bullet list
 item` and `*** not a break ***` because a break is the whole line or nothing.
+Round 5 added one: `#1 priority is shipping.`, the permissive side of the plain heading test —
+the one rule here that leaves CommonMark by accident rather than on purpose, recorded and pinned
+above rather than widened.
 Then `test_every_declared_field_publishes_a_description`, parametrized over `SeahavenObservation`
 and `SeahavenState`: every field either model declares itself must publish the description the
 module's table names — a finding made while closing round 2 rather than reported by it, turned
@@ -398,10 +464,14 @@ gate-size assertions: they read `served["gate"]._initial_value`, and they now re
 the gate" was already in the instances suite and stays there — a test of `serve` is a test of what
 `serve` decides, and a test that nothing is gated is a test of the gate.
 
-**`tests/test_instances.py` (+1).** `test_the_gates_size_can_be_read_back`: the accessor answers the
+**`tests/test_instances.py` (+2).** `test_the_gates_size_can_be_read_back`: the accessor answers the
 framework default, then each size it is set to, then `0`, and a refused negative resize leaves the
-recorded size alone — which is the mutant worth having, because recording before validating is the
-natural way to write it wrong.
+size alone. `test_the_reported_size_travels_with_the_gate` (round 5) puts a gate in place by the
+route `set_concurrency` is not — `monkeypatch.setattr(instances, "_gate", instances._Gate(1))`, the
+route the Phase 3 test that substitutes an instrumented gate takes — and asserts the accessor
+reports *that* gate's size. It is the assertion the round-4 design could not have passed, and with
+`_Gate` it is the design written down: the size is the gate's, so there is no second place for it to
+be stale.
 
 **`worlds/projecttracker/tests/test_openenv_app.py` (7).** The reference world over the wire, through
 the object a container serves — `projecttracker.openenv_app:app`, imported by name. The typed client
@@ -414,7 +484,7 @@ itself is run in a subprocess against this world, its port read back from uvicor
 line, and driven with the typed client — the end-to-end path through the real entry point, which no
 test that replaces `uvicorn.run` can cover.
 
-The suites were run under `umask 022` and under `umask 077`: 734 passed and 79 passed under both.
+The suites were run under `umask 022` and under `umask 077`: 736 passed and 79 passed under both.
 
 ## Mutation check
 
@@ -423,22 +493,55 @@ Every statement of the four modules in `src/seahaven/openenv/` and of the world'
 and the suites that file can affect were re-run on cleared `__pycache__` with
 `PYTHONDONTWRITEBYTECODE=1`: both suites for a framework file, the world's for the world file.
 `seahaven/instances.py` is deliberately not in that set — it is an earlier phase's module and was
-swept there — so the one accessor round 4 added to it is covered by hand mutants instead, which is
-the same standard applied in the only way this phase's scope allows. Then
-sixty-six mutations statement deletion cannot express — an inverted guard, a reordered `except`,
+swept there — so the accessor round 4 added to it and the gate round 5 rewrote in it are covered by
+hand mutants instead, which is the same standard applied in the only way this phase's scope allows.
+Then seventy-two mutations by hand. Sixty-eight are ones statement deletion cannot express — an
+inverted guard, a reordered `except`,
 a changed default, a swapped pair of branches, an off-by-one in a bound, two loops fused into one,
 two loops in the wrong order, a hand-written literal where the code builds one, a dropped `/`, a
 dropped codec, six dropped field descriptions, a character missing from a set and a character too
 many, a length bound moved either way, a condensing step removed, each half of a two-part predicate
-dropped in turn, and the component document's own sketch of `call` — were made by hand.
+dropped in turn, and the component document's own sketch of `call`. The other four *are* statement
+deletions, of the four lines round 5 wrote or rewrote in `seahaven/instances.py`: a statement
+deletion in a file no sweep here covers has to be a hand mutant to exist at all.
 
-**The numbers below are review round 4's: both sweeps were re-run from scratch over the changed
-code, not adjusted.** Every review round so far has changed this file, so every round has recounted:
+**The numbers below are review round 5's. It is the first round that did not re-run the statement
+sweep from scratch, and the reason is stronger than a re-run rather than cheaper than one.** Round
+5's only change inside the five swept files is a six-line comment in `env.py`, and
+`ast.dump(ast.parse(old)) == ast.dump(ast.parse(new))` is `True`: the parse trees are identical, so
+every statement the sweep addresses, every mutant it makes of one and every test outcome that
+follows are the same code and the same run by construction. A re-run could only confirm that; the
+comparison proves it, and it was run this round rather than reasoned. What round 5 *did* change is
+the suites — two tests added — and a test can only turn a survivor into a kill, never the reverse.
+So the claim needing a re-run was the survivor list, and it got one: the eleven recorded statement
+survivors were re-applied one at a time in the repository itself, each with both suites run in full
+and each restored in a `finally`, with `git status` inspected afterwards. **Eleven mutants, eleven
+still surviving**, at the same eleven lines and in the same three families.
+
+**The hand set is where round 5 departs from "a sweep is only ever reported as one collection", and
+the departure is stated rather than buried.** Thirty-seven of the seventy-two rows are round 5's own
+runs: all eight gate rows (the code changed), the twenty-eight README rows that
+`test_first_paragraph` kills (the case list changed), and `serve`'s ordering row (its wording and
+its count were wrong). The other thirty-five carry round 4's run. That is two runs in one table,
+which the rule exists to forbid — and what the rule forbids is two runs of *different code*. Here
+the code is provably the same: `env.py`'s parse tree is identical across the round and the other
+four files are untouched, so re-running those rows would be the same mutants against the same
+functions. What did change for every row is the suites, and a test can only add a killer to a row
+whose killing test it was added to: the fifty-fifth README case belongs to `test_first_paragraph`,
+which is exactly the twenty-eight that were re-run, and the new gate test belongs to the eight. No
+carried row can have moved. The honest summary is that this table is one collection of code and two
+collections of runs, with the boundary written down here and on every row round 5 changed.
+
+Every review round so far has changed this file, so every round has recounted:
 round 2's findings rewrote `_first_paragraph`, `_after_front_matter`, `_readme` and the observation's
 three redeclared fields; closing round 2 turned up three more undescribed fields on `SeahavenState`;
-round 3 split the rule test into a thematic-break test and a setext-underline test; and round 4
-renamed three helpers and added one accessor to `seahaven/instances.py`. The hand
-set has grown with them, thirty-seven → fifty-five → sixty-three → sixty-six. Round 2's eighteen
+round 3 split the rule test into a thematic-break test and a setext-underline test; round 4
+renamed three helpers and added one accessor to `seahaven/instances.py`; and round 5 replaced that
+accessor's two-variable design with a gate that publishes its own size, split one README row that
+was measuring half the predicate its wording named, and added the fifty-fifth `_first_paragraph`
+case. The hand
+set has grown with them, thirty-seven → fifty-five → sixty-three → sixty-six → seventy-two.
+Round 2's eighteen
 were two for
 the closing-fence-first rule (its precedence, and the two searches in the wrong order), two for the
 leading-blank opening scan, two for the byte-order mark — one on each side of it, the codec and the
@@ -446,10 +549,26 @@ leading-blank opening scan, two for the byte-order mark — one on each side of 
 that had none, and one for a `_is_prose` that keeps only the exact fence out of a paragraph rather
 than every rule. Round 3's eight are the two break characters the rule set can lose, the spaces it
 must condense, the length bound in both directions, the deliberate deviation in `_is_title_line`,
-and each half of `_is_rule` dropped in turn. Round 4's three are the gate accessor's: a resize that
-does not record, a record that ignores the resize, and a record written above the guard that
+and each half of `_is_rule` dropped in turn. Round 4's three were the gate accessor's: a resize
+that does not record, a record that ignores the resize, and a record written above the guard that
 refuses a negative one. Round 4 also *rewrote* two of round 3's, which had been mutating the wrong
 character — see the README table.
+
+**Round 5 adds nine rows and retires three, so the set grows by six.** Two of round 4's three are
+no longer *writable*: with the size carried by the gate there is no record for a resize to forget and
+no record for a refused resize to write, which is the whole argument for the subclass — a mutant
+that cannot be expressed is better than one that dies. The gate's eight rows are four
+behavioural (the accessor answering the framework default instead of the gate's size; a removed
+gate reported as the default rather than as `0`; a gate publishing a size it was not built with;
+and `0` building a slotless gate instead of removing the gate) and four statement deletions of the
+lines round 5 wrote (`super().__init__`, `self.size`, the negative guard, and the resize itself).
+The first of the four behavioural ones is round 4's surviving row, reworded to name the gate rather
+than a record and re-run like the rest; the other seven are new.
+The other two are the halves of "a line that merely begins with a rule character counts as a
+rule", which becomes one row per half of the rule test because its count was read off a mutant
+narrower than its wording — see the README table for what that cost. Nine in — seven for the
+gate and two for the split — and
+three out: round 4's two unwritable gate rows and the combined rule-character row.
 
 A sweep is only ever reported as one collection. Round 2's fix pass ran both sweeps twice from
 scratch, because its own finding changed `SeahavenState` after the first run, and the first run's
@@ -457,7 +576,7 @@ numbers are not reported anywhere; round 3 did the same for the same reason. Ear
 are quoted for comparison and nothing below is arithmetic on them; each table is recounted from the
 harness's own result files, which are also checked for duplicate rows — the shards partition the
 work by index, so a mutant appearing twice would mean the partition was wrong. 151 statement rows,
-151 distinct; 66 hand rows, 66 distinct.
+151 distinct; 72 hand rows, 72 distinct.
 
 Every number comes from a harness that proves the mutant is the code that ran. The mutation tree is
 a copy of the repository; `PYTHONPATH` puts its `src` directories first, which wins over the editable
@@ -510,6 +629,16 @@ helpers moves no line and adds none — and the sweep was re-run from scratch an
 carried over, which is how that is known rather than assumed: 151/140 again, the same eleven
 survivors at the same line numbers.
 
+Round 5 changed no statement count either, and this time the sweep was *not* re-run: its only edit
+inside these five files is a comment, and the two parse trees are identical (`ast.dump` of each,
+compared this round), so the mutants and their outcomes are the same by construction rather than by
+repetition. An all-nodes `ast.stmt` count was taken either side of the comment edit as
+well — 150 and 150, a wider measure than the harness's 106 and quoted only because it does not
+move — and the eleven survivors were
+re-applied against the two suites the round added tests to: eleven mutants, eleven survivors, the
+list unchanged. A statement mutant this sweep killed cannot be un-killed by adding a test, so the
+kills carry and only the survivors needed re-checking.
+
 **What the round-1 sweep found, and what closed it.** Seven gaps, every one in a line that is not a
 statement about behaviour so much as a line the tests never looked at from the outside. Three were
 the fields of `SeahavenState` — `fixture`, `now` and `world` — indistinguishable from the
@@ -533,25 +662,49 @@ Eleven statement survivors remain, in three families, all recorded rather than k
 | Survivor | Why it is not a test's job |
 |---|---|
 | `__all__` in all four modules | It steers `from module import *`, which nothing in this package, the reference world or the tests does. It is documentation of the module's surface, and the same equivalence phases 1–5 record. |
-| the annotation-only imports: `FastAPI` and `World` in `__init__.py`, `World` in `serve.py`, `Instance` in `env.py`, `Any, Self` in `client.py` | Each name appears only in annotations, which PEP 649 never evaluates, so deleting the import changes nothing at runtime. Not equivalent to the gate: each one is `error[unresolved-reference]` from `ty`, which `AGENTS.md` requires before every commit. Confirmed by mutating each of the five in the repository itself and running `ty check .` against a clean baseline — five mutants, five killed, re-run each round rather than carried over. The diagnostics per mutant are 1, 1, 1, 2 and 10, because one import line carries two names and one name is annotated eight times; the claim the row needs is that all five are caught, not that each costs one error. |
+| the annotation-only imports: `FastAPI` and `World` in `__init__.py`, `World` in `serve.py`, `Instance` in `env.py`, `Any, Self` in `client.py` | Each name appears only in annotations, which PEP 649 never evaluates, so deleting the import changes nothing at runtime. Not equivalent to the gate: each one is `error[unresolved-reference]` from `ty`, which `AGENTS.md` requires before every commit. Confirmed by mutating each of the five in the repository itself and running `ty check .` against a clean baseline — five mutants, five killed, re-run each round rather than carried over, round 5 included. The diagnostics per mutant are 1, 1, 1, 2 and 10 — the 10 is `from typing import Any, Self` in `client.py` (two `Self`, eight `Any`), the 2 is `Instance` in `env.py`, and each `World` and the `FastAPI` cost one; the claim the row needs is that all five are caught, not that each costs one error. |
 | `if instance is not None:` and `return instance.tools()` in `_listing` (two mutants) | The two branches answer the same list, which is the point: `Instance.tools()` *is* `world.tools` with the control tools filtered out, and `test_list_tools_answers_before_a_reset_and_agrees_with_the_instance` asserts the two are equal. A test that could tell them apart would be a test that the branches disagree. The same equivalence is the hand mutant "the instance branch of the listing is dropped" below. |
 
-The sixty-six hand mutations and the test that kills each. Sixty-three are killed; the three
-survivors are recorded under the tables. Thirty-nine of the sixty-six — the two whose killing tests
-round 1 had to name by hand, every mutant of the README rules, all six of the field descriptions and
-all three of the gate accessor's — were re-run one at a time in the repository, with the whole
-framework suite and no `-x`, so their entry below is every test that fails and not whichever one
-pytest reached first. The rest carry the sharded run's first failure, which is the only one a `-x`
-run records.
+The seventy-two hand mutations and the test that kills each. Sixty-nine are killed; the three
+survivors are recorded under the tables. Forty-seven of the seventy-two — the two whose killing
+tests round 1 had to name by hand, every mutant of the README rules, all six of the field
+descriptions, all eight of the gate's and `serve`'s ordering mutant — have been re-run one at a
+time rather than carried on a sharded `-x` run,
+so their entry below is every test or case that fails and not whichever one pytest reached first.
+The rest carry the sharded run's first failure, which is the only one a `-x` run records.
 
-Where a mutation is killed by `test_first_paragraph`, the count is of the fifty-four parametrized
+**What round 5 re-ran, and how.** The eight gate mutants went one at a time into
+`seahaven/instances.py` in the repository itself, with the whole framework suite run to completion
+(no `-x`) and the file restored in a `finally`; `git status` afterwards, and the harness asserts the
+file it restored is byte-for-byte the one it read. The twenty-eight README mutants that
+`test_first_paragraph` kills were re-run against all fifty-five cases in one pass, each patch
+applied to a copy of `env.py`'s source, compiled and exec'd in a fresh namespace, with the
+unmutated source asserted green over the same fifty-five first — so a count here is a list of
+failing READMEs and the failing READMEs are named. `serve`'s ordering mutant went in the same way
+and for the same reason the rule-test row was split: its wording named an ordering ("before the app
+is built") that no test can see, and its kill list named one test where the run names three. It also
+made the pattern rule pay for itself a fourth time — the first attempt stopped with `BAD PATTERN`
+because the harness's anchor was `log_level="info"`, the spelling this plan quotes, while the code
+reads `log_level=LOG_LEVEL` (that constant's value is `"info"`, so the plan is right in substance
+and wrong as a pattern). A harness that had matched loosely would have scored a mutant it never
+applied. The two README rows that `test_get_metadata_*`
+kills were not re-run: the code they mutate and the tests that kill them are untouched by this
+round, and the parse-tree comparison above says so for the whole file. Every count changed by
+round 5 is on a row that says it changed.
+
+Where a mutation is killed by `test_first_paragraph`, the count is of the fifty-five parametrized
 READMEs, named by what they are rather than by a truncated pytest id. **Every count in these tables
 is read off that run's own per-mutant failure list; none is reasoned from the mutation.** That
 sentence is here because round 4 found two that were: one claiming 6 where the named mutant kills 3
 (the mutant had been written to drop the wrong character), and one claiming "all 54 but the empty
 one" where the run says 42. Both are corrected in place below, with what went wrong, rather than
 quietly renumbered — the counts are this phase's only instrument for the decay round 3 found, so a
-count that was written rather than counted is a broken instrument and not a typo.
+count that was written rather than counted is a broken instrument and not a typo. **Round 5 found
+the next variant of the same fault, and it is not arithmetic**: a row whose count was honestly read
+off a run of a mutant *narrower than the row's own wording* — "a line that merely begins with a
+rule character", measured by dropping one of the rule test's two halves. The count was real, the
+mutant was real, and the sentence above it described something else. Reading a count off a run is
+necessary and not sufficient; the row also has to name what was run.
 
 The environment's behaviour:
 
@@ -592,11 +745,12 @@ byte-order mark. Every mutant here except the two recorded survivors is a review
 | **a break may be one character long** (the length bound removed) | `test_first_paragraph`, 2 cases — both permissive: `**` is literal text and `* *` is a bullet list whose item is `*` |
 | a break needs four characters | `test_first_paragraph`, 7 cases |
 | **the underline test subscripts before it has ruled out the empty line** (the two conjuncts swapped) | `test_first_paragraph`, 42 cases, plus `test_get_metadata_reads_the_readme` and `test_get_metadata_reads_a_readme_that_begins_with_a_byte_order_mark` — it raises `IndexError`, but only from `_is_title_line`'s lookahead past the end of the document: `_is_prose` tests `bool(stripped)` first and never hands the underline test an empty string, so twelve documents never reach it with one. **Round 4 found this row claiming 53** — "all 54 but the empty one", which was reasoned from the mutation rather than read off the run. |
-| **a line that merely begins with a rule character counts as a rule** | `test_first_paragraph`, 3 cases — all three permissive: `- a bullet list item`, `--- not a rule ---`, `=> an arrow, not an underline` |
+| **a setext underline may merely *begin* with `-` or `=`** (`len(set(stripped)) == 1` dropped from `_is_underline`) | `test_first_paragraph`, 3 cases — all three permissive: `- a bullet list item`, `--- not a rule ---`, `=> an arrow, not an underline` |
+| **a thematic break may merely *begin* with a break character** (`len(set(condensed)) == 1` dropped from `_is_thematic_break`) | `test_first_paragraph`, 4 cases — all four permissive: `- a bullet list item`, `--- not a rule ---`, `* a bullet list item`, `*** not a break ***`. **These two rows were one row until round 5**, worded "a line that merely begins with a rule character counts as a rule" and counted at 3 — which is reproducible only from the underline half alone. The rule test has two halves and the wording named both, so the count was read off a mutant narrower than the sentence above it: the same species as the `"-*"`/`"-="` pair round 4 rewrote, and caught the same way. Both halves prefix-ified at once is a third mutant and kills 5; each half alone kills 3 and 4, which is what the two rows now report. |
 | **only dashes underline a heading** | `test_first_paragraph`, 3 cases — the `=` underlines |
 | a rule counts as prose | `test_first_paragraph`, 14 cases |
 | only the exact front-matter fence is kept out of a paragraph (`stripped != "---"` for the rule test) | `test_first_paragraph`, 12 cases |
-| a heading counts as prose | `test_first_paragraph`, 9 cases, plus `test_get_metadata_reads_the_readme` and `test_get_metadata_falls_back_when_the_readme_has_no_paragraph` |
+| a heading counts as prose | `test_first_paragraph`, 10 cases, plus `test_get_metadata_reads_the_readme` and `test_get_metadata_falls_back_when_the_readme_has_no_paragraph` — 9 until round 5 added `#1 priority is shipping.`, the heading test's permissive case, which this mutant publishes as a description |
 | **a title underlined by a rule is published as the description** (the setext lookahead dropped) | `test_first_paragraph`, 5 cases — `Text.\n---`, and a title underlined by `=====`, by `-----`, by `___` and by `***` |
 | **the setext lookahead is not scoped to the paragraph's first line** | `test_first_paragraph`, 2 cases — the permissive pair, `One\nTwo\n===` and `First line\nSecond line\n---`, whose second line is *not* a heading being underlined |
 | the setext lookahead reads the line itself rather than the next one | `test_first_paragraph`, 5 cases |
@@ -636,35 +790,52 @@ The app, the client, `serve` and the reference world:
 | `call` is written as `components/openenv.md` §5 sketches it | `test_the_client_drives_a_world_asynchronously` |
 | **the client's tool name is a keyword parameter again** (the `/` dropped from `call`) | `test_a_tool_argument_called_tool_is_callable_through_the_client` |
 | **only the outer `call` makes the tool name positional** (the `/` dropped from `_call_async`) | `test_a_tool_argument_called_tool_is_callable_through_the_client` |
-| the gate is sized *after* the app is built | `test_serve_sizes_the_gate_before_the_server_starts` |
+| the gate is sized *after* the server is started (the two statements of `serve`'s body swapped) | `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_with_a_concurrency_of_zero_removes_the_gate`, `test_serve_without_a_concurrency_uses_the_frameworks_default` (3 tests, re-run and read off the run in round 5; the row read "after the app is built" and named one test until then) |
 | `concurrency=0` is read as "no answer" rather than as zero | `test_serve_with_a_concurrency_of_zero_removes_the_gate` |
 | the server binds to loopback by default | `test_serve_runs_one_worker_on_an_app_object` |
 | the server is asked for more than one worker | `test_serve_runs_one_worker_on_an_app_object` |
 | the server logs nothing below critical | `test_serve_runs_one_worker_on_an_app_object` |
 | the reference world serves its control tools | world suite: `test_control_tools_are_not_served_by_this_worlds_app` |
 
-The gate accessor round 4 added to `seahaven/instances.py`, mutated in the same way even though the
-statement sweep's five files do not include it — an untested addition is an untested addition
-wherever it lands:
+The gate in `seahaven/instances.py` — the accessor round 4 added and the `_Gate` subclass round 5
+replaced its second variable with — mutated in the same way even though the statement sweep's five
+files do not include it: an untested addition is an untested addition wherever it lands, and a
+statement deletion in a file no sweep covers has to be made by hand. Each of the eight went in one
+at a time with the whole framework suite run to completion, so each row is every test that fails:
 
 | Mutation | Killed by |
 |---|---|
-| `set_concurrency` resizes the gate and does not record the new size | `test_the_gates_size_can_be_read_back`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_with_a_concurrency_of_zero_removes_the_gate` |
-| the accessor answers the framework default rather than the size that was set | `test_the_gates_size_can_be_read_back`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_with_a_concurrency_of_zero_removes_the_gate` |
-| **a refused resize records the size it refused** (the record moved above the guard) | `test_the_gates_size_can_be_read_back` |
+| the accessor answers the framework default rather than the gate's size | `test_the_gates_size_can_be_read_back`, `test_the_reported_size_travels_with_the_gate`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_with_a_concurrency_of_zero_removes_the_gate` (4 tests) |
+| **a removed gate is reported as the framework default rather than as `0`** | `test_the_gates_size_can_be_read_back`, `test_serve_with_a_concurrency_of_zero_removes_the_gate` (2 tests) |
+| **the gate publishes a size it was not built with** (`self.size = size + 1`) | `test_the_gates_size_can_be_read_back`, `test_the_reported_size_travels_with_the_gate`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_without_a_concurrency_uses_the_frameworks_default` (4 tests) |
+| **`0` builds a gate with no slots instead of removing the gate** | `test_concurrency_zero_removes_the_gate` (1 test) — Phase 3's own test, and the one that would hang rather than fail, which is why the harness counts a hung suite as a kill |
+| the gate is never sized (`super().__init__` dropped from `_Gate`) | 151 tests — every call that takes a gate, `AttributeError` out of `acquire` |
+| the gate does not publish its size (`self.size` dropped from `_Gate`) | 9 tests — seven of `test_serve.py`'s eight, every one whose fixture reads the size back (the zero-concurrency one does not: there is no gate to ask), plus `test_the_gates_size_can_be_read_back` and `test_the_reported_size_travels_with_the_gate`; `AttributeError` out of the accessor |
+| `set_concurrency` refuses nothing (the negative guard dropped) | `test_a_negative_concurrency_is_refused`, `test_the_gates_size_can_be_read_back` (2 tests) |
+| `set_concurrency` does not resize (the gate is left as it was) | `test_the_gates_size_can_be_read_back`, `test_serve_sizes_the_gate_before_the_server_starts`, `test_serve_with_a_concurrency_of_zero_removes_the_gate`, `test_the_gate_bounds_how_many_calls_run_at_once`, `test_the_gate_serialises_two_sessions` (5 tests) |
+
+Two of round 4's three rows are not in that table and cannot be: "a resize that does not record the
+new size" and "a refused resize records the size it refused" both mutate a record that no longer
+exists. That is the point of the change rather than a gap in the evidence — the mutant a design
+makes unwritable needs no test — and it is recorded here because a table that simply lost two rows
+would read as coverage going backwards.
 
 Some rows carry more than their own weight. The component document's own sketch of `call` is a
 mutation that **passes the synchronous test** and is killed only by the asynchronous one, which is the
 evidence that the deviation recorded above is load-bearing rather than a preference. Round 1's Major
 and round 2's Major both reappear here as mutants that parametrized cases now kill, where before
 each fix it was the code — and round 2's is the more interesting of the two, because the mutation
-*is* round 1's fix, so the row is a record that the second fix strictly contains the first. Three
+*is* round 1's fix, so the row is a record that the second fix strictly contains the first. Four
 rows are killed **only** by *permissive* cases, which is the other half of every boundary the rule
-set draws: "a line that merely begins with a rule character counts as a rule" dies on `- a bullet
-list item`, `--- not a rule ---` and `=> an arrow, not an underline`; "a break may be one character
+set draws: "a setext underline may merely begin with `-` or `=`" dies on `- a bullet
+list item`, `--- not a rule ---` and `=> an arrow, not an underline`; "a thematic break may merely
+begin with a break character" dies on the first two of those and on `* a bullet list item` and
+`*** not a break ***`; "a break may be one character
 long" dies on `**` and `* *`; and "the setext lookahead is not scoped to the paragraph's first line"
-dies on `One\nTwo\n===` and `First line\nSecond line\n---`. Seven cases, not one of which any
-*stricter* reading of a rule would catch. A rule set with only the restrictive half is the failure
+dies on `One\nTwo\n===` and `First line\nSecond line\n---`. Nine distinct cases, not one of which
+any *stricter* reading of a rule would catch — seven until round 5 split the first of those rows in
+two and the break half brought its own pair with it. A rule set with only the restrictive half is
+the failure
 mode `AGENTS.md` names, and it is the mirror of round 3's finding: `***` published as a description
 is the restrictive half missing a character, and `* *` eaten as furniture would be the permissive
 half missing a bound.
@@ -674,10 +845,10 @@ The three survivors:
 | Survivor | Why |
 |---|---|
 | the instance branch of `_listing` is dropped | The same equivalence as the two statement survivors above: both branches answer the same list, by a test that says so. |
-| front matter is skipped one line short (`return index` rather than `index + 1` at the closing fence) | The paragraph scan then starts *on* the closing `---`, and `_is_prose` refuses a bare rule, so the fence is skipped one line later and the paragraph is the same. A genuine equivalence rather than a gap: this branch returns only at a line that is a fence, and a fence is exactly what the scan already discards. Two independent rules cover this one line, and that redundancy is deliberate, because the rule test exists for a `---` anywhere in a document and not for this position. Checked rather than argued, and re-checked after round 3 changed the rule test: the mutant was compiled beside the real function and run over all fifty-four parametrized READMEs and over every document of up to five lines drawn from a twelve-element alphabet of lines — fences, an indented fence, blanks, a whitespace-only line, a key, a heading, prose, `===`, `___`, `***`, `* * *` and `**` — 54 and 271,453 documents, zero differences. |
+| front matter is skipped one line short (`return index` rather than `index + 1` at the closing fence) | The paragraph scan then starts *on* the closing `---`, and `_is_prose` refuses a bare rule, so the fence is skipped one line later and the paragraph is the same. A genuine equivalence rather than a gap: this branch returns only at a line that is a fence, and a fence is exactly what the scan already discards. Two independent rules cover this one line, and that redundancy is deliberate, because the rule test exists for a `---` anywhere in a document and not for this position. Checked rather than argued, and re-checked after round 3 changed the rule test: the mutant was compiled beside the real function and run over all the parametrized READMEs and over every document of up to five lines drawn from a twelve-element alphabet of lines — fences, an indented fence, blanks, a whitespace-only line, a key, a heading, prose, `===`, `___`, `***`, `* * *` and `**` — 54 and 271,453 documents, zero differences. Re-run over the fifty-five this round: 55 cases, zero differences, which follows from both the real function and the mutant answering all fifty-five exactly as the table expects. The 271,453 are round 4's and carry: `env.py`'s parse tree is identical across round 5's edit, so the two functions compared are the same two functions. |
 | the closing fence's index runs one past the end (`len(lines) + 1`) | **A vacuous mutant, recorded rather than quietly dropped.** The index is used as the start of `range(start, len(body))`, and that range is empty for every `start >= len(body)`, so `len(lines) + 1` and `len(lines)` cannot be told apart by any input — the same 271,453 documents differ on none. It was written to probe the end-of-file bound and probes nothing; `len(lines) - 1`, two rows above it in the same table, is the mutation that actually tests that bound, and two cases kill it. The lesson is the mutant's, not the code's: a mutation whose two sides are equal by the language's own semantics is not evidence about the tests. |
 
-One of the fifty-four `_first_paragraph` cases — a closing fence on the very last line, with nothing
+One of the fifty-five `_first_paragraph` cases — a closing fence on the very last line, with nothing
 after it — is worth naming for what it does *not* do. No mutation of `_after_front_matter`
 distinguishes it, because there is no document after the fence to get right or wrong. It is a bounds
 case: it says the index does not run off the end and the function does not raise, which is a
@@ -707,10 +878,14 @@ property no mutant in this set can express and which review round 1 was right to
   rule test as the two CommonMark rules it is, because "a run of one rule character" is exactly the
   shorthand that left `*` out.
 - **The README rules want their own module, and that is B16 rather than this diff.**
-  `_first_paragraph` and its five helpers are about 130 lines and a large share of `env.py`'s 106
+  `_first_paragraph` and its six helpers are about 130 lines and a large share of `env.py`'s 106
   statements — a small CommonMark reader inside the module whose job is the server side of the wire.
   Four review rounds found four defects and every one of them was in this block; none was in
-  `reset`, `step`, `state`, `close` or the client. `seahaven/openenv/readme.py` with its own suite is
+  `reset`, `step`, `state`, `close` or the client. Round 5 adds a fifth reason to move it and no
+  defect: the block carries the one rule here that leaves CommonMark by accident (a heading is any
+  line starting with `#`, where CommonMark wants a space after the run), recorded above and left
+  alone precisely because this is the block a phase should stop editing.
+  `seahaven/openenv/readme.py` with its own suite is
   the obvious shape, and the move is mechanical. It is filed because `components/openenv.md` §1
   names the subpackage's module list, so adding a module changes what a `status: complete` artifact
   describes — the same maintainer's call as B2, B7, B8 and B12. What this phase did instead is the
@@ -783,7 +958,13 @@ property no mutant in this set can express and which review round 1 was right to
   file is *untracked* in this phase, so `git checkout` could not have restored it, and a green run
   would have hidden it. Finishing with such a harness means waiting for it, then `git status` and a
   full suite — not reaching for a signal when it is slow. Filed as a project-wide method note in
-  `BACKLOG.md` as well, because it is not specific to this phase.
+  `BACKLOG.md` as well, because it is not specific to this phase. Round 5 ran the survivor
+  re-check the same way and met the same hazard from the other side: a status poll halfway through
+  showed `openenv/__init__.py` with its `__all__` replaced by `pass`, which is what a
+  correctly-running harness looks like from outside. The rule that makes that legible rather than
+  alarming is the one above — wait, then `git status` — plus one the harnesses now carry
+  themselves: after the last mutant, assert every file restored is byte-for-byte the file that was
+  read.
 - **A mutant's name is a claim about its replacement, and the harness does not check it.** The
   "pattern must match exactly once" rule catches a mutation that no longer applies. It says nothing
   about whether the replacement does what the row calls it, and round 4 found two that did not:
@@ -794,8 +975,21 @@ property no mutant in this set can express and which review round 1 was right to
   ones: they read as coverage of a rule that nothing is actually probing (here, `*` on its own), so
   the pair was rewritten and re-run. **The check that was missing is arithmetic against the table:
   a kill count has to be reachable from the cases that exist**, and "six documents in this table
-  contain a `_`" is a question anyone can ask of a fifty-four-row list. Two of the sixty-six rows
-  failed it.
+  contain a `_`" is a question anyone can ask of a fifty-five-row list. Two of that round's
+  sixty-six rows failed it.
+
+  **Round 5 found the fault's other shape, and arithmetic does not catch this one.** "A line that
+  merely begins with a rule character counts as a rule" was counted at 3, honestly, off a run of a
+  mutant that dropped one of the rule test's *two* halves. Nothing was mislabelled in the round-4
+  sense — the mutant existed, it died, the three cases really are its kill list — but the row's
+  wording named a property of both halves and the number underneath it measured one. The reachable-
+  count check passes on a row like that, because the cases it names do exist and do kill it. What
+  catches it is reading the row's sentence back against the *code* it claims to mutate and counting
+  the predicates: two conjuncts in `_is_underline`, three in `_is_thematic_break`, and a row whose
+  wording spans both needs either two rows or a mutant that touches both. Split into two rows, the
+  halves kill 3 and 4; applied together as one mutant, 5. The general form: **a row's wording is a
+  claim about the size of the mutant, and "the count is reachable" is a weaker check than "the
+  count is of what the sentence describes."**
 - **A regression test can stop testing the regression, and only the mutant will say so.** The six
   cases written for round 2's Major all still pass, all still describe real card shapes, and none of
   them fails on the defect any more. Rule 3 — the setext lookahead, added in the same round for an
@@ -833,7 +1027,11 @@ property no mutant in this set can express and which review round 1 was right to
   be testing. The general shape is worth keeping: **a harness that names code by position must
   assert the position still holds what it names**, and a mutation harness gets that assertion for
   free only if someone writes it. Corrected to line 39 and re-run in rounds 3 and 4: five mutants,
-  five killed, every one of them an `error[unresolved-reference]`.
+  five killed, every one of them an `error[unresolved-reference]`. Round 5 re-ran it again — five
+  mutants, five killed, diagnostics 1, 1, 10, 2, 1 and a clean baseline either side — from a
+  harness that matches its lines by *text* and aborts unless the pattern occurs exactly once, which
+  retires the failure mode rather than re-correcting it: addressing code by position was the defect,
+  and the line number it names is no longer a number.
 - **A bound that depends on a fact about the whole document cannot be evaluated before that fact is
   known.** Round 1's Major was a block skip with no end; the fix gave it two ends — a closing fence,
   or a blank line — and wrote them as one loop, which is where round 2 found it. Written that way
@@ -874,6 +1072,10 @@ property no mutant in this set can express and which review round 1 was right to
   this run and the two equivalence runs were repeated after round 4's renames — a rename should
   change nothing and the cheapest way to say so is to re-run rather than to reason — and the three
   numbers came back identical: 916,500 with zero violations, 54 and 271,453 with zero differences.
+  Round 5 did not repeat them and says so: its only edit to this code is a comment, and the two
+  parse trees compare equal, which is the same argument as re-running with the advantage of being a
+  proof rather than a sample. The fifty-five parametrized cases *were* re-run against both
+  equivalence mutants, because those the round's new case does touch: 55 and 55, zero differences.
   **Two attempts at the invariant were wrong before this one, in the same way, and both were caught
   by the checker firing on a correct answer.** The first asserted that no line *looking like*
   `title: Notes` may ever be published (82,264 violations), which is false for a document that

@@ -749,6 +749,20 @@ def test_the_gates_size_can_be_read_back() -> None:
     assert instances.concurrency() == 0, "a refused resize leaves the size alone"
 
 
+def test_the_reported_size_travels_with_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever gate is in place is the gate whose size is reported.
+
+    The size used to be recorded in a module-level variable of its own, which
+    `set_concurrency` wrote alongside the gate. Anything that put a gate in
+    place by another route -- a test substituting an instrumented one -- moved
+    the gate and not the record, and the accessor then described a gate that was
+    no longer there. `_Gate` carries its own size, so there is no second place
+    for it to be wrong; this asserts that rather than leaving it to the reading.
+    """
+    monkeypatch.setattr(instances, "_gate", instances._Gate(1))
+    assert instances.concurrency() == 1
+
+
 @pytest.fixture
 def temp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """A private system temporary directory, so the default working directory is testable."""
@@ -1562,12 +1576,17 @@ def test_a_call_queued_behind_the_gate_does_not_delay_a_destroy(
     release = threading.Event()
     arrivals = threading.Semaphore(0)
 
-    class WatchedGate(threading.BoundedSemaphore):
+    class WatchedGate(instances._Gate):
         """A one-slot gate that says when a caller has reached it.
 
         So the test waits for an arrival instead of for a duration: under the
         ordering this test is here to refuse -- the lock taken first and the gate
         second -- the arrival is the moment the lock is already held.
+
+        Subclasses the module's own gate rather than `BoundedSemaphore`, so the
+        substitute published by `instances.concurrency()` is the one that is
+        actually gating: the size travels with the semaphore and a test cannot
+        move one without the other.
         """
 
         def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:

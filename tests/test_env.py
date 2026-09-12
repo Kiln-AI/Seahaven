@@ -744,6 +744,16 @@ def test_get_metadata_survives_a_readme_that_is_a_directory(
         ("* *\n\nAfter two spaced asterisks.\n", "* *"),
         ("* a bullet list item\n", "* a bullet list item"),
         ("*** not a break ***\n", "*** not a break ***"),
+        # --- an ATX heading spelled without its space -----------------------
+        # The permissive half the heading rule does not have. CommonMark needs
+        # a space (or the end of the line) after the run of `#`, so `#1` starts
+        # a paragraph there and furniture here, and this README has no
+        # description at all rather than the sentence it opens with. Recorded
+        # rather than fixed, and pinned rather than left to be discovered:
+        # the cost is a fallback description (`get_metadata` answers `Seahaven
+        # world <name>`), never a wrong one, and widening the rule is a change
+        # to the block that produced every defect this phase's reviews found.
+        ("#1 priority is shipping.\n", ""),
     ],
 )
 def test_first_paragraph(readme: str, expected: str) -> None:

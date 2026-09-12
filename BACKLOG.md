@@ -458,11 +458,19 @@ followed by a heading. So the phrase has to be read as four rules, and Phase 6 w
   would start the paragraph;
 - a UTF-8 byte-order mark is decoded away, because `str.strip()` does not remove it.
 
+A sentence in §2 should also say what a heading is, because Seahaven's rule and CommonMark's differ
+by a space: any line starting with `#` is furniture here, while CommonMark's ATX heading needs a
+space (or the end of the line) after the run of `#`, so `#1 priority is shipping.` is a paragraph
+there and skipped here. The effect is a fallback description (`f"Seahaven world {name}"`) and never
+a wrong one, which is why Phase 6 recorded and pinned it rather than widening the rule — see that
+phase's plan. A reader of §2 should know it, since the deviation is conservative by luck rather than
+by design.
+
 Each rule exists because the naive reading published something worse than no description: the card's
 own YAML, a `---`, a `***`, or the world's title. Three review rounds were spent on two of the
 rules — round 1 on a block with no end, round 2 on a well-formed block with a blank line in it, and
 round 3 on `*`, the one thematic-break character the rule test did not name. The implementation and
-the reasoning are in `specs/projects/seahaven_framework/phase_plans/phase_6.md`; fifty-four
+the reasoning are in `specs/projects/seahaven_framework/phase_plans/phase_6.md`; fifty-five
 parametrized cases and just under a million generated documents pin them.
 
 Worth a sentence in the component document wherever §2 is next touched, because the next world
@@ -505,7 +513,7 @@ entry.
 **Found:** Phase 6 code review, round 4. **Owner:** unassigned. **Risk:** low as a defect, real as a
 maintenance shape — every defect this phase's reviews found was in this one block.
 
-`_first_paragraph` and its five helpers — `_after_front_matter`, `_is_rule`, `_is_underline`,
+`_first_paragraph` and its six helpers — `_after_front_matter`, `_is_rule`, `_is_underline`,
 `_is_thematic_break`, `_is_title_line`, `_is_prose` — are about 130 lines and a large share of
 `env.py`'s 106 statements. What they implement is a small CommonMark reader: front matter as a
 block, thematic breaks, setext underlines, a byte-order mark. What the module they live in is *for*
@@ -515,13 +523,16 @@ thirty lines of someone else's format.
 
 Four review rounds found four defects, and all four were in this block: an unbounded block skip
 (round 1), that fix regressing the well-formed case (round 2), `*` missing from the break set
-(round 3), and two miscounted kill rows for its own mutants (round 4). None of them was in `reset`,
+(round 3), and two miscounted kill rows for its own mutants (round 4). Round 5 found no defect in
+the code and two more faults in its record: a kill count read off a mutant narrower than the row
+describing it, and the block's one accidental deviation from CommonMark (a heading is any line
+starting with `#`) with neither a case nor a note — see B14. None of them was in `reset`,
 `step`, `state`, `close` or the client. That is not a coincidence about difficulty so much as about
 *locality*: the rules are the only part of this module that is a parser, and a parser wants its own
 file, its own suite and its own name.
 
 The move is small and mechanical — `seahaven/openenv/readme.py`, `_first_paragraph` re-exported or
-imported by `env.py`, and `tests/test_readme.py` taking the fifty-four parametrized cases with it.
+imported by `env.py`, and `tests/test_readme.py` taking the fifty-five parametrized cases with it.
 It is filed rather than done because `components/openenv.md` §1 names the subpackage's module list,
 so adding a module changes the surface a `status: complete` artifact describes. Same maintainer's
 call as B2, B7, B8 and B12, and worth pairing with whichever of those is answered first.

@@ -97,20 +97,35 @@ def default_concurrency() -> int:
     return min(os.process_cpu_count() or 4, 16)
 
 
-_concurrency: int = default_concurrency()
-_gate: threading.BoundedSemaphore | None = threading.BoundedSemaphore(_concurrency)
+class _Gate(threading.BoundedSemaphore):
+    """The process-wide gate: a bounded semaphore that publishes its own size.
+
+    `BoundedSemaphore` keeps the value it was built with in a private
+    `_initial_value` and offers no way to read it, which is why `concurrency()`
+    first recorded the size in a module-level variable beside the gate. Two
+    variables holding one fact is a fact that can drift: `set_concurrency` wrote
+    both, but anything else that replaced the gate -- a test substituting an
+    instrumented one, say -- moved one and left the other. One attribute set
+    where the semaphore is built leaves nothing to disagree.
+    """
+
+    def __init__(self, size: int) -> None:
+        super().__init__(size)
+        self.size = size
 
 
-def set_concurrency(concurrency: int) -> None:
+_gate: _Gate | None = _Gate(default_concurrency())
+
+
+def set_concurrency(size: int) -> None:
     """Resize the process-wide gate. `0` removes it; this is `serve --concurrency`.
 
     Calls already running are unaffected: each releases the gate it took.
     """
-    global _concurrency, _gate
-    if concurrency < 0:
-        raise WorldBug(f"concurrency must not be negative: {concurrency}")
-    _concurrency = concurrency
-    _gate = threading.BoundedSemaphore(concurrency) if concurrency else None
+    global _gate
+    if size < 0:
+        raise WorldBug(f"concurrency must not be negative: {size}")
+    _gate = _Gate(size) if size else None
 
 
 def concurrency() -> int:
@@ -119,11 +134,14 @@ def concurrency() -> int:
     The counterpart of `set_concurrency`, kept because there was no way to read
     the size back: a caller that wanted it had to reach for
     `instances._gate._initial_value`, which is one module's private name and one
-    standard-library class's private attribute in a single expression. Recorded
-    beside the gate rather than derived from it for that reason -- a
-    `BoundedSemaphore` does not publish the value it was built with.
+    standard-library class's private attribute in a single expression. The gate
+    publishes its size itself, so this reads the size where it lives rather than
+    a copy of it that a resize has to remember to update.
     """
-    return _concurrency
+    # Read once, as `gate()` does: a `set_concurrency` between the test and the
+    # attribute must not turn this into an `AttributeError` on `None`.
+    current = _gate
+    return current.size if current is not None else 0
 
 
 @contextmanager
