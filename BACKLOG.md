@@ -659,3 +659,46 @@ verified.
   `.venv`, so an installed-package finder resolved `seahaven` back to the real tree and a restored
   Critical "survived". A whole sweep at 0% kills is obvious. One survivor in a sweep that otherwise
   looks right is not, and that is the one this check catches.
+
+### B18. A world has no way to order rows by when they were written within one episode
+
+**Found:** Phase 10 implementation (code review, Moderate 3). **Owner:** unassigned. **Risk:** low
+per world, but it is the same problem in every world that has an activity feed.
+
+An instance's clock is frozen (`functional_spec.md` §11, and a progressing clock is a §24 non-goal),
+so every row an episode writes carries one `created_at`. A table whose rows are meant to be read in
+the order they happened therefore has no ordering key for the part of its contents the episode
+itself produced: `ORDER BY created_at` is not an order, and the usual tiebreak on a UUID primary key
+is stable but arbitrary.
+
+For a reader writing raw SQL the answer is `ORDER BY created_at, rowid`, which ProjectTracker's
+`AGENTS.md` gives for `issue_events`. For a *tool* it is not: a keyset cursor has to carry its
+tiebreaker as a value, and `rowid` is not a column a world projects. ProjectTracker's
+`list_comments` therefore documents the behaviour rather than fixing it, and
+`tools/comments.py` records why a per-table sequence column was not taken.
+
+The framework question is whether `Ctx` should offer a monotonic per-instance counter beside
+`ctx.ids` and `ctx.clock` — one that a world can store in a column and page on — or whether the
+right answer is that evals should grade on state and on changesets rather than on the order of an
+activity feed. Either way it is a decision for the framework, not for one world, and it should be
+settled before the docs phase describes activity tables as a pattern.
+
+### B19. A fixture generator cannot be pointed at a world, so testing one means monkeypatching
+
+**Found:** Phase 10 code review (Mild 6). **Owner:** unassigned. **Risk:** low; it costs every world
+a monkeypatch in its own fixture test.
+
+`seahaven fixture freeze --run module:function` calls a generator with a live instance, and the
+scaffolded `generate.py` gets that instance by importing the world package and calling
+`world.instance(...)` itself. The fixtures directory is therefore whatever the imported `World`
+object says, and a test that rebuilds the fixtures to compare them with the committed bytes cannot
+say "build them over here" — it has to reach into the singleton
+(`monkeypatch.setattr(world, "fixtures_dir", tmp_path)`), which is what
+`worlds/projecttracker/tests/test_fixtures.py` does.
+
+Nothing is broken: the CLI works, the recipe works, and the monkeypatch is contained. What is
+missing is a seam. Either the scaffold's `build()` should take the world (`build(fixture_id, *,
+world=...)`, defaulting to the package's), which is a template change and a docs sentence, or
+`Instance.freeze` should take a destination directory, which is a framework change. It was not taken
+in Phase 10 because it is the scaffold's shape as much as the framework's and belongs with the
+template work rather than inside one world's diff.

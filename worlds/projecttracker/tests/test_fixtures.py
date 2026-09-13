@@ -1,9 +1,10 @@
-"""The committed `empty` fixture: the artifact, and the recipe that made it.
+"""The three committed fixtures: the artifacts, their contents, and the recipe.
 
 A fixture is bytes in the repository, and bytes with no source are bytes nobody
-can change. Two things are asserted here: that the committed artifact is intact
-and is the one this world's schema belongs to, and that `fixtures_src/generate.py`
-still makes it, so the recipe cannot rot beside the file it produced.
+can change. Three things are asserted here: that each committed artifact is
+intact and is the one this world's schema belongs to, that what is inside it is
+what its description promises an eval author, and that `fixtures_src/generate.py`
+still makes it -- so the recipe cannot rot beside the files it produced.
 """
 
 import hashlib
@@ -21,7 +22,7 @@ import apsw
 import pytest
 
 import seahaven
-from conftest import FIXTURE_NOW
+from conftest import AGENCY, FIXTURE_NOW, SMALL_STARTUP
 from projecttracker.world import world
 
 # `load_all` and `verify` by their module, not through `seahaven`: a name a
@@ -37,6 +38,53 @@ from seahaven import fixtures as fixture_files
 # Where SQLite stamps the version that wrote a database file: a four-byte big
 # endian `SQLITE_VERSION_NUMBER` at offset 96 of the header.
 _VERSION_OFFSET = 96
+
+# `components/projecttracker.md` §4: every fixture of this world together fits in
+# ten megabytes. A fixture is copied on every instance creation and committed to
+# git; the budget is what keeps both cheap.
+_SIZE_BUDGET = 10 * 1024 * 1024
+
+# What each fixture holds, table by table -- all nine of them, including the trail
+# and the labels, which are what an eval reads and which no `Workspace` field
+# names. Written out rather than derived, because the point of the assertion is
+# that the numbers in the committed bytes are the numbers somebody chose. A
+# generator change that shifts one of them is meant to fail here and be looked
+# at, not to pass because the test recomputed it.
+_CONTENTS = {
+    "empty": {
+        "users": 0,
+        "teams": 0,
+        "team_members": 0,
+        "projects": 0,
+        "issues": 0,
+        "labels": 0,
+        "issue_labels": 0,
+        "comments": 0,
+        "issue_events": 0,
+    },
+    SMALL_STARTUP: {
+        "users": 3,
+        "teams": 1,
+        "team_members": 3,
+        "projects": 2,
+        "issues": 40,
+        "labels": 6,
+        "issue_labels": 62,
+        "comments": 60,
+        "issue_events": 144,
+    },
+    AGENCY: {
+        "users": 12,
+        "teams": 3,
+        "team_members": 16,
+        "projects": 9,
+        "issues": 600,
+        "labels": 30,
+        "issue_labels": 868,
+        "comments": 1500,
+        "issue_events": 3030,
+    },
+}
 
 
 def generate() -> Any:
@@ -90,38 +138,148 @@ def test_the_generator_is_reachable_by_the_module_path_its_docstring_names() -> 
             sys.path.remove(str(world_root))
 
 
-def test_the_world_has_exactly_one_fixture_and_it_is_empty() -> None:
-    assert [fixture.id for fixture in world.fixtures()] == ["empty"]
+def test_the_world_has_the_three_fixtures_the_component_document_names() -> None:
+    assert [fixture.id for fixture in world.fixtures()] == [AGENCY, "empty", SMALL_STARTUP]
 
 
-def test_the_fixture_describes_itself_to_whoever_writes_an_eval() -> None:
-    """The description is the whole of what a fixture tells an eval author."""
-    (fixture,) = world.fixtures()
-    assert fixture.description == (
-        "The tracker's schema with no rows. Start here to write a history, or to test setup flows."
-    )
+@pytest.mark.parametrize("fixture_id", ["empty", SMALL_STARTUP, AGENCY])
+def test_every_fixture_describes_itself_to_whoever_writes_an_eval(fixture_id: str) -> None:
+    """The description is the whole of what a fixture tells an eval author.
+
+    Prose about the data and what it is good for, not about the schema: an author
+    choosing between three fixtures reads these and nothing else.
+    """
+    fixture = _by_id()[fixture_id]
+    assert fixture.description == generate().DESCRIPTIONS[fixture_id]
+    assert len(fixture.description) > 60
     assert fixture.now == FIXTURE_NOW
     assert fixture.parent_id is None
 
 
-def test_the_committed_bytes_are_the_bytes_the_sidecar_records() -> None:
+@pytest.mark.parametrize("fixture_id", ["empty", SMALL_STARTUP, AGENCY])
+def test_the_committed_bytes_are_the_bytes_the_sidecar_records(fixture_id: str) -> None:
     """`file_sha256`, checked the way instance creation checks it."""
-    (fixture,) = world.fixtures()
+    fixture = _by_id()[fixture_id]
     fixture_files.verify(fixture)
     digest = hashlib.sha256(fixture.state_path.read_bytes()).hexdigest()
     assert digest == fixture.meta.file_sha256
 
 
-def test_the_fixture_was_frozen_from_this_worlds_schema() -> None:
+@pytest.mark.parametrize("fixture_id", ["empty", SMALL_STARTUP, AGENCY])
+def test_every_fixture_was_frozen_from_this_worlds_schema(fixture_id: str) -> None:
     """The conformance check instance creation makes, made here with a name on it.
 
-    A schema change without a regenerated fixture is the commonest way a world
+    A schema change without regenerated fixtures is the commonest way a world
     breaks, and the failure it causes otherwise is at the next `instance()`.
     """
-    (fixture,) = world.fixtures()
+    fixture = _by_id()[fixture_id]
     assert fixture.meta.schema_hash == world.schema_hash
     assert fixture.meta.world == world.name
     assert fixture.meta.world_version == world.version
+
+
+def test_the_three_fixtures_together_fit_the_size_budget() -> None:
+    """Ten megabytes for all of them, because each is copied per instance and committed."""
+    total = sum(fixture.state_path.stat().st_size for fixture in world.fixtures())
+    assert total < _SIZE_BUDGET, f"the fixtures are {total} bytes, over {_SIZE_BUDGET}"
+
+
+@pytest.mark.parametrize("fixture_id", ["empty", SMALL_STARTUP, AGENCY])
+def test_every_fixture_holds_what_its_description_promises(fixture_id: str) -> None:
+    """The counts, read out of the committed bytes rather than out of the generator."""
+    with world.instance(fixture_id) as instance:
+        db = instance.inspect()
+        for table, expected in _CONTENTS[fixture_id].items():
+            assert db.one(f"SELECT count(*) AS n FROM {table}") == {"n": expected}, table
+
+
+@pytest.mark.parametrize(("fixture_id", "span_days"), [(SMALL_STARTUP, 60), (AGENCY, 180)])
+def test_every_timestamp_is_inside_the_span_the_fixture_claims(
+    fixture_id: str, span_days: int
+) -> None:
+    """The invariant the generator asserts while building, asserted of the bytes.
+
+    A description that says "the last two months" has to be true of the rows, and
+    a due date is the one thing that may point forward -- up to forty-five days,
+    which is the tracker's horizon.
+    """
+    module = generate()
+    with world.instance(fixture_id) as instance:
+        db = instance.inspect()
+        floor = module._shift(instance.clock, span_days)
+        horizon = module._shift(instance.clock, -module.DUE_HORIZON_DAYS)
+        for table, column, ahead in module._TIMESTAMPS:
+            found = db.one(
+                f"SELECT min({column}) AS low, max({column}) AS high FROM {table}"
+                f" WHERE {column} IS NOT NULL"
+            )
+            assert found is not None
+            if found["low"] is None:
+                continue
+            assert floor <= found["low"], f"{table}.{column}"
+            assert found["high"] <= (horizon if ahead else FIXTURE_NOW), f"{table}.{column}"
+
+
+@pytest.mark.parametrize("fixture_id", [SMALL_STARTUP, AGENCY])
+def test_every_populated_fixture_has_something_overdue_and_a_trail_someone_else_wrote(
+    fixture_id: str,
+) -> None:
+    """Two things `agency`'s description promises by saying "reporting".
+
+    A tracker whose every due date is in the future has no answer to "what is
+    overdue", and one whose every event was acted by the issue's filer answers
+    "who moved the most issues to done" with "whoever filed them". Both are among
+    the first questions a reporting eval asks, and both were true of these bytes
+    once.
+    """
+    with world.instance(fixture_id) as instance:
+        db = instance.inspect()
+        overdue = db.one(
+            "SELECT count(*) AS n FROM issues WHERE due_at IS NOT NULL AND due_at < ?",
+            FIXTURE_NOW,
+        )
+        upcoming = db.one(
+            "SELECT count(*) AS n FROM issues WHERE due_at IS NOT NULL AND due_at >= ?",
+            FIXTURE_NOW,
+        )
+        assert overdue is not None and upcoming is not None
+        assert overdue["n"] > 0 and upcoming["n"] > 0
+        elsewhere = db.one(
+            "SELECT count(*) AS n FROM issue_events"
+            " JOIN issues ON issues.id = issue_events.issue_id"
+            " WHERE issue_events.kind <> 'comment' AND issue_events.actor_id <> issues.creator_id"
+        )
+        assert elsewhere is not None and elsewhere["n"] > 0
+
+
+@pytest.mark.parametrize("fixture_id", [SMALL_STARTUP, AGENCY])
+def test_every_row_of_a_fixture_belongs_where_it_says_it_does(fixture_id: str) -> None:
+    """The generator's own row-by-row check, made of the committed bytes.
+
+    Two kinds of claim, both of which the span check alone passes: nothing is
+    older than what it refers to -- these fixtures once had a third of their
+    issues filed by people who had not joined yet -- and nothing reaches across a
+    team, which is the boundary `agency` is sold on. Asserted here as well as in
+    the generator because the artifact is what evals are written against, and it
+    outlives the run that made it.
+    """
+    module = generate()
+    with world.instance(fixture_id) as instance:
+        db = instance.inspect()
+        for what, query in module._PARENTS:
+            found = db.one(query)
+            assert found is not None
+            assert found["n"] == 0, f"{fixture_id}: {found['n']} rows with {what}"
+
+
+@pytest.mark.parametrize("fixture_id", [SMALL_STARTUP, AGENCY])
+def test_every_populated_fixture_has_an_admin_for_the_viewer_to_be(fixture_id: str) -> None:
+    """ "Viewer is the admin" is a property of the hook, so the fixture needs one."""
+    with world.instance(fixture_id) as instance:
+        viewer = instance.ctx.state["viewer_id"]
+        assert instance.inspect().one("SELECT role FROM users WHERE id = ?", viewer) == {
+            "role": "admin"
+        }
 
 
 def test_the_state_file_carries_no_journal_or_lock_file_beside_it() -> None:
@@ -135,28 +293,46 @@ def test_the_state_file_carries_no_journal_or_lock_file_beside_it() -> None:
     fail in every clone. That is `BACKLOG.md` B9, because SH405 as specified
     reports the same thing.
     """
-    (fixture,) = world.fixtures()
-    assert not list(fixture.dir.glob("state.sqlite-*")), (
-        "a fixture is checkpointed and journal-free"
-    )
-    assert sorted(path.name for path in fixture.dir.iterdir()) == ["fixture.yaml", "state.sqlite"]
+    for fixture in world.fixtures():
+        assert not list(fixture.dir.glob("state.sqlite-*")), (
+            "a fixture is checkpointed and journal-free"
+        )
+        assert sorted(path.name for path in fixture.dir.iterdir()) == [
+            "fixture.yaml",
+            "state.sqlite",
+        ]
 
 
 @pytest.mark.seahaven(fixture="empty")
-def test_an_instance_of_the_fixture_starts_at_the_frozen_instant_with_no_rows(
+def test_an_instance_of_the_empty_fixture_starts_at_the_frozen_instant_with_no_rows(
     instance: seahaven.Instance,
 ) -> None:
     """The committed bytes, opened the way an eval opens them: through the marker."""
     assert instance.clock.iso() == FIXTURE_NOW
     assert instance.fixture == "empty"
-    assert instance.call("ping") == {"message": "pong", "now": FIXTURE_NOW, "users": 0}
+    assert instance.call("list_users") == {"users": [], "next_cursor": None, "has_next": False}
 
 
-def test_using_the_fixture_does_not_touch_the_committed_file() -> None:
+@pytest.mark.seahaven(fixture=SMALL_STARTUP)
+def test_an_instance_of_a_populated_fixture_is_the_tracker_the_description_promises(
+    instance: seahaven.Instance,
+) -> None:
+    """One read through the tools, which is how an eval meets a fixture."""
+    assert instance.clock.iso() == FIXTURE_NOW
+    issues = instance.call("list_issues", limit=250)["issues"]
+    assert len(issues) == 40
+    assert {issue["key"] for issue in issues} == {f"ENG-{n}" for n in range(1, 41)}
+    assert instance.call("get_issue", key="ENG-1")["project_id"] in {
+        project["id"] for project in instance.call("list_projects")["projects"]
+    }
+
+
+@pytest.mark.parametrize("fixture_id", ["empty", SMALL_STARTUP, AGENCY])
+def test_using_a_fixture_does_not_touch_the_committed_file(fixture_id: str) -> None:
     """A fixture is copied, never opened: writing to an instance cannot damage it."""
-    (fixture,) = world.fixtures()
+    fixture = _by_id()[fixture_id]
     before = fixture.state_path.read_bytes()
-    with world.instance("empty") as instance, instance.bulk() as ctx:
+    with world.instance(fixture_id) as instance, instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES ('u', 'a@b.invalid',"
             " 'A', 'admin', '2026-06-01T09:00:00.000Z')"
@@ -177,8 +353,8 @@ def rebuilt(
     into the repository from a test.
     """
     # Resolved before the redirect, because afterwards `world.fixtures()` is
-    # the rebuild. The `Fixture` holds absolute paths, so it stays readable.
-    (committed,) = world.fixtures()
+    # the rebuild. A `Fixture` holds absolute paths, so it stays readable.
+    committed = _by_id()
     module = generate()
 
     rebuilt_dir = tmp_path / "fixtures"
@@ -187,14 +363,16 @@ def rebuilt(
     assert module.main([]) == 0
 
     printed = capsys.readouterr()
-    assert f"froze empty at {FIXTURE_NOW}" in printed.out
+    for fixture_id in committed:
+        assert f"froze {fixture_id} at {FIXTURE_NOW}" in printed.out
 
-    (made,) = world.fixtures()
-    assert made.dir == rebuilt_dir / "empty"
+    made = _by_id()
+    assert sorted(made) == sorted(committed)
     return made, committed
 
 
-def test_the_generator_still_makes_the_fixture_that_is_committed(
+@pytest.mark.slow
+def test_the_generator_still_makes_the_fixtures_that_are_committed(
     rebuilt: tuple[Any, Any],
 ) -> None:
     """What the recipe makes today has the same schema, rows, clock and description.
@@ -203,17 +381,20 @@ def test_the_generator_still_makes_the_fixture_that_is_committed(
     The bytes are the test next door.
     """
     made, committed = rebuilt
-    assert made.meta.schema_hash == committed.meta.schema_hash
-    assert made.now == committed.now
-    assert made.description == committed.description
-    assert made.parent_id == committed.parent_id
-    assert _dump(made.state_path) == _dump(committed.state_path)
+    for fixture_id, fixture in committed.items():
+        rebuilt_fixture = made[fixture_id]
+        assert rebuilt_fixture.meta.schema_hash == fixture.meta.schema_hash
+        assert rebuilt_fixture.now == fixture.now
+        assert rebuilt_fixture.description == fixture.description
+        assert rebuilt_fixture.parent_id == fixture.parent_id
+        assert _dump(rebuilt_fixture.state_path) == _dump(fixture.state_path), fixture_id
 
 
-def test_the_generator_still_makes_the_committed_fixture_byte_for_byte(
+@pytest.mark.slow
+def test_the_generator_still_makes_the_committed_fixtures_byte_for_byte(
     rebuilt: tuple[Any, Any],
 ) -> None:
-    """And on the build that wrote the committed file, the same bytes.
+    """And on the build that wrote the committed files, the same bytes.
 
     `VACUUM INTO` is byte-reproducible on one build, and its output carries the
     version that made it in the header, so the comparison can ask rather than
@@ -223,19 +404,20 @@ def test_the_generator_still_makes_the_committed_fixture_byte_for_byte(
     what lets the content test above be reported as the pass it is.
     """
     made, committed = rebuilt
-    committed_bytes = committed.state_path.read_bytes()
-    wrote = _sqlite_version_of(committed_bytes)
-    if wrote != apsw.SQLITE_VERSION_NUMBER:
-        pytest.skip(
-            f"the committed fixture was written by SQLite {wrote}, "
-            f"not {apsw.SQLITE_VERSION_NUMBER}: bytes cannot be compared, and "
-            "test_the_generator_still_makes_the_fixture_that_is_committed "
-            "compares the content"
+    for fixture_id, fixture in committed.items():
+        committed_bytes = fixture.state_path.read_bytes()
+        wrote = _sqlite_version_of(committed_bytes)
+        if wrote != apsw.SQLITE_VERSION_NUMBER:
+            pytest.skip(
+                f"the committed fixtures were written by SQLite {wrote}, "
+                f"not {apsw.SQLITE_VERSION_NUMBER}: bytes cannot be compared, and "
+                "test_the_generator_still_makes_the_fixtures_that_are_committed "
+                "compares the content"
+            )
+        assert made[fixture_id].state_path.read_bytes() == committed_bytes, (
+            f"the generator no longer reproduces the committed {fixture_id}; "
+            "regenerate it and commit the new bytes"
         )
-    assert made.state_path.read_bytes() == committed_bytes, (
-        "the generator no longer reproduces the committed fixture; "
-        "regenerate it and commit the new bytes"
-    )
 
 
 def test_the_generator_run_as_a_script_refuses_to_overwrite_a_committed_fixture() -> None:
@@ -318,7 +500,7 @@ def test_the_generator_freezes_what_its_builder_wrote(
 ) -> None:
     """A builder's writes reach the frozen file. `empty`'s builder writes nothing.
 
-    That is the whole contract the fixtures of Phase 10 rest on, and `empty`
+    That is the whole contract the two populated fixtures rest on, and `empty`
     alone cannot show it: its builder is empty, so a `build` that never called
     the builder would produce exactly the same fixture. A builder that does
     write is registered here, taken through the same `build`, and the row is
@@ -347,18 +529,19 @@ def test_the_generator_freezes_what_its_builder_wrote(
     assert fixture.description == "One user, for a test."
     assert fixture.now == FIXTURE_NOW
     with world.instance("one_user") as instance:
-        assert instance.call("ping") == {"message": "pong", "now": FIXTURE_NOW, "users": 1}
+        (only,) = instance.call("list_users")["users"]
+        assert only["email"] == "founder@example.invalid"
 
 
 def test_the_generator_refuses_a_fixture_it_does_not_know(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The CLI is Phase 7's; until then `main` is how a fixture is built by hand."""
+    """`main` is what `python generate.py <id>` runs, and an id it has no builder for."""
     assert generate().main(["no_such_fixture"]) == 1
     printed = capsys.readouterr()
     assert printed.out == ""
     assert "no such fixture: no_such_fixture" in printed.err
-    assert "known fixtures: empty" in printed.err
+    assert f"known fixtures: {AGENCY}, empty, {SMALL_STARTUP}" in printed.err
 
 
 def _dump(state: Path) -> list[Any]:
@@ -374,15 +557,23 @@ def _dump(state: Path) -> list[Any]:
         schema = connection.execute(
             "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name"
         ).fetchall()
+        # Virtual tables are left out of the row comparison and only out of that:
+        # an FTS5 table has no `rowid` column to order by, and nothing of its own
+        # to compare -- the terms it holds live in the shadow tables beside it,
+        # which are ordinary tables and are compared like the rest.
         tables = [
             row[0]
             for row in connection.execute(
                 "SELECT name FROM sqlite_schema WHERE type = 'table'"
-                " AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                " AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL%' ORDER BY name"
             )
         ]
+        # Sorted in Python rather than by SQL, because two of FTS5's shadow
+        # tables are WITHOUT ROWID and have no `rowid` to order by, and their
+        # column names are the module's business. `repr` orders tuples that mix
+        # types and NULLs, which a plain sort refuses to.
         rows = [
-            (table, connection.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall())
+            (table, sorted(connection.execute(f"SELECT * FROM {table}").fetchall(), key=repr))
             for table in tables
         ]
         return [schema, rows]
@@ -393,3 +584,8 @@ def _dump(state: Path) -> list[Any]:
 def _sqlite_version_of(database: bytes) -> int:
     """The `SQLITE_VERSION_NUMBER` SQLite stamped into the file header."""
     return struct.unpack(">I", database[_VERSION_OFFSET : _VERSION_OFFSET + 4])[0]
+
+
+def _by_id() -> dict[str, Any]:
+    """The world's fixtures by id, which is how every test here names one."""
+    return {fixture.id: fixture for fixture in world.fixtures()}

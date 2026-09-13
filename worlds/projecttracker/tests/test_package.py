@@ -1,4 +1,4 @@
-"""The package as the tooling meets it: one world, one tool, one middleware.
+"""The package as the tooling meets it: one world, its tools, its middleware and its hook.
 
 The CLI, the pytest plugin and the OpenEnv app all find this world the same way
 -- import the package, read `world` off it -- so what that import produces is
@@ -18,7 +18,40 @@ import seahaven
 from conftest import BLANK_NOW
 from projecttracker import middleware, tools
 from projecttracker.middleware.error_handler import error_handler
+from projecttracker.startup import remember_viewer
 from projecttracker.world import world
+
+# The twenty-five tools `components/projecttracker.md` §3 names, plus the two
+# helper factories it registers beside them. Written out, because a count would
+# pass for a tool that was renamed and a set will not.
+WORLD_TOOLS = {
+    "create_user",
+    "get_user",
+    "list_users",
+    "create_team",
+    "get_team",
+    "list_teams",
+    "add_team_member",
+    "list_team_members",
+    "create_project",
+    "get_project",
+    "list_projects",
+    "update_project",
+    "create_label",
+    "list_labels",
+    "set_issue_labels",
+    "create_issue",
+    "get_issue",
+    "list_issues",
+    "update_issue",
+    "assign_issue",
+    "transition_issue",
+    "archive_issue",
+    "add_comment",
+    "list_comments",
+    "search_issues",
+}
+HELPERS = {"run_sql", "describe_schema"}
 
 # The table tests in the second half of this module drive an instance with no
 # fixture behind it; the package tests in the first half take none at all, and a
@@ -44,26 +77,46 @@ def test_the_world_is_named_and_versioned() -> None:
     assert world.version == "1.0.0"
 
 
-def test_the_schema_is_the_sql_files_on_disk() -> None:
+def test_the_schema_is_the_sql_files_on_disk_in_filename_order() -> None:
     """The DDL is `schema/*.sql` as written, and `World` proved it executes."""
     on_disk = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted((Path(projecttracker.__file__).parent / "schema").glob("*.sql"))
     )
     assert world.schema == on_disk
-    assert "CREATE TABLE users" in world.schema
+    # The core tables first and the index that reads them second: `002_search.sql`
+    # creates triggers on `issues`, which has to exist by then.
+    assert world.schema.index("CREATE TABLE issues") < world.schema.index(
+        "CREATE VIRTUAL TABLE issues_fts"
+    )
 
 
-def test_the_registry_holds_ping_and_the_two_control_tools() -> None:
-    """The control tools are on every world; `ping` is this world's whole registry."""
-    assert set(world.tools) == {"ping", "controller_run_sql", "controller_changes"}
+def test_the_registry_holds_every_tool_and_the_two_control_tools() -> None:
+    """The control tools are on every world; the rest is this world's whole surface."""
+    assert set(world.tools) == WORLD_TOOLS | HELPERS | {
+        "controller_run_sql",
+        "controller_changes",
+    }
 
 
-def test_the_tool_list_an_agent_sees_is_exactly_ping() -> None:
+def test_the_tool_list_an_agent_sees_is_the_twenty_five_and_the_two_helpers() -> None:
     with world.instance(None, now="2026-01-01T00:00:00.000Z") as instance:
         listing = instance.tools()
-    assert [tool["name"] for tool in listing] == ["ping"]
-    assert listing[0]["description"], "SH205: a tool with an empty description"
+    assert {tool["name"] for tool in listing} == WORLD_TOOLS | HELPERS
+    assert len(WORLD_TOOLS) == 25
+    for tool in listing:
+        assert tool["description"], f"SH205: {tool['name']} has an empty description"
+
+
+def test_the_startup_hook_is_registered_and_takes_the_reset_argument_it_documents() -> None:
+    """`reset(user_id=...)` reaches the hook because the hook named it, and only then.
+
+    `world.instance(..., anything_else=1)` is refused by the framework, so the
+    set of `reset` arguments this world takes is exactly what its hooks spell.
+    """
+    (hook,) = world.startup_hooks
+    assert hook.fn is remember_viewer
+    assert world.accepted_startup_kwargs == {"user_id"}
 
 
 def test_the_error_handler_is_registered_outermost() -> None:
@@ -83,14 +136,16 @@ def test_importing_the_package_is_what_registers_the_tools_and_the_middleware() 
     program = (
         "import json, projecttracker as p; "
         "print(json.dumps({'tools': sorted(p.world.tools), "
-        "'middlewares': [m.__name__ for m in p.world.middlewares]}))"
+        "'middlewares': [m.__name__ for m in p.world.middlewares], "
+        "'hooks': [h.fn.__name__ for h in p.world.startup_hooks]}))"
     )
     done = subprocess.run(
         [sys.executable, "-c", program], capture_output=True, text=True, check=True
     )
     registered = json.loads(done.stdout)
-    assert "ping" in registered["tools"]
+    assert set(registered["tools"]) >= WORLD_TOOLS
     assert registered["middlewares"] == ["error_handler"]
+    assert registered["hooks"] == ["remember_viewer"]
 
 
 def test_every_module_under_tools_and_middleware_is_imported_by_the_package() -> None:
@@ -127,7 +182,7 @@ def test_the_users_table_accepts_the_three_roles(instance: seahaven.Instance, ro
             role,
             ctx.clock.iso(),
         )
-    assert instance.call("ping")["users"] == 1
+    assert len(instance.call("list_users")["users"]) == 1
 
 
 def test_the_users_table_refuses_a_role_that_is_not_one_of_the_three(

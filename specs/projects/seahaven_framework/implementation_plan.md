@@ -41,7 +41,7 @@ specs; nothing here restates them.
 - [x] **Phase 9: the XML-RPC example extension.** A separate package in the repository proving the
       extension contract (`functional_spec.md` §21): tool factory, fault-mapping middleware, tests
       on a copy of ProjectTracker.
-- [ ] **Phase 10: ProjectTracker, in full.** `components/projecttracker.md`: the schema, errors,
+- [x] **Phase 10: ProjectTracker, in full.** `components/projecttracker.md`: the schema, errors,
       the 25 world tools and the two helpers, the fixture generator and the three fixtures, tests on
       the plugin. The first real consumer of everything before it; API friction found here is fixed
       in the framework, not worked around in the world.
