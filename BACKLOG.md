@@ -42,31 +42,10 @@ equivalent mutants in the style the phase plans use: `db.py:245` `conn.set_busy_
 The hardening is believed correct — it is unproven, not broken. If any of it turns out to be
 actually broken, that is a finding to report, not to quietly fix.
 
-### B3. Working directories from the bare-`<pid>` layout are never swept
-
-**Found:** Phase 3 code review, round 5. **Owner:** unassigned. **Risk:** low — a disk leak, no
-correctness or security consequence.
-
-Phase 3 round 4 changed the default working directory from `<tempdir>/seahaven-<uid>/<pid>/` to
-`<tempdir>/seahaven-<uid>/<pid namespace>-<pid>/`, because `os.kill(pid, 0)` answers in the
-caller's pid namespace and two containers sharing a `<tempdir>` were sweeping each other's live
-instances.
-
-`instances.py:_pid_of` matches a directory name only when it starts with this namespace's prefix, so
-on a machine where procfs exists a directory left by an earlier build — a bare `999999/` — returns
-`None` and is stepped over. Nothing else removes it either: the sweep is the only thing that ever
-deletes a working directory it did not create. Verified: a bare-numeric directory is still PRESENT
-after a sweep. The behaviour is deliberate and safe (an unprefixed name cannot be judged against
-this namespace's pids), but it silently leaks disk for anyone who ran an earlier build.
-
-A fix would sweep a bare-numeric sibling too, but only where the name can be judged safely: where
-`/proc/self/ns/pid` is unreadable the prefix is empty and bare names *are* this layout, so the
-condition is "procfs exists, the name is bare numeric, and the pid is not alive" — which is exactly
-the cross-namespace hazard the prefix was added to remove, and is therefore a decision about a
-one-off migration, not a rule to add to the sweep. A one-shot cleanup at the root, or documented
-`rm -rf`, is the likelier answer.
-
 ### B4. `world.name` is an unvalidated path component
+
+**Decision (2026-09-13, maintainer): fix.** `World.__init__` must refuse a name that is not a
+single path segment.
 
 **Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — not attacker
 reachable; a world's name is written by the world's author and never arrives off the wire.
@@ -94,6 +73,9 @@ up in more than a path (a log line, a sidecar, a URL in Phase 6/7), so the rule 
 name is accepted.
 
 ### B5. The default working root is created `0o777` and only then tightened
+
+**Decision (2026-09-13, maintainer): fix.** Pass `mode=0o700` to the `mkdir` so the ceiling is
+`0o700` for the window, keeping the `fchmod` and extending its docstring to say both are used.
 
 **Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — hardening, not a
 hole; every consequence of winning the window is refused by something else.
@@ -357,6 +339,10 @@ template work rather than inside one world's diff.
 
 ### B20. The concurrency gate starves a caller whenever it binds
 
+**Decision (2026-09-13, maintainer): leave the behaviour; do not replace the semaphore.** Record it
+as a possible enhancement in one comment line where the `BoundedSemaphore` is created — one line, not
+a treatise. The entry stays open as the full account.
+
 **Found:** Phase 11, the gate sweep (`bench/results/latest.md` §4). **Owner:** unassigned.
 **Risk:** real under load; no call is lost, but a session can wait seconds for a slot while
 others are served thousands of times.
@@ -399,6 +385,11 @@ defect rather than a defect of every serving process, which is worth establishin
 how much to spend on it.
 
 ### B23. A world has no way to order rows by when they were written within one episode
+
+**Decision (2026-09-13, maintainer): defer, and do not solve it with a column.** A per-table
+sequence number is a client-side workaround for a static clock. The right fix is to the clock — a
+monotonic option, or similar — which is a design question and not a backlog item. The entry stays
+open as the record of the problem, not of the proposed workaround.
 
 **Found:** Phase 10 implementation (code review, Moderate 3). **Owner:** unassigned. **Risk:** low
 per world, but it is the same problem in every world that has an activity feed.
