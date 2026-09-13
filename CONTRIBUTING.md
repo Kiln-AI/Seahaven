@@ -5,10 +5,10 @@ and what to run. It is deliberately not a welcome mat: the project is early, and
 contributor would want made have not been made — starting with whether there is a licence to
 contribute under.
 
-The checkout itself is in good shape, and that is a recent change: everything below was measured on
-CPython 3.14.0, in an environment built by the `uv sync` line this file gives you, with nothing
-patched in it. The one thing that will waste your afternoon is being on a 3.14 *release candidate*
-instead, which is why the setup section makes you check.
+The checkout itself is in good shape, and that is a recent change: everything below was checked on
+a final CPython 3.14, in an environment built by the `uv sync` line this file gives you, with
+nothing patched in it. The one thing that will waste your afternoon is being on a 3.14 *release
+candidate* instead, which is why the setup section makes you check.
 
 ## Before anything: the state of the project
 
@@ -22,13 +22,14 @@ instead, which is why the setup section makes you check.
 - **Nothing is published.** The `seahaven` name on PyPI holds a placeholder release that contains
   none of this code, ProjectTracker is not on a hub, and `pip install seahaven` therefore succeeds
   and installs a stub rather than failing. Install from a checkout. `README.md` has the detail, and
-  `BACKLOG.md` B22 has the three places that still print the wrong advice.
+  `BACKLOG.md` B22 has the places that still print the wrong advice.
 - **The API moves.** Phases 1–12 built the framework and names moved between them. Nothing is
   deprecated, because nothing is stable enough to deprecate.
 - **Do not add a licence file, publish a package, or publish the reference world to a hub.**
   `AGENTS.md` names those three and gates them on explicit maintainer sign-off. A version bump is
   not named there, and is refused here as part of publication rather than on its own authority:
-  `version = "0.0.1"` is what the PyPI placeholder holds, and changing it is a release decision.
+  the version in `pyproject.toml` is what the PyPI placeholder holds, and changing it is a release
+  decision.
 
 ## How this repository is developed
 
@@ -57,9 +58,9 @@ of the failure mode four of its five review rounds turned up: a plausible senten
 code's shape rather than from a run.
 
 **Review is adversarial and runs in rounds until a round is clean.** Findings are rated Critical,
-Moderate and Mild, and a reviewer reproduces a claim rather than reading it. Tests are mutation-swept
-— `BACKLOG.md` B1 is the residue of a sweep of 912 statements across three phases — so a test that
-still passes when the line beneath it is deleted counts as no test.
+Moderate and Mild, and a reviewer reproduces a claim rather than reading it. Tests are
+mutation-swept — `BACKLOG.md` B1 is the residue of one such sweep — so a test that still passes
+when the line beneath it is deleted counts as no test.
 
 If you are an agent working in this repository, `AGENTS.md` is your brief and this file is context
 for it, not a replacement.
@@ -85,7 +86,7 @@ currently under review. Those are the plan's job and the review's job respective
 
 A **final** Python 3.14 or newer, and [uv](https://docs.astral.sh/uv/). Older interpreters are not
 supported, and not in the sense that they are merely untested: `requires-python` is `>=3.14`, and
-five modules use PEP 758's unparenthesized `except A, B:`, so they do not parse on 3.13 at all.
+several modules use PEP 758's unparenthesized `except A, B:`, so they do not parse on 3.13 at all.
 
 ```sh
 uv self update                 # or upgrade uv however you installed it: pip, Homebrew, a distro
@@ -96,24 +97,24 @@ uv sync --extra serve
 uv run python -V
 ```
 
-That last line has to print `3.14.0` or higher with no `rc` in it, and it is a check you make by
-hand because **nothing in the project metadata makes it for you**: uv matches an interpreter against
-`requires-python` ignoring the pre-release segment, so `uv sync --frozen --extra serve` onto
-`3.14.0rc2` succeeds here with no warning and exit 0. The constraint is live — the same uv refuses
-3.14.0 for a project asking `>=3.15` — it just does not read an rc as out of range.
+That last line has to print a final 3.14 or higher with no `rc` in it, and it is a check you make
+by hand because **nothing in the project metadata makes it for you**: uv matches an interpreter
+against `requires-python` ignoring the pre-release segment, so `uv sync --frozen --extra serve` onto
+a 3.14 release candidate succeeds here with no warning and exit 0. The constraint is live — the
+same uv refuses a final 3.14 for a project asking `>=3.15` — it just does not read an rc as out of
+range.
 
 `uv self update` is the first line for a related reason: uv installs only a Python it knows about,
-and an older one settles for the newest release candidate in its list. uv 0.8.17's download list
-has `cpython-3.14.0rc2` and no final 3.14 at all; 0.9.7's has `cpython-3.14.0`. The next section is
-what an rc costs you.
+and an older one settles for the newest release candidate in its list. A uv released before the
+final 3.14 was has only the release candidates to offer, and `uv python install 3.14` on it hands
+you one without comment. The next section is what an rc costs you.
 
 `uv sync --extra serve` gives you the framework, the reference world and the example extension as
 workspace members, pytest, ruff and ty from the `dev` dependency group, and OpenEnv, which
 `src/seahaven/openenv/` and its tests need. `.github/workflows/ci.yml` installs the same thing with
 `--locked`, and on a final 3.14 it simply works: the locked closure imports and the whole suite
 runs, with nothing patched anywhere. Sync without the extra and you still get a checkout that
-runs — the OpenEnv test modules guard with `pytest.importorskip` and skip rather than fail, at
-`962 passed, 5 skipped` for the framework suite and `252 passed, 1 skipped` for the world — but
+runs — the OpenEnv test modules guard with `pytest.importorskip` and skip rather than fail — but
 `seahaven serve`, the environment and the client are then tested nowhere, so use the extra. That
 skip is quiet, which is why CI asserts the import on its own line; see "The checks".
 
@@ -126,16 +127,13 @@ uv run pytest worlds/projecttracker        # the reference world
 uv run pytest extensions/seahaven-xmlrpc   # the example extension
 ```
 
-Those command lines, in a checkout synced as above, are what produced these:
+All three pass, with no skips, in a checkout synced as above; the framework suite is the long one,
+at under a minute, and the other two take seconds. Exact counts and timings are deliberately not
+quoted here: they change with every phase, and a stale number in this file would be one more thing
+to distrust. The pytest summary line of a run on your own checkout is the current figure.
 
-| Suite | Result |
-|---|---|
-| framework | `1093 passed` in ~45 s |
-| reference world | `261 passed` in ~16 s |
-| example extension | `75 passed` in ~1 s |
-
-One test carries the `slow` marker (the 500-session smoke test in `tests/test_server.py`);
-`uv run pytest -m "not slow"` deselects it and gives `1092 passed, 1 deselected`. The saving varies
+The framework suite's longest tests carry the `slow` marker (the server smoke test in
+`tests/test_server.py` among them); `uv run pytest -m "not slow"` deselects them. The saving varies
 enough between runs to not be worth quoting.
 
 ## Why the interpreter check is worth the minute
@@ -144,12 +142,12 @@ A 3.14 release candidate fails in ways that look like library bugs and are not, 
 expensive afternoon if you meet them without knowing. Both of the following were reproduced on
 `cpython-3.14.0rc2` and neither happens on 3.14.0 final.
 
-**The failure you will actually meet is `pydantic`.** The locked 2.13.5 cannot evaluate this
+**The failure you will actually meet is `pydantic`.** The locked version cannot evaluate this
 project's forward references on rc2, so `import seahaven` itself raises — and that is before any
 extra, so every suite gives you nothing at all rather than a few failures:
 
 ```
-File ".../pydantic/_internal/_typing_extra.py", line 481, in eval_type_backport
+File ".../pydantic/_internal/_typing_extra.py", in eval_type_backport
     assert isinstance(value, typing.ForwardRef)
 AssertionError
 ```
@@ -157,20 +155,20 @@ AssertionError
 **Underneath it there is a second one, which you have to go looking for.**
 `collections.abc.ByteString` was removed in 3.14.0rc2 and restored before 3.14.0 final —
 `hasattr(collections.abc, "ByteString")` is `False` on the first and `True` on the second — and
-the locked `beartype` 0.22.9 imports that name unguarded. `import beartype.typing` is what
+the locked `beartype` imports that name unguarded. `import beartype.typing` is what
 produces it, and `beartype.typing` is on the `serve` extra's import path, reached from
 `from fastmcp import Client` in `openenv/core/env_server/mcp_environment.py`. Importing the extra
 on an rc does not get you this traceback, though, because pydantic stops you first:
 
 ```
-File ".../beartype/typing/__init__.py", line 306, in <module>
+File ".../beartype/typing/__init__.py", in <module>
     from collections.abc import ByteString as ByteString  # type: ignore[attr-defined]
 ImportError: cannot import name 'ByteString' from 'collections.abc'
 ```
 
 Neither is a defect in Seahaven or in `uv.lock`, and neither wants a workaround here: both of those
-versions are the ones the lock already holds, and both are green on 3.14.0. What they want is a
-final interpreter, which nothing but the check at the top of the previous section will get you.
+versions are the ones the lock already holds, and both are green on a final 3.14. What they want is
+a final interpreter, which nothing but the check at the top of the previous section will get you.
 
 ## The checks
 
@@ -188,7 +186,7 @@ uv run pytest extensions/seahaven-xmlrpc
 uv run python scripts/check_licences.py
 ```
 
-Notes on four of them:
+Notes on some of them:
 
 - **`uv run python -c "import seahaven.openenv"` is there because a skip is quiet.** The OpenEnv
   test modules guard with `pytest.importorskip`, which is right when the extra is not installed and
@@ -197,7 +195,8 @@ Notes on four of them:
   out loud.
 - **`ruff format` reaches Markdown.** Python blocks inside `.md` files are formatted like any other
   Python, so a code block in a doc page, in `README.md` or in this file is subject to the format
-  check. Line length is 100, and the lint rule set is `E, F, I, UP, B, SIM, RUF`.
+  check. The line length and the lint rule set are the ones `pyproject.toml` declares under
+  `[tool.ruff]`.
 - **`ty check` covers `src`, `tests`, `scripts`, `worlds`, `extensions` and `bench`.** Everything is
   typed, tests included.
 - **`scripts/check_licences.py` checks everything Seahaven ships** — what `pip install seahaven`
@@ -229,7 +228,7 @@ From `AGENTS.md`, with what each one means in practice:
 
 - **Python 3.14+, fully typed.** Annotations on every definition, in the tests too. `ty` is the
   checker.
-- **`ty`, `ruff` and the tests are clean before any commit.** All eight commands above.
+- **`ty`, `ruff` and the tests are clean before any commit.** Every command in the list above.
 - **Runtime dependencies are permissive only** (MIT, Apache-2.0, BSD-class), and CI checks. Adding
   one means the licence gate has to still pass, and the bar for adding one at all is high: Seahaven
   is vendored into other people's products.
@@ -257,9 +256,9 @@ From `AGENTS.md`, with what each one means in practice:
    change it in the same diff and say why, rather than leaving code and spec disagreeing.
 4. **Write the tests with the code**, and reuse the helpers that are there — `tests/conftest.py`,
    `tests/worlds/` and each package's own conftest.
-5. **Run all eight checks** before you commit, and say in the pull request which of them you ran and
-   on what interpreter — the exact `uv run python -V`, not "3.14". If anything was skipped rather
-   than run, say what and why.
+5. **Run every check in the list** before you commit, and say in the pull request which of them
+   you ran and on what interpreter — the exact `uv run python -V`, not "3.14". If anything was
+   skipped rather than run, say what and why.
 6. **Write the commit message for the unit**, the way `git log` already does: what changed and what
    it was for, not a file list.
 

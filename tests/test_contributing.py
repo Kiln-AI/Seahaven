@@ -12,8 +12,10 @@ pytest worlds/projecttracker`, so a guide that had stopped telling anyone to run
 the framework suite would still have passed a containment check.
 
 Its prose is not checked, and cannot be. What the guide says about the state of
-the project -- its interpreter requirement and its suite counts included -- was
-verified by running it on CPython 3.14.0 against the committed lock.
+the project -- its interpreter requirement included -- was verified by running it
+on a final CPython 3.14 against the committed lock. It quotes no suite counts,
+timings or pinned versions on purpose: those drift with every phase, and the lock
+and the pytest summary line are where the current figures live.
 
 Nothing here fails when the suite runs against an installed wheel rather than a
 checkout, which is where neither file exists: the readers return nothing and the
