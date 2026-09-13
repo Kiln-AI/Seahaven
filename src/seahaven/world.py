@@ -1,0 +1,727 @@
+"""The `World`: a name, a schema, and everything registered against them.
+
+One `World` per world package, built at import time in the package's `world.py`,
+and the object every tool module imports to register against. It owns the tool
+registry, the middleware list and the startup hooks, and it is where a mistake in
+any of them is found: registration validates immediately and fails with a
+`WorldBug` naming what is wrong.
+
+Registration is open for the life of the world. The registry and the middleware
+chain are read at call time, so a tool or a middleware registered after instances
+exist applies to them from their next call. Import-time registration is the
+convention the scaffold encourages, not a rule enforced here; registering while
+calls are in flight is unsupported.
+"""
+
+import hashlib
+import importlib
+import importlib.resources
+import inspect
+import re
+import sys
+import threading
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from importlib.resources.abc import Traversable
+from importlib.resources.readers import MultiplexedPath
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+import apsw
+
+from seahaven import control
+from seahaven.call import Handler, Middleware, build_chain, invoke
+from seahaven.ctx import Ctx
+from seahaven.db import build_blank
+from seahaven.errors import WorldBug
+from seahaven.fixtures import Fixture, load_all
+from seahaven.instances import Instance, InstanceManager
+from seahaven.tool import Tool
+
+__all__ = [
+    "CONTROL_TOOL_NAMES",
+    "DDL_DOES_NOT_EXECUTE",
+    "RESERVED_TOOL_NAMES",
+    "Handler",
+    "Middleware",
+    "RegisteredStartupHook",
+    "StartupHook",
+    "World",
+    "sql_files",
+]
+
+# `Handler` and `Middleware` are defined where the chain is built, in `call.py`,
+# and re-exported here: `components/world_and_dispatch.md` §1 lists all three
+# aliases with the `World` they describe, and this is where a world author looks
+# for the shape its middleware has to have.
+type StartupHook = Callable[..., None]
+
+# Reserved by OpenEnv: `reset`, `step`, `state` and `close` are the environment's
+# own verbs, and a tool by one of those names could not be called over the wire.
+RESERVED_TOOL_NAMES = frozenset({"close", "reset", "state", "step"})
+
+# The framework's own tools (`control.py`). They are registered on every world,
+# bypass the chain and are never listed; a world registering either name is
+# refused whether or not they are registered yet.
+CONTROL_TOOL_NAMES = frozenset({"controller_changes", "controller_run_sql"})
+
+# `reset`'s own arguments, which a startup hook therefore cannot take.
+RESET_ARGUMENTS = frozenset({"fixture", "now", "seed"})
+
+FIXTURES_DIRNAME = "fixtures"
+SQL_SUFFIX = ".sql"
+
+# What `_prove_the_ddl_executes` says when SQLite refuses a world's schema. Named
+# here because `seahaven check` has to tell that failure from every other
+# `SeahavenError` an import can raise -- the first is SH104, the rest are SH501 --
+# and it should read the framework's own constant rather than match a sentence it
+# does not own.
+DDL_DOES_NOT_EXECUTE = "has DDL that does not execute"
+
+_POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+_WHITESPACE = re.compile(r"\s+")
+# Both separators, always: a world is spelled once and read on every platform.
+_SEPARATOR = re.compile(r"[/\\]")
+
+
+@dataclass(frozen=True)
+class RegisteredStartupHook:
+    """A startup hook and the keyword arguments it accepts.
+
+    Callable, so `world.startup_hooks` is a sequence of hooks rather than a
+    sequence of records about them; `accepts` and `takes_var_kwargs` are what
+    instance creation reads to give each hook the `reset` arguments it asked for
+    and no others.
+    """
+
+    fn: StartupHook
+    accepts: frozenset[str]
+    takes_var_kwargs: bool
+
+    def __call__(self, ctx: Ctx, **kwargs: Any) -> None:
+        self.fn(ctx, **kwargs)
+
+
+class World:
+    """A world: its identity, its schema, and what is registered against it."""
+
+    def __init__(
+        self,
+        name: str,
+        version: str,
+        schema: str,
+        *,
+        description: str | None = None,
+        fixtures_dir: Path | str | None = None,
+        work_dir: Path | str | None = None,
+        untracked_tables: Sequence[str] = (),
+    ) -> None:
+        _check_name(name)
+        self.name = name
+        self.version = version
+        self.schema = schema
+        self.schema_hash = _schema_hash(schema)
+        _prove_the_ddl_executes(name, schema)
+        # The one-line description the OpenEnv metadata publishes, and nothing
+        # else reads it. A free string, deliberately unvalidated: unlike `name`
+        # it never becomes a path, a filename or an identifier, so there is
+        # nothing for a rule to protect. `None` -- and, at publication, a string
+        # that is blank -- means the fallback, `Seahaven world <name>`.
+        self.description = description
+        self.fixtures_dir = (
+            Path(fixtures_dir)
+            if fixtures_dir is not None
+            # The module that called `World(...)`, which is where the world
+            # package is, and the only thing the derivation has to go on.
+            else _derive_fixtures_dir(sys._getframe(1).f_globals.get("__file__"))
+        )
+        # `None` means the default: a per-process directory under the system
+        # temporary directory, resolved when the first instance is made. A
+        # directory given here is the caller's and is never swept.
+        self.work_dir = Path(work_dir) if work_dir is not None else None
+        self.untracked_tables = tuple(untracked_tables)
+        self._tools: dict[str, Tool] = {}
+        self._middlewares: list[Middleware] = []
+        self._startup_hooks: list[RegisteredStartupHook] = []
+        self.chain: Handler = build_chain((), invoke)
+        # Made on the first instance, not here: a world that is only imported --
+        # to be linted, to have its tools listed, to be scaffolded against --
+        # never touches the working directory at all.
+        self._manager: InstanceManager | None = None
+        self._manager_lock = threading.Lock()
+        # The framework's own two tools, on every world and before anything the
+        # world registers: `Instance.call` reaches them through the registry like
+        # any tool, `Instance.tools()` filters them out of the listing, and a
+        # world that registers either name is refused by `_add`.
+        for tool in control.TOOLS:
+            self._add(tool)
+
+    @property
+    def tools(self) -> Mapping[str, Tool]:
+        """The registry, in registration order. Read-only: register through `tool`."""
+        return MappingProxyType(self._tools)
+
+    @property
+    def middlewares(self) -> Sequence[Middleware]:
+        """The middleware, outermost first."""
+        return tuple(self._middlewares)
+
+    @property
+    def startup_hooks(self) -> Sequence[RegisteredStartupHook]:
+        """The startup hooks, in registration order."""
+        return tuple(self._startup_hooks)
+
+    @property
+    def accepted_startup_kwargs(self) -> frozenset[str]:
+        """Every keyword argument some startup hook names.
+
+        A hook taking `**kwargs` accepts anything, and instance creation checks
+        `takes_var_kwargs` for that; this set is the named ones only.
+        """
+        return frozenset().union(*(hook.accepts for hook in self._startup_hooks))
+
+    def tool(
+        self,
+        obj: Callable[..., Any] | Tool | None = None,
+        /,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        transaction: bool | None = None,
+    ) -> Any:
+        """Register a tool, as a decorator or as a call.
+
+        `transaction` defaults to `True`; it is spelled `None` here so that a
+        `Tool` from a factory, which decided its own, can tell an option that was
+        passed from one that was not.
+        """
+        if obj is None:
+            return lambda fn: self._register_tool(
+                fn, name=name, description=description, transaction=transaction
+            )
+        return self._register_tool(obj, name=name, description=description, transaction=transaction)
+
+    def middleware(self, obj: Middleware | None = None, /) -> Any:
+        """Register a middleware, as a decorator or as a call. Order is outermost first."""
+        if obj is None:
+            return self._register_middleware
+        return self._register_middleware(obj)
+
+    def instance_startup(self, obj: StartupHook | None = None, /) -> Any:
+        """Register a hook run once per instance, before its first call."""
+        if obj is None:
+            return self._register_startup_hook
+        return self._register_startup_hook(obj)
+
+    def instance(
+        self,
+        fixture: str | None = None,
+        *,
+        seed: int | bytes | None = None,
+        now: str | datetime | None = None,
+        **startup_kwargs: Any,
+    ) -> Instance:
+        """Make a live instance: a private copy of a fixture, or a blank one.
+
+        `now` sets a blank instance's clock and is refused with a fixture, which
+        carries its own. Everything else keyword is passed to the startup hooks
+        that named it. The instance is a context manager and leaving the block
+        destroys it.
+        """
+        return self._instances().create(fixture, seed=seed, now=now, startup_kwargs=startup_kwargs)
+
+    def fixtures(self) -> list[Fixture]:
+        """Every fixture in the world's fixtures directory, by id.
+
+        A world with no fixtures directory has no fixtures; that is not an error.
+        """
+        return sorted(load_all(self.fixtures_dir).values(), key=lambda fixture: fixture.id)
+
+    def __copy__(self) -> World:
+        """This world, to be pointed somewhere else: `copy.copy(world)`, then set an attribute.
+
+        A world is imported once and everything in the process holds the same
+        object, so moving `fixtures_dir` on it -- what a test that rebuilds the
+        committed fixtures into a temporary directory wants -- moves it for every
+        other caller too, for the rest of the run. A copy is how that is said
+        locally.
+
+        A copy is a *snapshot of the three registries*, taken at copy time and
+        severed in both directions: the copy does not see a tool, a middleware or
+        a startup hook registered on the original afterwards, its `chain` stays
+        as it was, and nothing registered on the copy reaches back. That is the
+        one place a world stops being open for registration for the life of the
+        process, so take the copy after import-time registration is done.
+
+        The instance manager is deliberately *not* carried over: a manager hands
+        the world it was made for to every instance it makes, and that world is
+        the one an instance freezes into -- so a copy that inherited one would
+        quietly freeze back into the directory the copy was taken from, which is
+        the one thing a copy exists to avoid.
+        """
+        twin = object.__new__(type(self))
+        twin.__dict__.update(self.__dict__)
+        twin._tools = dict(self._tools)
+        twin._middlewares = list(self._middlewares)
+        twin._startup_hooks = list(self._startup_hooks)
+        twin._manager = None
+        twin._manager_lock = threading.Lock()
+        return twin
+
+    def _instances(self) -> InstanceManager:
+        with self._manager_lock:
+            if self._manager is None:
+                self._manager = InstanceManager(self)
+            return self._manager
+
+    def _register_tool(
+        self,
+        obj: Callable[..., Any] | Tool,
+        *,
+        name: str | None,
+        description: str | None,
+        transaction: bool | None,
+    ) -> Any:
+        if isinstance(obj, Tool):
+            if name is not None or description is not None or transaction is not None:
+                # The factory built the schema and the argument model from the
+                # options it was given; replacing one here would leave the tool
+                # disagreeing with its own schema.
+                raise WorldBug(
+                    f"tool {obj.name!r} was built by a factory: pass name=, description= or "
+                    f"transaction= to the factory, not to world.tool()"
+                )
+            self._add(obj)
+            return obj
+        if not callable(obj):
+            raise WorldBug(f"a tool is a function or a Tool, not {type(obj).__name__}")
+        self._add(
+            Tool.from_function(
+                obj,
+                name=name,
+                description=description,
+                transaction=True if transaction is None else transaction,
+            )
+        )
+        # The function itself, so a decorated tool stays an ordinary callable.
+        return obj
+
+    def _add(self, tool: Tool) -> None:
+        # OpenEnv's verbs are refused whoever is registering: they are the wire's,
+        # and no flag of this framework's can reclaim them.
+        if tool.name in RESERVED_TOOL_NAMES:
+            raise WorldBug(
+                f"tool {tool.name!r} uses a name OpenEnv reserves for the environment "
+                f"({', '.join(sorted(RESERVED_TOOL_NAMES))})"
+            )
+        # Before the duplicate check, which every world would hit instead: the
+        # two control tools are registered here at construction, so a world tool
+        # by one of their names is already taken. What is wrong with it is that
+        # the name is the framework's, and that is what it is told.
+        if tool.name in CONTROL_TOOL_NAMES and not tool.control:
+            raise WorldBug(f"tool {tool.name!r} uses the name of a control tool")
+        if tool.name in self._tools:
+            raise WorldBug(f"tool {tool.name!r} is registered twice")
+        self._tools[tool.name] = tool
+
+    def _register_middleware(self, obj: Middleware) -> Middleware:
+        _check_middleware_shape(obj)
+        self._middlewares.append(obj)
+        # Rebuilt rather than walked per call: the chain is a closure over the
+        # middleware it had when it was built, and instances read it at call time.
+        self.chain = build_chain(self._middlewares, invoke)
+        return obj
+
+    def _register_startup_hook(self, obj: StartupHook) -> StartupHook:
+        self._startup_hooks.append(_as_startup_hook(obj))
+        return obj
+
+
+def sql_files(package: str | None, directory: str) -> str:
+    """The DDL a world is built from: every `*.sql` in a package directory, in order.
+
+    `schema=seahaven.sql_files(__package__, "schema")` is how a world package
+    states its schema. The files are read in sorted filename order -- which is
+    what the `001_`, `002_` prefix convention is for -- and joined with newlines,
+    so the result is one script and the order in it is the order on disk.
+
+    Read through `importlib.resources`, not from `__file__`, so a world works
+    the same installed as a wheel, from a source tree, or from a zip. That
+    promise is the reason `directory` has to be an ordinary path inside the
+    package, checked a segment at a time by `_check_schema_directory`: a
+    filesystem and a zip disagree about every other spelling, so a world that
+    used one would build from a checkout and fail once installed. Symlinks are
+    refused for the same reason and in the same words -- a zip holds none, and a
+    checkout on a machine without symlink support holds a text file where one
+    should be.
+
+    Everything a world author can get wrong here is a `WorldBug` that names the
+    package, the directory and, where there is one, the file: a directory that is
+    missing, is a file, is unreadable, or holds no `*.sql`; a `*.sql` name that is
+    a directory rather than a file; a file that is not UTF-8 text. An empty schema
+    builds a database with no tables perfectly happily, and any of these would
+    otherwise be found much later, as a missing table -- or, for the two that
+    raise `OSError` and `UnicodeDecodeError`, as a traceback out of an import with
+    no world in it.
+
+    `package` must be the name of a package, not of a module inside one:
+    `__package__`, never `__name__`. A module has no directory of its own for
+    `importlib.resources` to anchor to, and the answer it gives for one is an
+    object whose failure names neither the world nor the file.
+
+    It is typed to accept `None` because `__package__` -- which is what every
+    world passes -- is typed `str | None`, and a world should not have to silence
+    a type checker to write the one line the docs give it. `None` is refused at
+    runtime, and refusing it is the point: `importlib.resources.files(None)` does
+    not fail, it resolves the *caller's* package, which is this framework, and the
+    world would be built out of whatever `seahaven/<directory>` happened to hold.
+    """
+    if not isinstance(package, str) or not package:
+        raise WorldBug(
+            f"sql_files needs the name of a package, not {package!r}; "
+            f"pass __package__ from a module inside the world's package"
+        )
+    # Every dotted part a Python name, for the same reason `directory` is
+    # checked a segment at a time: `import_module` raises `TypeError` and not
+    # `ImportError` for a name beginning with a dot, because it reads it as a
+    # relative import and there is no package here for it to be relative to --
+    # so it goes straight past the handler below as a traceback with no world in
+    # it. Asked as an allowlist rather than as a list of the spellings that do
+    # it, because that list is the one this function has already been wrong
+    # about four times.
+    if not all(part.isidentifier() for part in package.split(".")):
+        raise WorldBug(
+            f"sql_files needs the name of a package, not {package!r}; every part of a package "
+            f"name is a Python name, as it would have to be to be written as an import statement. "
+            f"Pass __package__ from a module inside the world's package"
+        )
+    segments = _check_schema_directory(package, directory)
+    try:
+        anchor = importlib.import_module(package)
+    except ImportError as error:
+        raise WorldBug(f"cannot read schema of package {package!r}: {error}") from error
+    if not hasattr(anchor, "__path__"):
+        raise WorldBug(
+            f"sql_files needs the name of a package, and {package!r} is a module inside one; "
+            f"pass __package__ rather than __name__"
+        )
+    # Joined a segment at a time so that every directory on the way is checked,
+    # not just the last one: `schema` may be an ordinary name and still be a
+    # symlink to somewhere the package does not ship.
+    root = importlib.resources.files(anchor)
+    for segment in segments:
+        root = root / segment
+        _refuse_more_than_one_directory(root, package, directory, segment)
+        _refuse_a_symlink(root, package, directory, f"directory {segment!r}")
+    if not root.is_dir():
+        what = "is a file, not a directory" if root.is_file() else "does not exist"
+        raise WorldBug(
+            f"schema directory {directory!r} of package {package!r} {what} (looked in {root})"
+        )
+    try:
+        names = _sql_file_names(root, package, directory)
+    except OSError as error:
+        raise WorldBug(
+            f"cannot read schema directory {directory!r} of package {package!r}: {error}"
+        ) from error
+    if not names:
+        raise WorldBug(f"schema directory {directory!r} of package {package!r} holds no *.sql file")
+    return "\n".join(_read_sql(root / name, package, directory, name) for name in names)
+
+
+def _check_schema_directory(package: str, directory: str) -> list[str]:
+    """`directory`'s segments, if every one of them is an ordinary name.
+
+    An allowlist, and deliberately not a list of the ways out. The denylist this
+    replaced was extended three times, each time because a spelling nobody had
+    listed behaved one way on a filesystem and another in a zip -- `..`, then a
+    root, then a backslash, then `.` and an empty segment -- and there would have
+    been a fourth. Asking what a segment *is* ends that: an ordinary name is
+    non-empty, is not `.` or `..`, and holds no `:`.
+
+    The two families it refuses fail differently and are told apart in the
+    message. `..`, a leading separator and a drive letter leave the package, and
+    read files it does not ship. `.` and an empty segment (`schema/.`,
+    `schema//`, `schema/`) do not leave it -- `pathlib` normalises them away and
+    the world builds -- but `zipfile.Path.joinpath` is `posixpath.join`, which
+    keeps them, so the same world raises from an installed wheel. Both break the
+    one promise this function makes, so both are refused here.
+
+    A `:` is refused wherever it appears -- not only in the first segment --
+    because `PureWindowsPath` calls neither `"C:schema"` (a drive with no root,
+    resolved against that drive's working directory) nor `"\\etc"` (a root with
+    no drive) absolute, and both leave the package on Windows; and because
+    joining a drive-relative segment *replaces* what came before it rather than
+    appending to it, so `PureWindowsPath("schema") / "C:evil"` is `C:evil` and a
+    later segment is no safer than the first. The mistake is not the platform
+    the author is on.
+    """
+    if not isinstance(directory, str) or not directory:
+        raise WorldBug(
+            f"sql_files needs the name of a directory inside package {package!r}, not {directory!r}"
+        )
+    segments = _SEPARATOR.split(directory)
+    for position, segment in enumerate(segments):
+        if segment == ".." or ":" in segment or (position == 0 and not segment):
+            raise WorldBug(
+                f"schema directory {directory!r} of package {package!r} leaves the package at "
+                f"{segment!r}; name a directory inside it. A '..', a leading separator or a drive "
+                f"letter reads files the package does not ship, and cannot be read at all from a "
+                f"zipped wheel"
+            )
+        if not segment or segment == ".":
+            raise WorldBug(
+                f"schema directory {directory!r} of package {package!r} is not spelled as a path "
+                f"inside it: {segment!r} names nothing. A filesystem drops a '.' and a repeated or "
+                f"trailing separator and a zipped wheel keeps them, so a world spelled this way "
+                f"builds from a checkout and fails once installed; write the directory names alone"
+            )
+    return segments
+
+
+def _refuse_more_than_one_directory(
+    entry: Traversable, package: str, directory: str, segment: str
+) -> None:
+    """One schema directory, in one place, or the promise cannot be kept.
+
+    A namespace package whose portions lie in several `sys.path` entries makes
+    `importlib.resources` answer a `MultiplexedPath`: one name standing for two
+    or more real directories, whose `iterdir` merges their children. No installed
+    wheel can reproduce that -- the portions land in one directory under
+    `site-packages` -- so a world whose schema is reached this way is already the
+    failure this function exists to prevent, before anything else is asked.
+
+    It is refused rather than merged for a second reason: a `MultiplexedPath` is
+    not a `Path` and *is* on a filesystem, so `_refuse_a_symlink` below cannot
+    answer for it, and one portion being a symlink out of the package would go
+    unseen. Refusing it at every segment is what lets that guard stay an
+    `isinstance` test rather than an open question.
+
+    The line is not how many portions the package has. It is whether *this
+    segment* resolves to more than one directory, which is what `joinpath`
+    answers: a package of two portions whose `schema` exists in only one of them
+    joins to a real `Path` and is read, and a package of two portions whose
+    `schema` exists in both joins to another `MultiplexedPath` and is refused.
+    A one-portion package always joins to a real `Path`, which is why it reads.
+
+    The test is an `isinstance` against a class the standard library does not
+    export as API. `importlib.resources.readers.MultiplexedPath` is what
+    `importlib.resources` constructs and there is no public predicate for "this
+    `Traversable` stands for more than one directory", so the alternative is to
+    re-derive the answer from `__path__`, which is guessing at what
+    `MultiplexedPath._follow` already decided. If a future Python renames it the
+    import fails at import time and every test says so at once, which is the
+    right way for this to break.
+    """
+    if isinstance(entry, MultiplexedPath):
+        where = (
+            f"schema directory {directory!r}"
+            if segment == directory
+            else f"segment {segment!r} of schema directory {directory!r}"
+        )
+        raise WorldBug(
+            f"{where} of package {package!r} resolves to more than one directory: {package!r} is "
+            f"a namespace package whose portions lie in several sys.path entries, and {segment!r} "
+            f"is in more than one of them. Give the package an __init__.py, or put its portions "
+            f"in one directory. An installed wheel merges those entries into a single directory, "
+            f"so a world reached this way builds from a checkout and resolves differently once "
+            f"installed"
+        )
+
+
+def _refuse_a_symlink(entry: Traversable, package: str, directory: str, what: str) -> None:
+    """A symlink is the way out of a package that is left once `..` is refused.
+
+    `is_dir` and `is_file` both follow one, so the guard above would otherwise
+    hand an author the workaround as it took away the path. A zip holds no
+    symlink and git on a machine without symlink support writes a text file
+    where one should be, so a world whose schema is reached through one builds
+    in the tree it was written in and nowhere else.
+
+    The `isinstance` test is what makes this answerable rather than a guess. Of
+    the `Traversable` kinds that reach here, `Path` is on a filesystem and is
+    asked; a zip member cannot be a symlink, so leaving it alone is not a gap.
+    The third kind, `MultiplexedPath`, is neither -- it is on a filesystem and is
+    not a `Path` -- so it would be skipped silently and a symlinked portion would
+    go unseen.
+
+    The precondition is that no `MultiplexedPath` reaches here at all, and it is
+    established differently at the two call sites. On the way down to the schema
+    directory, `_refuse_more_than_one_directory` is called on the same entry
+    immediately before this one, so the pair runs together. On the `*.sql`
+    children, nothing is called first and nothing needs to be: the root those
+    children came from is already known not to be multiplexed, and `iterdir` on
+    a `Path` or a zip yields children of its own kind. That second site is sound
+    only *because* of the first -- `MultiplexedPath._follow` can answer a
+    multiplexed child -- so relaxing the root refusal would silently reopen the
+    symlinked-child gap here, not only the one above.
+    """
+    if isinstance(entry, Path) and entry.is_symlink():
+        raise WorldBug(
+            f"schema {what} of package {package!r} in {directory!r} is a symlink, which leaves the "
+            f"package; name a directory inside it. A zipped wheel holds no symlink, so a world "
+            f"whose schema is reached through one builds from a checkout and fails once installed"
+        )
+
+
+def _sql_file_names(root: Traversable, package: str, directory: str) -> list[str]:
+    """The `*.sql` files of a schema directory, sorted, and nothing else in it.
+
+    A `*.sql` entry that is not a file -- a directory named `001_core.sql` is the
+    way to make one -- is refused by name rather than skipped: skipping it would
+    report "holds no *.sql file" about a directory whose listing plainly shows
+    one, which sends the author looking in the wrong place.
+    """
+    names = []
+    for child in sorted(root.iterdir(), key=lambda child: child.name):
+        if not child.name.endswith(SQL_SUFFIX):
+            continue
+        _refuse_a_symlink(child, package, directory, f"file {child.name!r}")
+        if not child.is_file():
+            raise WorldBug(
+                f"schema directory {directory!r} of package {package!r} holds {child.name!r}, "
+                f"which is not a file; everything named *.sql in it is read as DDL"
+            )
+        names.append(child.name)
+    return names
+
+
+def _read_sql(path: Traversable, package: str, directory: str, name: str) -> str:
+    """One schema file as text, or a `WorldBug` that says which file and why."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise WorldBug(
+            f"schema file {name!r} in directory {directory!r} of package {package!r} "
+            f"could not be read as UTF-8 text: {error}"
+        ) from error
+
+
+def _check_name(name: str) -> None:
+    """A world's name becomes a directory name, so it has to be one.
+
+    The default working directory is `<root>/<pid namespace>-<pid>/<world name>/`
+    and `instances._open_child` hardens the *lookup* of every component of it --
+    `O_NOFOLLOW`, an owner check, a `dir_fd` -- on the understanding that what it
+    is given is one component. `O_NOFOLLOW` says nothing about `..`, which is not
+    a symlink, so nothing below this refuses a name that walks upwards:
+    `World("..")` put an instance in the working root beside the per-process
+    directories, and `World("../..")` put a live database outside the working root
+    entirely, where the sweep never looks and the files stay for ever.
+
+    The rule is `fixtures.check_id`'s -- one path segment, no leading dot, no NUL
+    -- with both separators refused rather than the platform's, because a world is
+    spelled once and read on every platform. (That is the one place the two rules
+    differ, and deliberately: `check_id`'s is `components/fixtures_instances.md`
+    §1's, which names the platform's own separator.) A name is also headed for
+    more than a path -- a log line, a sidecar, a URL -- which is the other reason
+    it is checked here, where the name is accepted, rather than where a directory
+    is made from it.
+    """
+    if (
+        not name
+        or "\x00" in name
+        or _SEPARATOR.search(name)
+        or name.startswith(".")
+        or name != Path(name).name
+    ):
+        raise WorldBug(
+            f"not a world name: {name!r}; World(name=...) is one directory name, with no "
+            f"separator and no leading dot"
+        )
+
+
+def _schema_hash(schema: str) -> str:
+    """The DDL's identity, insensitive to how it is laid out.
+
+    Whitespace is collapsed so that reformatting the schema does not invalidate
+    every fixture frozen from it, while any change to a name, a type or a
+    constraint does.
+    """
+    collapsed = _WHITESPACE.sub(" ", schema).strip()
+    return hashlib.sha256(collapsed.encode("utf-8")).hexdigest()
+
+
+def _prove_the_ddl_executes(name: str, schema: str) -> None:
+    """Build the schema in memory, so a world with broken DDL cannot exist.
+
+    The DDL *rules* -- STRICT, primary keys, no wall clock -- belong to
+    `seahaven check` and are not applied here: a world under development runs
+    long before it lints clean.
+    """
+    try:
+        build_blank(":memory:", schema).close()
+    except apsw.Error as error:
+        raise WorldBug(f"world {name!r} {DDL_DOES_NOT_EXECUTE}: {error}") from error
+
+
+def _derive_fixtures_dir(caller_file: str | None) -> Path:
+    """`fixtures/` at the project root, found by walking up from the world's module.
+
+    The project root is the nearest directory holding a `pyproject.toml`. An
+    installed wheel has none above it, and `fixtures/` beside the package
+    directory is the answer there. This never fails: a world that only makes
+    blank instances never reads the directory, and a fixture that cannot be found
+    says `World(fixtures_dir=...)` in its message.
+    """
+    # A `World` built somewhere with no file at all -- a REPL, an `exec` -- has
+    # only the working directory to go on, and `fixtures/` under it is the answer
+    # there: "beside the package" means nothing when there is no package.
+    if caller_file is None:
+        return _fixtures_dir_at_project_root(Path.cwd()) or Path.cwd() / FIXTURES_DIRNAME
+    package_dir = Path(caller_file).resolve().parent
+    return _fixtures_dir_at_project_root(package_dir) or package_dir.parent / FIXTURES_DIRNAME
+
+
+def _fixtures_dir_at_project_root(start: Path) -> Path | None:
+    """`fixtures/` under the nearest directory holding a `pyproject.toml`, walking up."""
+    for directory in (start, *start.parents):
+        if (directory / "pyproject.toml").is_file():
+            return directory / FIXTURES_DIRNAME
+    return None
+
+
+def _check_middleware_shape(obj: Middleware) -> None:
+    """A middleware is anything callable as `(ctx, call, next_)`.
+
+    Structural, with nothing to subclass: the check is that the three arguments
+    can be passed positionally, and a `*args` middleware satisfies it too.
+    """
+    try:
+        parameters = list(inspect.signature(obj).parameters.values())
+    except (TypeError, ValueError) as error:
+        raise WorldBug(f"middleware must be callable as (ctx, call, next_): {obj!r}") from error
+    if any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in parameters):
+        return
+    if len([p for p in parameters if p.kind in _POSITIONAL]) < 3:
+        raise WorldBug(f"middleware must be callable as (ctx, call, next_): {obj!r}")
+
+
+def _as_startup_hook(obj: StartupHook) -> RegisteredStartupHook:
+    """Record what `reset` arguments a hook accepts, refusing a shape that cannot work."""
+    try:
+        parameters = list(inspect.signature(obj).parameters.values())
+    except (TypeError, ValueError) as error:
+        raise WorldBug(
+            f"an instance startup hook takes the context and keyword arguments: {obj!r}"
+        ) from error
+    positional = [p for p in parameters if p.kind in _POSITIONAL]
+    variadic_positional = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in parameters)
+    if len(positional) != 1 or variadic_positional:
+        raise WorldBug(
+            f"an instance startup hook takes the context as its only positional parameter and "
+            f"everything else by keyword: {obj!r}"
+        )
+    for parameter in parameters[1:]:
+        if parameter.name in RESET_ARGUMENTS:
+            raise WorldBug(
+                f"an instance startup hook cannot take {parameter.name!r}: it is reset's own "
+                f"argument ({', '.join(sorted(RESET_ARGUMENTS))})"
+            )
+    return RegisteredStartupHook(
+        fn=obj,
+        accepts=frozenset(p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY),
+        takes_var_kwargs=any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters),
+    )

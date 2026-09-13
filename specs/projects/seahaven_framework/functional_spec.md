@@ -50,6 +50,7 @@ and `pyyaml`; the OpenEnv server and client come with the `seahaven[serve]` extr
 projecttracker/
   pyproject.toml            # a normal Python package; depends on seahaven~=X.Y; nothing Seahaven-specific
   README.md                 # the world's README; also the OpenEnv environment's README content
+                            # (the one-line description is World(description=...), not this file)
   AGENTS.md                 # points at the bundled docs, plus this world's notes
   .gitignore
   src/projecttracker/
@@ -87,6 +88,18 @@ the package where there is none, as in an installed wheel; a fixture that cannot
 `World(fixtures_dir=...)`). A missing or mistyped declaration is a constructor error at import, which
 is the best conformance message there is.
 
+**A world is deployed as a checkout, not as an install.** `fixtures/` is outside the package
+deliberately and is therefore absent from a built wheel, so the fallback above is what keeps the
+default from failing rather than a second supported shape: a world installed from a wheel serves
+blank instances and raises `WorldBug` on every fixture-backed one. A deployment that must install a
+world names the directory with `World(fixtures_dir=...)` and owns putting it there.
+
+*Corrected 2026-09-13 — the parenthesis named the installed-wheel fallback without saying that a
+wheel carries no fixtures, which reads as a deployment this project supports; measured in Phase 5 by
+building and installing `worlds/projecttracker`. The mechanism it describes is unchanged and
+correct. Closes `BACKLOG.md` B11, whose decision is that a world is checked out rather than
+installed, documented rather than enforced in code.*
+
 The tooling finds the world by convention: the project's package (from `[project] name` in
 `pyproject.toml`, normalised) exports a module attribute `world` that is a `seahaven.World`.
 `seahaven new` creates it that way. If the attribute is missing or is not a `World`, the CLI and the
@@ -114,15 +127,28 @@ world = seahaven.World(
     name="projecttracker",
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema"),
+    description=(
+        "A Seahaven world: a fictional issue tracker for a fictional company, and the reference "
+        "world the framework is developed against. Nothing here mimics a real product's names, "
+        "schema or error text."
+    ),
 )
 ```
 
-The full signature is `World(name, version, schema, *, fixtures_dir=None, work_dir=None,
-untracked_tables=())`. One `World` per package, in `world.py`, so tool modules import it without an
-import cycle. `schema` is the ordered DDL (section 8). `work_dir` is the directory instance copies
-live in (section 10). `untracked_tables` names the tables the changeset session does not attach
-(section 10). `name` and `version` are informational and appear in the OpenEnv metadata and fixture
-sidecars.
+The full signature is `World(name, version, schema, *, description=None, fixtures_dir=None,
+work_dir=None, untracked_tables=())`. One `World` per package, in `world.py`, so tool modules import
+it without an import cycle. `schema` is the ordered DDL (section 8). `work_dir` is the directory
+instance copies live in (section 10). `untracked_tables` names the tables the changeset session does
+not attach (section 10). `name` and `version` are informational and appear in the OpenEnv metadata
+and fixture sidecars. `description` is the one line the OpenEnv metadata publishes beside them
+(section 16): free text, optional, and the only thing that sets it.
+
+*Corrected 2026-09-13 — the signature and the sketch gained `description=`. **It replaces the
+derivation of that one line from the world's README**, which section 16 and
+`components/openenv.md` §2 specified and which is now deleted; the README is unchanged and is still
+the environment's README content. The sketch is headed with the reference world's real path, so it
+quotes that world's real sentence rather than a shorter invented one;
+`components/projecttracker.md` §2 sketches the same file and says the same thing.*
 
 ### 3.2 Registration: three verbs, one mechanism
 
@@ -544,8 +570,16 @@ the agent side.
   which diverges from OpenEnv's convention of reserving `error` for transport failures; the docs say
   so, because a tool error is data an agent reads and must not close the session.
 - **State.** The `state` message returns `episode_id`, `step_count`, `fixture`, `now` and `world`.
-- **Metadata** comes from the world's name and version, and the README content is the world's
-  top-level `README.md`, next to `pyproject.toml`.
+- **Metadata** comes from the world's name and version; the README content is the world's
+  top-level `README.md`, next to `pyproject.toml`, published whole; and the one-line description is
+  `World(description=...)`, an optional plain string on the world. Nothing is derived from the
+  README. A world that gives no description — or gives one that is blank — publishes
+  `Seahaven world <name>`.
+
+  *Corrected 2026-09-13 — this bullet's one-line description was derived from the README's first
+  paragraph, which `components/openenv.md` §2 specified as four CommonMark rules; **the derivation
+  was replaced by an explicit `description=` argument on `World`** and the reader deleted. The
+  README content itself is unchanged.*
 - **Idle sessions** are reaped after `--session-timeout` seconds, 3600 by default; `0` disables the
   reaper. A held session costs its fixture copy on disk plus about a megabyte of memory, so the
   default exists to stop dropped clients accumulating instances.
@@ -560,11 +594,19 @@ as tools, because in OpenEnv an instance is its connection and nothing else can 
 no separate control plane, listener, token or instance id.
 
 - The framework registers two **control tools** on every world: `controller_run_sql(sql, params)`
-  and `controller_changes()`. They are thin wrappers over `inst.inspect()` and `inst.changes()` and
-  own no SQL or rendering of their own. They are called through `CallToolAction` like any tool.
-- `controller_run_sql` runs one statement on the read-only inspection connection (section 10):
-  every table visible, the instance clock, no caps. Result shape as `run_sql` (section 14.1).
+  and `controller_changes()`. They are thin wrappers over the instance — `inst.changes()`, and a
+  read-only connection of the instance's own — and own no SQL or rendering of their own. They are
+  called through `CallToolAction` like any tool.
+- `controller_run_sql` runs one statement on a read-only connection the instance keeps for the
+  control tools alone (section 10's inspection connection is opened the same way, but it is a
+  *different* connection: `inst.inspect()` is the handle an eval reads through without the
+  instance lock, and a control read changes connection-level state for the length of a statement).
+  Every table visible, the instance clock, no caps. Result shape as `run_sql` (section 14.1).
   `controller_changes` returns the changeset of section 10 as JSON.
+
+  *Corrected 2026-09-13 — these two bullets named `inst.inspect()` as the control tools' handle,
+  which Phase 4 replaced after its round-1 review found an interpreter-wide deadlock; closes
+  `BACKLOG.md` B8, whose own list of affected artifacts did not reach this one.*
 - Their arguments are validated exactly as any tool's, so a bad `sql` argument is an
   `ArgumentError`. Nothing else about a normal call applies: no middleware, no error handler, no
   transaction and no gate. An eval wants the real message.
