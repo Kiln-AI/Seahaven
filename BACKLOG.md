@@ -114,6 +114,11 @@ Pinning it is the better answer if the anchoring is meant to survive later edits
 
 ### B11. A built world wheel ships no fixtures, so `instance(id)` fails from an install
 
+**Decision (2026-09-13, maintainer): a world is checked out, not installed. Document it and change
+no code.** No build-time error and no lint: a world that builds a wheel is off the supported path
+rather than wrong, and a lint would fire on every correct world that has fixtures. The runtime
+error already names the cause and the `fixtures_dir=` escape hatch at the moment it matters.
+
 **Found:** Phase 5, building `worlds/projecttracker` and installing the wheel into a clean
 environment. **Owner:** Phase 6 (`serve`) and Phase 7 (the `--hub` image). **Risk:** a world
 installed rather than checked out can only be run blank; every fixture-backed eval fails at startup.
@@ -181,51 +186,13 @@ world that is an install rather than a checkout answers every fixture-backed `re
 
 ---
 
-### B13. Three OpenEnv behaviours a Seahaven world cannot fix from its own side
-
-**Found:** Phase 6 code review, rounds 1 and 3. **Owner:** unassigned — upstream, or a Seahaven
-workaround if upstream will not move. **Risk:** the log one is the higher: it makes a 500-session
-server's log useless for finding real errors, which is the log an operator reaches for first.
-
-All three were reproduced against a real server; none is in Seahaven's code, and none has a fix
-that belongs inside this framework as it stands. The first two are one root cause at two endpoints:
-OpenEnv uses the base `State` type where the environment's own subclass was meant.
-
-- **`GET /schema` publishes the base `State`, so a client never sees the state model it is
-  driving.** `create_app` takes an action class and an observation class and no state class, and
-  `get_schemas` answers `state=State.model_json_schema()`
-  (`openenv/core/env_server/http_server.py:1451` in 0.4.2), so the state block of `/schema` describes
-  `episode_id` and `step_count` and nothing else — for every environment, whatever its state
-  declares. Same root cause as the bullet below, one endpoint over: the base type is used where the
-  environment's own was meant. Found in Phase 6 code review, round 3, by a test written to assert
-  that `SeahavenState`'s field descriptions reach a client; they cannot, so that half of the rule is
-  asserted in process instead and `/schema`'s state block is deliberately not pinned — asserting it
-  would make upstream's answer Seahaven's contract. A fix upstream is one parameter.
-- **`GET /state` strips every field the environment's state declares.** Over the websocket a state
-  frame carries `world`, `fixture`, `now`, `episode_id` and `step_count`; over HTTP the same server
-  answers `{"episode_id": null, "step_count": 0}`. OpenEnv's HTTP route is annotated
-  `response_model=State`, so FastAPI serialises the base model and drops every subclass field, and
-  the route is not session-bound in the first place, so the numbers it does answer are a fresh
-  environment's rather than any session's — confirmed against a live session that had reset and
-  stepped once: the websocket answered `step_count: 1` and a real episode id while HTTP answered
-  `null` and `0` at the same moment. A harness that reads state over HTTP therefore sees
-  nothing about the world it is driving. Nothing in Phase 6 pins this, deliberately: a test asserting
-  the two-key answer would pin upstream's defect as Seahaven's contract. The websocket path — which
-  is the path `SeahavenClient` and every eval use — is fully tested.
-- **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
-  OpenEnv's `/ws` handler calls `await websocket.close()` on a connection the client has already
-  closed (`openenv/core/env_server/http_server.py:1694` in 0.4.2) and lets the resulting
-  `starlette.websockets.WebSocketDisconnect` escape into uvicorn's ASGI error path. `components/openenv.md` §4 has `serve` run at `log_level="info"`, so every session
-  that ends normally leaves a traceback in the log. Workarounds, none of them free: a `logging`
-  filter installed by `serve` (which would have to match on uvicorn's logger and the exception type,
-  and would hide a real error of the same shape), running at `warning` (which loses the startup line
-  that tells an operator the port, and contradicts §4), or an upstream `try/except` around that one
-  `close`. Recorded rather than chosen, because filtering another library's error logs from inside
-  `serve` is a decision with a blast radius, not a tidy-up.
-
----
-
 ### B15. CI installs the `serve` extra, and the licence gate does not cover it
+
+**Decision (2026-09-13, maintainer): the rule is no copyleft, and the current closure meets it.**
+Widen `check_licences.py` to cover extras under that rule rather than the permissive-only allowlist:
+GPL, AGPL and LGPL are refused anywhere; permissive, file-level copyleft (MPL-2.0) and
+public-domain-equivalent (CC0-1.0) are allowed. MPL-2.0 is copyleft at file scope only and is not
+viral for linking a server process, which is why the `serve` closure passes as it stands.
 
 **Found:** Phase 6 code review, round 3. **Owner:** unassigned. **Risk:** low today, and the
 decision is a policy one rather than a code one.
@@ -417,6 +384,58 @@ The framework question is whether `Ctx` should offer a monotonic per-instance co
 right answer is that evals should grade on state and on changesets rather than on the order of an
 activity feed. Either way it is a decision for the framework, not for one world, and it should be
 settled before the docs phase describes activity tables as a pattern.
+
+---
+
+---
+
+## Deferred — upstream
+
+**Deferred 2026-09-13: not part of this project.** All three are OpenEnv's, reproduced against a
+real server, each a small fix upstream and none fixable from inside Seahaven. Kept as the record
+of what was found and verified, so nobody re-derives it.
+
+### B13. Three OpenEnv behaviours a Seahaven world cannot fix from its own side
+
+**Found:** Phase 6 code review, rounds 1 and 3. **Owner:** unassigned — upstream, or a Seahaven
+workaround if upstream will not move. **Risk:** the log one is the higher: it makes a 500-session
+server's log useless for finding real errors, which is the log an operator reaches for first.
+
+All three were reproduced against a real server; none is in Seahaven's code, and none has a fix
+that belongs inside this framework as it stands. The first two are one root cause at two endpoints:
+OpenEnv uses the base `State` type where the environment's own subclass was meant.
+
+- **`GET /schema` publishes the base `State`, so a client never sees the state model it is
+  driving.** `create_app` takes an action class and an observation class and no state class, and
+  `get_schemas` answers `state=State.model_json_schema()`
+  (`openenv/core/env_server/http_server.py:1451` in 0.4.2), so the state block of `/schema` describes
+  `episode_id` and `step_count` and nothing else — for every environment, whatever its state
+  declares. Same root cause as the bullet below, one endpoint over: the base type is used where the
+  environment's own was meant. Found in Phase 6 code review, round 3, by a test written to assert
+  that `SeahavenState`'s field descriptions reach a client; they cannot, so that half of the rule is
+  asserted in process instead and `/schema`'s state block is deliberately not pinned — asserting it
+  would make upstream's answer Seahaven's contract. A fix upstream is one parameter.
+- **`GET /state` strips every field the environment's state declares.** Over the websocket a state
+  frame carries `world`, `fixture`, `now`, `episode_id` and `step_count`; over HTTP the same server
+  answers `{"episode_id": null, "step_count": 0}`. OpenEnv's HTTP route is annotated
+  `response_model=State`, so FastAPI serialises the base model and drops every subclass field, and
+  the route is not session-bound in the first place, so the numbers it does answer are a fresh
+  environment's rather than any session's — confirmed against a live session that had reset and
+  stepped once: the websocket answered `step_count: 1` and a real episode id while HTTP answered
+  `null` and `0` at the same moment. A harness that reads state over HTTP therefore sees
+  nothing about the world it is driving. Nothing in Phase 6 pins this, deliberately: a test asserting
+  the two-key answer would pin upstream's defect as Seahaven's contract. The websocket path — which
+  is the path `SeahavenClient` and every eval use — is fully tested.
+- **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
+  OpenEnv's `/ws` handler calls `await websocket.close()` on a connection the client has already
+  closed (`openenv/core/env_server/http_server.py:1694` in 0.4.2) and lets the resulting
+  `starlette.websockets.WebSocketDisconnect` escape into uvicorn's ASGI error path. `components/openenv.md` §4 has `serve` run at `log_level="info"`, so every session
+  that ends normally leaves a traceback in the log. Workarounds, none of them free: a `logging`
+  filter installed by `serve` (which would have to match on uvicorn's logger and the exception type,
+  and would hide a real error of the same shape), running at `warning` (which loses the startup line
+  that tells an operator the port, and contradicts §4), or an upstream `try/except` around that one
+  `close`. Recorded rather than chosen, because filtering another library's error logs from inside
+  `serve` is a decision with a blast radius, not a tidy-up.
 
 ---
 
