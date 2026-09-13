@@ -15,9 +15,15 @@ import pytest
 
 import projecttracker
 import seahaven
+from conftest import BLANK_NOW
 from projecttracker import middleware, tools
 from projecttracker.middleware.error_handler import error_handler
 from projecttracker.world import world
+
+# The table tests in the second half of this module drive an instance with no
+# fixture behind it; the package tests in the first half take none at all, and a
+# module-wide marker costs them nothing.
+pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW)
 
 
 def test_the_package_exports_the_world_object_the_tooling_looks_for() -> None:
@@ -111,8 +117,8 @@ def test_the_world_reads_its_fixtures_from_the_package_directory() -> None:
     "role",
     ["admin", "member", "viewer"],
 )
-def test_the_users_table_accepts_the_three_roles(blank: seahaven.Instance, role: str) -> None:
-    with blank.bulk() as ctx:
+def test_the_users_table_accepts_the_three_roles(instance: seahaven.Instance, role: str) -> None:
+    with instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES (?, ?, ?, ?, ?)",
             f"u_{role}",
@@ -121,14 +127,14 @@ def test_the_users_table_accepts_the_three_roles(blank: seahaven.Instance, role:
             role,
             ctx.clock.iso(),
         )
-    assert blank.call("ping")["users"] == 1
+    assert instance.call("ping")["users"] == 1
 
 
 def test_the_users_table_refuses_a_role_that_is_not_one_of_the_three(
-    blank: seahaven.Instance,
+    instance: seahaven.Instance,
 ) -> None:
     """The CHECK constraint is the schema's, and it is really there."""
-    with pytest.raises(seahaven.DbError), blank.bulk() as ctx:
+    with pytest.raises(seahaven.DbError), instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES (?, ?, ?, ?, ?)",
             "u_1",
@@ -139,13 +145,13 @@ def test_the_users_table_refuses_a_role_that_is_not_one_of_the_three(
         )
 
 
-def test_the_users_table_refuses_a_duplicate_email(blank: seahaven.Instance) -> None:
-    with blank.bulk() as ctx:
+def test_the_users_table_refuses_a_duplicate_email(instance: seahaven.Instance) -> None:
+    with instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES ('u_1', 'a@b.invalid',"
             " 'A', 'member', '2026-06-01T09:00:00.000Z')"
         )
-    with pytest.raises(seahaven.DbError), blank.bulk() as ctx:
+    with pytest.raises(seahaven.DbError), instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES ('u_2', 'a@b.invalid',"
             " 'B', 'member', '2026-06-01T09:00:00.000Z')"
@@ -154,7 +160,7 @@ def test_the_users_table_refuses_a_duplicate_email(blank: seahaven.Instance) -> 
 
 @pytest.mark.parametrize("column", ["name", "created_at", "email", "role"])
 def test_the_users_table_refuses_a_row_with_a_column_missing(
-    blank: seahaven.Instance, column: str
+    instance: seahaven.Instance, column: str
 ) -> None:
     """Every column of `users` is `NOT NULL`, and every one of them is asserted.
 
@@ -170,7 +176,7 @@ def test_the_users_table_refuses_a_row_with_a_column_missing(
         "created_at": "2026-06-01T09:00:00.000Z",
     }
     row[column] = None
-    with pytest.raises(seahaven.DbError), blank.bulk() as ctx:
+    with pytest.raises(seahaven.DbError), instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES (?, ?, ?, ?, ?)",
             row["id"],
@@ -181,21 +187,21 @@ def test_the_users_table_refuses_a_row_with_a_column_missing(
         )
 
 
-def test_the_users_table_refuses_a_duplicate_id(blank: seahaven.Instance) -> None:
+def test_the_users_table_refuses_a_duplicate_id(instance: seahaven.Instance) -> None:
     """`id TEXT PRIMARY KEY`: the key is a key, not just a column named id."""
-    with blank.bulk() as ctx:
+    with instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES ('u_1', 'a@b.invalid',"
             " 'A', 'member', '2026-06-01T09:00:00.000Z')"
         )
-    with pytest.raises(seahaven.DbError), blank.bulk() as ctx:
+    with pytest.raises(seahaven.DbError), instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES ('u_1', 'c@d.invalid',"
             " 'C', 'member', '2026-06-01T09:00:00.000Z')"
         )
 
 
-def test_the_users_table_is_strict(blank: seahaven.Instance) -> None:
+def test_the_users_table_is_strict(instance: seahaven.Instance) -> None:
     """STRICT in the DDL and STRICT in the live schema, which is what matters.
 
     The lint that would catch a table without it is Phase 7's (SH101); this asks
@@ -203,10 +209,10 @@ def test_the_users_table_is_strict(blank: seahaven.Instance) -> None:
     column is what the flag buys: any other type SQLite would convert, and a
     blob it refuses.
     """
-    assert blank.inspect().one("SELECT strict FROM pragma_table_list WHERE name = 'users'") == {
+    assert instance.inspect().one("SELECT strict FROM pragma_table_list WHERE name = 'users'") == {
         "strict": 1
     }
-    with pytest.raises(seahaven.DbError), blank.bulk() as ctx:
+    with pytest.raises(seahaven.DbError), instance.bulk() as ctx:
         ctx.db.execute(
             "INSERT INTO users (id, email, name, role, created_at) VALUES (x'00ff', 'a@b.invalid',"
             " 'A', 'member', '2026-06-01T09:00:00.000Z')"

@@ -142,12 +142,14 @@ def test_the_state_file_carries_no_journal_or_lock_file_beside_it() -> None:
     assert sorted(path.name for path in fixture.dir.iterdir()) == ["fixture.yaml", "state.sqlite"]
 
 
+@pytest.mark.seahaven(fixture="empty")
 def test_an_instance_of_the_fixture_starts_at_the_frozen_instant_with_no_rows(
-    tracker: seahaven.Instance,
+    instance: seahaven.Instance,
 ) -> None:
-    assert tracker.clock.iso() == FIXTURE_NOW
-    assert tracker.fixture == "empty"
-    assert tracker.call("ping") == {"message": "pong", "now": FIXTURE_NOW, "users": 0}
+    """The committed bytes, opened the way an eval opens them: through the marker."""
+    assert instance.clock.iso() == FIXTURE_NOW
+    assert instance.fixture == "empty"
+    assert instance.call("ping") == {"message": "pong", "now": FIXTURE_NOW, "users": 0}
 
 
 def test_using_the_fixture_does_not_touch_the_committed_file() -> None:

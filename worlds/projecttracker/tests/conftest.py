@@ -1,12 +1,14 @@
-"""What every test of this world starts from: a live tracker, and a probe world.
+"""What every test of this world starts from: the two instants, and a probe world.
 
-The tracker fixture goes through the real entry point every time --
-`world.instance(...)` then `instance.call(...)` -- because that is the path an
-eval takes and the only one that proves the chain, the transaction and the
-serialiser are wired up. Nothing here calls a tool function directly.
+A live instance comes from Seahaven's own pytest plugin: `@pytest.mark.seahaven`
+says which fixture it starts from and the `instance` fixture makes it, so nothing
+here builds one. That is the same path an eval takes -- `world.instance(...)`
+then `instance.call(...)` -- and it is the only one that proves the chain, the
+transaction and the serialiser are wired up. Nothing here calls a tool function
+directly.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -22,25 +24,6 @@ FIXTURE_NOW = "2026-06-01T09:00:00.000Z"
 # A blank instance's clock in the tests that do not use a fixture. Deliberately
 # not `FIXTURE_NOW`, so a test asserting one cannot pass because of the other.
 BLANK_NOW = "2026-07-04T12:30:45.678Z"
-
-
-@pytest.fixture
-def tracker() -> Iterator[seahaven.Instance]:
-    """An instance of the real world, from the committed `empty` fixture."""
-    with world.instance("empty") as instance:
-        yield instance
-
-
-@pytest.fixture
-def blank() -> Iterator[seahaven.Instance]:
-    """An instance of the real world with no fixture behind it, at a fixed `now`.
-
-    No `tmp_path`: a blank instance of the real `world` runs under that world's
-    own working root, as an eval's would. `probe` is the fixture that sandboxes,
-    because it also writes fixtures.
-    """
-    with world.instance(None, now=BLANK_NOW) as instance:
-        yield instance
 
 
 @pytest.fixture

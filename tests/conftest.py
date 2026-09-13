@@ -1,4 +1,12 @@
-"""Shared fixtures: a frozen instant, a hardened database on it, and a small world."""
+"""Shared fixtures: a frozen instant, a hardened database on it, and a small world.
+
+`world` and `instance` here are *not* `seahaven.pytest_plugin`'s. The framework's
+own tests need a throwaway world on `tmp_path` per test, which is what a world's
+tests never need and what the plugin therefore does not offer; a conftest fixture
+shadows a plugin one, so the two coexist. The plugin is exercised where a world
+exercises it: `tests/test_pytest_plugin.py` through `pytester`, and
+ProjectTracker's own suite.
+"""
 
 import sys
 import tempfile
@@ -22,6 +30,11 @@ from seahaven.ids import Ids, instance_seed
 from seahaven.instances import Instance
 from seahaven.lint import Target
 from seahaven.world import World
+
+# `pytester`, which runs pytest inside pytest, is how the plugin is tested. It is
+# a plugin pytest ships and does not enable by default, and `pytest_plugins` is
+# only honoured in a conftest at the root of the collected tree -- this one.
+pytest_plugins = ["pytester"]
 
 WAIT = 5.0  # every thread test's patience, in seconds
 

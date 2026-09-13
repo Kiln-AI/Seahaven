@@ -35,7 +35,7 @@ specs; nothing here restates them.
       `new` with templates, `--hub` and the hub files it writes, `check` with every lint code,
       `docs`, `fixture`, `serve`, world discovery. A scaffolded world passes `check` and its own
       tests.
-- [ ] **Phase 8: pytest plugin and the docs skeleton.** `pytest_plugin.py` and the `docs/` layout
+- [x] **Phase 8: pytest plugin and the docs skeleton.** `pytest_plugin.py` and the `docs/` layout
       with stub pages, per `components/pytest_and_docs.md`. ProjectTracker's tests move to the
       plugin.
 - [ ] **Phase 9: the XML-RPC example extension.** A separate package in the repository proving the

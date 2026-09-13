@@ -28,6 +28,11 @@ serve = ["openenv>=0.4.2,<0.5"]
 [project.scripts]
 seahaven = "seahaven.cli:main"
 
+# Installing `seahaven` activates its pytest plugin: a world's tests use the
+# `world` and `instance` fixtures by name, with nothing in a `conftest.py`.
+[project.entry-points.pytest11]
+seahaven = "seahaven.pytest_plugin"
+
 [project.urls]
 Homepage = "https://github.com/Kiln-AI/Seahaven"
 

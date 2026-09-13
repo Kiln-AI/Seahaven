@@ -73,15 +73,16 @@ silently. Docs are shipped as package data (`[tool.hatch.build] include`), read 
 ## 3. The scaffolded `AGENTS.md`
 
 `seahaven new` writes it once; nothing rewrites it afterwards, so its content is evergreen and
-carries no version:
+carries no version (the reading order gained `concepts.md` in Phase 8's code review: §2's own
+`index.md` leads with it, and a file written once must not send an authoring agent past it):
 
 ```
 # Seahaven world
 
 This project is a Seahaven world. Seahaven is not in your training data: read the bundled docs
 before writing code. They ship inside the installed `seahaven` package and match the installed
-version; `seahaven docs` prints the directory. Start at index.md, then authoring.md, fixtures.md,
-testing.md.
+version; `seahaven docs` prints the directory. Start at index.md, then concepts.md, authoring.md,
+fixtures.md, testing.md.
 
 Commands: `uv run seahaven check` (lint; run before every commit), `uv run pytest`,
 `uv run seahaven fixture list`, `uv run seahaven serve`.

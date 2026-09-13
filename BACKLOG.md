@@ -576,6 +576,35 @@ with `AssertionError` inside `eval_type_backport`, so `import seahaven` itself d
 interpreter; 2.12.3 does. That one is rc-only and should disappear against a final 3.14, which is
 what CI installs, so it is recorded here as context rather than as work.
 
+### B18. The pytest plugin's two-marker guard sees only the test's own node
+
+**Found:** Phase 8 code review, round 2, verified by running it. **Owner:** unassigned. **Risk:**
+low: a test silently runs against a fixture other than the one a reader would pick, in a spelling
+nobody writes on purpose.
+
+`src/seahaven/pytest_plugin.py`'s `_refuse_two_markers_on_one_test` counts the `seahaven` markers in
+`request.node.own_markers`, which refuses two decorators on one test. The same ambiguity a level up
+is not refused:
+
+```python
+pytestmark = [pytest.mark.seahaven(fixture="empty"), pytest.mark.seahaven(fixture=None)]
+```
+
+`get_closest_marker` resolves that to the **first** of the two, which is the opposite of the
+decorator case the guard does refuse (there the lower one wins), so the two spellings of "two
+markers" disagree with each other as well as being silent. Scanning `own_markers` over
+`node.listchain()` rather than the item alone would refuse both; `iter_markers` still must not be
+used, because a module's `pytestmark` plus one marker on a test is the legitimate override and is
+tested as such (`tests/test_pytest_plugin.py::test_a_marker_on_a_test_overrides_the_modules`).
+
+Not fixed in Phase 8 because the fix belongs with a test of the module-level case and the phase's
+diff was under review; it is a residual of a defect that review found, not a new one.
+
+Smaller, found beside it: `tests/test_docs.py::test_every_page_index_md_links_to_is_a_page_of_the_layout`
+matches every `](...)` target in `index.md`, so the first external `http` link Phase 12 adds to that
+page fails a test about the docs *layout*. Filtering to targets that are not `http` would make the
+test say what it means.
+
 ---
 
 ## Method notes
