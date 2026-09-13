@@ -13,7 +13,7 @@ seahaven new notes
 ```
 notes/
   pyproject.toml
-  README.md                    # also the OpenEnv environment's description
+  README.md                    # also the OpenEnv environment's README, the card a hub shows
   AGENTS.md                    # points at these docs, plus this world's own notes
   src/notes/
     __init__.py                # imports world, then tools and middleware; registers factories

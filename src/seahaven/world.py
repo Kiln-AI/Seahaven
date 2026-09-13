@@ -113,6 +113,7 @@ class World:
         version: str,
         schema: str,
         *,
+        description: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
@@ -123,6 +124,12 @@ class World:
         self.schema = schema
         self.schema_hash = _schema_hash(schema)
         _prove_the_ddl_executes(name, schema)
+        # The one-line description the OpenEnv metadata publishes, and nothing
+        # else reads it. A free string, deliberately unvalidated: unlike `name`
+        # it never becomes a path, a filename or an identifier, so there is
+        # nothing for a rule to protect. `None` -- and, at publication, a string
+        # that is blank -- means the fallback, `Seahaven world <name>`.
+        self.description = description
         self.fixtures_dir = (
             Path(fixtures_dir)
             if fixtures_dir is not None

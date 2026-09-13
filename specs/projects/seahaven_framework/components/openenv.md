@@ -86,45 +86,35 @@ class SeahavenEnv(Environment):
 - **`close`.** Destroys the instance if any. Called by the server on disconnect, on the session's
   thread.
 - **`get_metadata`.** `EnvironmentMetadata(name=world.name, version=world.version,
-  description=the README's first paragraph or `f"Seahaven world {name}"`, readme_content=README
-  text)`. The README is the world package's top-level `README.md`, located as `fixtures_dir.parent
-  / "README.md"` (same root derivation as the fixtures directory); absent means empty.
+  description=world.description or `f"Seahaven world {name}"`, readme_content=README text)`. The
+  README is the world package's top-level `README.md`, located as `fixtures_dir.parent /
+  "README.md"` (same root derivation as the fixtures directory); absent means empty, and it is
+  published whole — §6 makes that same file the Space card.
 
-  **"First paragraph" is four rules, not a phrase**, because §6 makes that same `README.md` the
-  Space card and a Space card does not begin with prose — it begins with YAML front matter between
-  `---` fences, usually followed by a heading. The naive reading publishes something worse than no
-  description: the card's own YAML, a `---`, a `***`, or the world's title. So:
-
-  1. **Front matter is skipped as a block.** If the first non-blank line is `---`, the closing
-     fence is searched for across the **whole file first**; only when there is none does the block
-     end at the first blank line, or at the end of the file. The order is the correctness argument:
-     a blank line is legal inside YAML and routine in a card, so whether one is inside the block or
-     after it is not known until the file has been read to its end.
-  2. **A furniture line is not the description**, and furniture is two rules and not one. A
-     thematic break is three or more `-`, `_` or `*` with spaces allowed between them; a setext
-     underline is a run of `=` or of `-` with no interior space. A rule is the whole line or
-     nothing, so `- a bullet` and `--- not a rule ---` stay prose, and `**` and `* *` stay prose
-     because two characters are not a break.
-  3. **A line with furniture under it is a title**, skipped as `# Title` is. Scoped to the line
-     that *would start* the paragraph: a rule under a later line ends the paragraph it is already
-     part of. The test is "any furniture", wider than CommonMark's setext heading, so `Title` over
-     `___` is skipped too.
-  4. **A UTF-8 byte-order mark is decoded away**, because `str.strip()` does not remove it.
-
-  **A heading here is any line starting with `#`**, which is wider than CommonMark by one space:
-  CommonMark's ATX heading needs a space (or the end of the line) after the run of `#`, so
-  `#1 priority is shipping.` is a paragraph there and furniture here. The effect is the fallback
-  description and never a wrong one, which is why the rule is stated rather than widened — but a
-  reader of this section should know the deviation is conservative by luck rather than by design.
+  **The one-line description is an explicit argument and is not derived from anything.**
+  `World(..., description: str | None = None)` is a free string, unvalidated: unlike `name` it
+  never becomes a path or an identifier, so there is no rule to enforce. `None`, `""` and a string
+  of nothing but whitespace all mean the fallback, `Seahaven world <name>` — a world that says
+  nothing gets a placeholder rather than a wrong sentence. The test is blankness and the published
+  value is unstripped, so a description with content in it reaches the card exactly as written. The README stays the card's body and nothing else reads it.
 
 The instance lives on the environment object; one environment object per session, so instance =
 session by construction. `episode_id` is the one given to `reset` or a `uuid4`.
 
 *Corrected 2026-09-13 — the tool-listing/`reset`-guard contradiction and the generic error's key
-set, measured in Phase 6 (`phase_plans/phase_6.md`), closing `BACKLOG.md` B12; and the
-first-paragraph rules, written in Phase 6 and pinned by its fifty-five parametrized cases (the
-916,500-document generated run is recorded in `phase_plans/phase_6.md` and is not a committed
-test), closing `BACKLOG.md` B14.*
+set, measured in Phase 6 (`phase_plans/phase_6.md`), closing `BACKLOG.md` B12.*
+
+*Corrected 2026-09-13 — **the derivation of the one-line description from the README was replaced
+by an explicit `World(description=...)` argument.** This section previously specified "first
+paragraph" as four CommonMark rules — the front-matter block skip, the two-part furniture test, the
+setext lookahead and the byte-order mark — with the ATX-heading deviation recorded beneath them.
+All of it is withdrawn: the reader (`_first_paragraph` and its six helpers, about a third of
+`env.py`) and its fifty-five parametrized cases are deleted, and a world now says its own
+description or gets the fallback. This supersedes the Phase 6 correction that wrote those rules
+down and closed `BACKLOG.md` B14; the rules and their history remain readable in
+`phase_plans/phase_6.md`, which records them as built rather than as required. `readme_content` is
+unchanged: the README is still located at `fixtures_dir.parent / "README.md"`, still read with
+`utf-8-sig`, and still published whole as the Space card.*
 
 ## 3. `app(world, ...)` (`openenv/__init__.py`)
 
@@ -278,7 +268,8 @@ observations. Tool errors arrive on the observation; only framework or protocol 
   rendering; `UnknownTool` rendering; an exception that is neither a `ToolError` nor a
   `SeahavenError` becomes the generic internal observation and is logged, while a `WorldBug`
   propagates out of `step`; `state` before and after `reset`; `close` destroys; `get_metadata`
-  reads the README.
+  publishes the README whole and the world's `description=`, and falls back to
+  `Seahaven world <name>` when the world gives none or gives a string that is blank.
 - `test_client.py`: `SeahavenClient` parses observations and state; `call` and `list_tools`; sync
   and async modes.
 - `test_server.py` (uvicorn on a free port, `SeahavenClient` and the stock `GenericEnvClient`, sync

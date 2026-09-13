@@ -36,12 +36,7 @@ from openenv.core.env_server.mcp_types import (
 from openenv.core.env_server.types import Action, EnvironmentMetadata
 from pydantic import BaseModel
 
-from seahaven.openenv.env import (
-    SeahavenEnv,
-    SeahavenObservation,
-    SeahavenState,
-    _first_paragraph,
-)
+from seahaven.openenv.env import SeahavenEnv, SeahavenObservation, SeahavenState
 
 CONTROL_SQL = "SELECT count(*) AS n FROM notes"
 
@@ -516,6 +511,13 @@ def test_every_declared_field_publishes_a_description(model: type[BaseModel]) ->
 
 
 def test_get_metadata_reads_the_readme(env: SeahavenEnv, world: World, tmp_path: Path) -> None:
+    """The README is published whole, and nothing is derived from it.
+
+    `readme_content` is the card a hub shows, character for character. The
+    one-line description is the world's own `description=` and is unaffected by
+    what the README says -- here the world gives none, so the fallback stands
+    even though the README opens with a perfectly good sentence.
+    """
     readme = "# Notes\n\nA world of notes, and nothing else.\n\nMore prose.\n"
     (tmp_path / "README.md").write_text(readme, encoding="utf-8")
     metadata = env.get_metadata()
@@ -523,20 +525,57 @@ def test_get_metadata_reads_the_readme(env: SeahavenEnv, world: World, tmp_path:
     assert metadata.name == world.name
     assert metadata.version == world.version
     assert metadata.readme_content == readme
-    assert metadata.description == "A world of notes, and nothing else."
+    assert metadata.description == f"Seahaven world {world.name}"
+
+
+def test_get_metadata_publishes_the_worlds_description(tmp_path: Path) -> None:
+    """`World(description=...)` is the one-line description, verbatim.
+
+    Verbatim includes the spaces around it: the fallback is chosen by looking at
+    the stripped string, and what is published is the string itself. A world
+    whose description has content in it gets that content on its card exactly as
+    it was written, and nothing here tidies it.
+    """
+    world = build_world(tmp_path, description="A world of notes, and nothing else.")
+    env = SeahavenEnv(world, include_control_tools=False)
+    assert env.get_metadata().description == "A world of notes, and nothing else."
+
+    spaced = build_world(tmp_path, description="  A world.  ")
+    assert SeahavenEnv(spaced, include_control_tools=False).get_metadata().description == (
+        "  A world.  "
+    )
+
+
+def test_get_metadata_falls_back_when_the_world_gives_no_description(
+    env: SeahavenEnv, world: World
+) -> None:
+    assert world.description is None
+    assert env.get_metadata().description == f"Seahaven world {world.name}"
+
+
+def test_get_metadata_falls_back_on_a_blank_description(tmp_path: Path) -> None:
+    """A blank string falls back exactly as `None` does, and on purpose.
+
+    A world that computed its description from something and got `""` publishes
+    the fallback rather than a blank line on its card: the fallback is never a
+    wrong sentence, and a blank description is not a description.
+
+    Whitespace is the same case and not a lesser one. `description="   "` is a
+    string, so it is truthy, and publishing it puts a line on the card that looks
+    empty and says nothing -- the one outcome the fallback exists to prevent. It
+    is spelled out here because the plain `or` that used to stand in this place
+    caught `""` and let this through.
+    """
+    for blank in ("", "   ", "\n", " \t\n "):
+        world = build_world(tmp_path, description=blank)
+        env = SeahavenEnv(world, include_control_tools=False)
+        assert env.get_metadata().description == f"Seahaven world {world.name}"
 
 
 def test_get_metadata_without_a_readme_falls_back(env: SeahavenEnv, world: World) -> None:
     metadata = env.get_metadata()
     assert metadata.readme_content == ""
     assert metadata.description == f"Seahaven world {world.name}"
-
-
-def test_get_metadata_falls_back_when_the_readme_has_no_paragraph(
-    env: SeahavenEnv, world: World, tmp_path: Path
-) -> None:
-    (tmp_path / "README.md").write_text("# Notes\n\n## Still a heading\n", encoding="utf-8")
-    assert env.get_metadata().description == f"Seahaven world {world.name}"
 
 
 def test_get_metadata_survives_a_readme_that_is_not_text(
@@ -552,20 +591,18 @@ def test_get_metadata_survives_a_readme_that_is_not_text(
 def test_get_metadata_reads_a_readme_that_begins_with_a_byte_order_mark(
     env: SeahavenEnv, world: World, tmp_path: Path
 ) -> None:
-    """`_readme` decodes the mark away, which is a separate guard from the string one.
+    """`utf-8-sig`, not `utf-8`: the mark must not land on the front of the card.
 
-    `_first_paragraph` strips a BOM from whatever string it is handed, but the
-    reader is what every real card comes through, and `utf-8` would hand it the
-    mark as the first character of the first line. Written here as the bytes an
-    editor actually writes, so the codec is what is under test.
+    Read as plain UTF-8 the mark becomes the first character of
+    `readme_content`, in front of the card's opening fence. Written here as the
+    bytes an editor actually writes, so the codec is what is under test.
     """
     (tmp_path / "README.md").write_bytes(
         "\ufeff---\ntitle: Notes\n---\n\nA card an editor saved with a mark.\n".encode()
     )
-    metadata = env.get_metadata()
-    assert metadata.description == "A card an editor saved with a mark."
     assert (
-        metadata.readme_content == "---\ntitle: Notes\n---\n\nA card an editor saved with a mark.\n"
+        env.get_metadata().readme_content
+        == "---\ntitle: Notes\n---\n\nA card an editor saved with a mark.\n"
     )
 
 
@@ -574,196 +611,3 @@ def test_get_metadata_survives_a_readme_that_is_a_directory(
 ) -> None:
     (tmp_path / "README.md").mkdir()
     assert env.get_metadata().readme_content == ""
-
-
-@pytest.mark.parametrize(
-    ("readme", "expected"),
-    [
-        ("", ""),
-        ("Just a line.\n", "Just a line."),
-        ("# Title\nStraight after the heading.\n", "Straight after the heading."),
-        ("\n\n\n# Title\n\nAfter blank lines.\n", "After blank lines."),
-        ("One\nline\nwrapped.\n\nNext.\n", "One line wrapped."),
-        ("# A\n# B\n\nAfter two headings.\n", "After two headings."),
-        ("Text.\n# Heading right after\n", "Text."),
-        (
-            "---\ntitle: Notes\nsdk: docker\n---\n\n# Notes\n\nThe card's prose.\n",
-            "The card's prose.",
-        ),
-        (
-            "---\ntitle: Notes\n---\nNo blank line after the fence.\n",
-            "No blank line after the fence.",
-        ),
-        # A card whose closing fence was forgotten. Review round 1 found these
-        # three published the YAML as the world's description -- and the first
-        # of them published it *instead of* the prose below it, because the keys
-        # started a paragraph that the blank line then ended. The block ends at
-        # the blank line when no fence ends it, so the prose is reached and
-        # there is nothing to publish when there is no prose.
-        (
-            "---\ntitle: Notes\nsdk: docker\n\n# ProjectTracker\n\nReal prose here.\n",
-            "Real prose here.",
-        ),
-        ("---\ntitle: Notes\nsdk: docker\n", ""),
-        ("---\ntitle: Notes\n", ""),
-        ("---\ntitle: Notes\n\n# Only a heading\n", ""),
-        ("---\ntitle: Notes\n---\n", ""),
-        # The closing fence on the last line, with nothing after it at all: the
-        # block's end is the end of the file and the index must not run past it.
-        ("---\ntitle: Notes\n---", ""),
-        # Review round 2: this row used to expect `"Text."`. In Markdown a line
-        # with a rule under it is a setext heading -- `Text.\n---` is an `<h2>`,
-        # not a paragraph -- and a README whose first line is its title spells
-        # the title that way about as often as with a `#`. Publishing the title
-        # as the description is the bug `# Title` was skipped to avoid, so the
-        # expectation changed with the rule rather than being written around.
-        ("Text.\n---\n", ""),
-        (
-            "Title\n=====\n\nThe prose under a setext heading.\n",
-            "The prose under a setext heading.",
-        ),
-        ("Title\n-----\n\nUnder a dashed setext heading.\n", "Under a dashed setext heading."),
-        # `___` under a line is a thematic break rather than a setext underline,
-        # so CommonMark would call the line above it a paragraph. Seahaven skips
-        # it anyway: one rule for all three characters, and a line that someone
-        # underlined is a title whichever character they reached for.
-        ("Title\n___\n\nUnder underscores.\n", "Under underscores."),
-        # The permissive side of the setext rule, and the reason the lookahead
-        # is scoped to the paragraph's *first* line: a rule under a later line
-        # ends the paragraph, it does not delete it. Widening the lookahead
-        # would return `"One"` here, and `""` for a one-line paragraph.
-        ("One\nTwo\n===\n", "One Two"),
-        ("First line\nSecond line\n---\n", "First line Second line"),
-        # A rule with nothing above it is furniture, skipped like a heading.
-        ("====\n\nAfter a bare rule.\n", "After a bare rule."),
-        ("___\n\nAfter underscores.\n", "After underscores."),
-        ("----\n\nAfter four dashes.\n", "After four dashes."),
-        # The permissive side of `_is_rule`: a line made of *more* than one
-        # repeated rule character is prose. A rule is the whole line or nothing.
-        ("- a bullet list item\n", "- a bullet list item"),
-        ("--- not a rule ---\n", "--- not a rule ---"),
-        ("=> an arrow, not an underline\n", "=> an arrow, not an underline"),
-        ("---\n---\n\nEmpty front matter.\n", "Empty front matter."),
-        (
-            # A horizontal rule further down is not the end of the front matter:
-            # the block skip stops at the *closing* fence, not the last one.
-            "---\ntitle: Notes\n---\n\nThe card's prose.\n\n---\n\nA later section.\n",
-            "The card's prose.",
-        ),
-        ("   \n\t\nIndented blanks first.\n", "Indented blanks first."),
-        # --- a blank line inside a *closed* block --------------------------
-        # Review round 2's Major. A blank line is legal YAML and ordinary in a
-        # card -- between keys, after the opening fence, inside a list, or as a
-        # whitespace-only line -- and the closing fence is what ends the block.
-        # None of the rows above has one, which is why a rule that stopped at
-        # the first blank line passed the whole suite while publishing YAML for
-        # every well-formed card that contained a gap.
-        (
-            "---\ntitle: Notes\n\nsdk: docker\n---\n\nThe card's prose.\n",
-            "The card's prose.",
-        ),
-        (
-            "---\n\ntitle: Notes\n---\n\nA blank right after the opening fence.\n",
-            "A blank right after the opening fence.",
-        ),
-        (
-            "---\ntags:\n  - notes\n\n  - sqlite\n---\n\nA tag list with a gap.\n",
-            "A tag list with a gap.",
-        ),
-        (
-            "---\ntitle: Notes\n   \n---\n\nA whitespace-only line inside the block.\n",
-            "A whitespace-only line inside the block.",
-        ),
-        (
-            "---\n# a yaml comment\n\ntitle: Notes\n---\n\nA comment then a gap.\n",
-            "A comment then a gap.",
-        ),
-        # The same shape with no prose after it: still nothing to publish, and
-        # in particular still not `title: Notes sdk: docker`.
-        ("---\ntitle: Notes\n\nsdk: docker\n---\n", ""),
-        # Unclosed, with a rule further down. The two readings -- a card with a
-        # gap closed by that rule, or an unclosed card followed by a section
-        # break -- are the same bytes, so this row records which one is taken
-        # and what it costs: the description is the prose after the rule rather
-        # than the prose before it. Either way it is prose, never YAML, which is
-        # the property the block skip exists to guarantee.
-        ("---\ntitle: Notes\n\nEarly prose.\n\n---\n\nLater prose.\n", "Later prose."),
-        # --- a blank line *before* the card --------------------------------
-        # The opening fence is the first non-blank line, not line 0. An editor
-        # that leaves a newline at the top of a file must not turn the card's
-        # keys into the description.
-        (
-            "\n---\ntitle: Notes\n---\n\nA blank line before the card.\n",
-            "A blank line before the card.",
-        ),
-        ("\n\n---\ntitle: Notes\nsdk: docker\n\n# Notes\n\nUnclosed too.\n", "Unclosed too."),
-        # --- a byte-order mark ---------------------------------------------
-        # `str.strip()` leaves a BOM alone: it is not whitespace. Left in place
-        # it stops the first line being an opening fence or a heading, so a
-        # BOM-prefixed card published `\ufeff---` and then its own YAML.
-        (
-            "\ufeff---\ntitle: Notes\n---\n\nAfter a byte-order mark.\n",
-            "After a byte-order mark.",
-        ),
-        ("\ufeff# Title\n\nA BOM before a heading.\n", "A BOM before a heading."),
-        # The permissive side: a BOM before prose is removed from the prose,
-        # not merely tolerated in front of it.
-        ("\ufeffJust prose.\n", "Just prose."),
-        # --- a card whose last key is not directly above the closing fence --
-        # These three are the regression cases for round 2's Major, and the
-        # reason they had to be written is worth recording: the six cases added
-        # for it in round 2 no longer detect it. The setext lookahead added in
-        # round 3 masks them -- with the bound landing on the blank line inside
-        # the block, the key after it is skipped as a heading because the
-        # closing fence sits directly beneath it, and the fence is then skipped
-        # as a rule, so the prose is reached anyway and by accident. A case
-        # only discriminates the fused loop when the line after the block's
-        # blank line is *not* directly above the fence. Review round 3 found
-        # that by reconstructing the mutant and running the table against it,
-        # which is the only way a masked test shows up as masked.
-        (
-            "---\ntitle: Notes\n\nsdk: docker\n\n---\n\nA gap before the closing fence.\n",
-            "A gap before the closing fence.",
-        ),
-        (
-            "---\ntitle: Notes\n\ntags:\n  - notes\n---\n\nA tag list behind a gap.\n",
-            "A tag list behind a gap.",
-        ),
-        (
-            "---\ntitle: Notes\n\nsdk: docker\napp_file: app.py\n---\n\nTwo keys behind a gap.\n",
-            "Two keys behind a gap.",
-        ),
-        # --- thematic breaks spelled the other three ways -------------------
-        # CommonMark builds a thematic break from three or more `-`, `_` or
-        # `*`, and allows spaces between them. Review round 3 found `*`
-        # missing from the rule set, which published `***` as a world's
-        # description -- exactly what the rules exist to prevent.
-        ("***\n\nAfter three asterisks.\n", "After three asterisks."),
-        ("Title\n***\n\nUnder a starred break.\n", "Under a starred break."),
-        ("* * *\n\nAfter a spaced starred break.\n", "After a spaced starred break."),
-        ("- - -\n\nAfter a spaced dashed break.\n", "After a spaced dashed break."),
-        ("_ _ _\n\nAfter a spaced underscored break.\n", "After a spaced underscored break."),
-        # The permissive side of both halves of that rule. A break is three or
-        # more characters, so `**` is literal text and `* *` is a bullet list
-        # whose item is `*`; and a break is the whole line or nothing, so a
-        # starred bullet and a sentence between stars stay prose. Eating any of
-        # these would be the same defect as publishing `***`, mirrored.
-        ("**\n\nAfter two asterisks.\n", "**"),
-        ("* *\n\nAfter two spaced asterisks.\n", "* *"),
-        ("* a bullet list item\n", "* a bullet list item"),
-        ("*** not a break ***\n", "*** not a break ***"),
-        # --- an ATX heading spelled without its space -----------------------
-        # The permissive half the heading rule does not have. CommonMark needs
-        # a space (or the end of the line) after the run of `#`, so `#1` starts
-        # a paragraph there and furniture here, and this README has no
-        # description at all rather than the sentence it opens with. Recorded
-        # rather than fixed, and pinned rather than left to be discovered:
-        # the cost is a fallback description (`get_metadata` answers `Seahaven
-        # world <name>`), never a wrong one, and widening the rule is a change
-        # to the block that produced every defect this phase's reviews found.
-        ("#1 priority is shipping.\n", ""),
-    ],
-)
-def test_first_paragraph(readme: str, expected: str) -> None:
-    """A heading is not a paragraph, and a Space card's front matter is not prose."""
-    assert _first_paragraph(readme) == expected

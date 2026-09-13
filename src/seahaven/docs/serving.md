@@ -95,9 +95,24 @@ The `state` message answers `episode_id`, `step_count`, `fixture`, `now` and `wo
 counts, including one that was refused: the count is of what the session asked for.
 
 Metadata is the world's `name` and `version`, and the environment's README is the world's top-level
-`README.md`, the one beside `pyproject.toml`. Its first real paragraph — skipping YAML front matter,
-headings and rules — becomes the one-line description a hub card shows, so make the first paragraph
-of a world's README a sentence about the world.
+`README.md`, the one beside `pyproject.toml`, published whole as the card a hub shows. The one-line
+description beside it is `World(description=...)` and nothing else: an explicit sentence about the
+world, written where the world is defined. A world that gives none — or gives a string that is
+blank — publishes `Seahaven world <name>`, which is a fallback rather than a wrong sentence, so a
+world worth serving should say something better.
+
+```py
+world = seahaven.World(
+    name="projecttracker",
+    version="1.0.0",
+    schema=seahaven.sql_files(__package__, "schema"),
+    description=(
+        "A Seahaven world: a fictional issue tracker for a fictional company, and the reference "
+        "world the framework is developed against. Nothing here mimics a real product's names, "
+        "schema or error text."
+    ),
+)
+```
 
 ## The client
 
@@ -238,8 +253,9 @@ package and is not in a wheel. [fixtures.md](fixtures.md) has why, the exact err
 One catch if you take the `fixtures_dir=` route: the README the environment publishes is looked for
 *beside the fixtures directory*, because that is the same project root `World` derives when it is
 left to find `fixtures/` itself. Move the fixtures somewhere with no `README.md` next to them and the
-card falls back to `Seahaven world <name>`. Put the world's `README.md` beside the directory you
-named, or leave `fixtures_dir` alone and ship `fixtures/` where it was.
+card is empty — the one-line description is unaffected, since that is `World(description=...)` and
+travels with the world rather than with the directory. Put the world's `README.md` beside the
+directory you named, or leave `fixtures_dir` alone and ship `fixtures/` where it was.
 
 Seahaven's own reference world is not published anywhere; that step is gated on a maintainer's
 sign-off and has not happened.

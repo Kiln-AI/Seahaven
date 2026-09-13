@@ -50,6 +50,7 @@ and `pyyaml`; the OpenEnv server and client come with the `seahaven[serve]` extr
 projecttracker/
   pyproject.toml            # a normal Python package; depends on seahaven~=X.Y; nothing Seahaven-specific
   README.md                 # the world's README; also the OpenEnv environment's README content
+                            # (the one-line description is World(description=...), not this file)
   AGENTS.md                 # points at the bundled docs, plus this world's notes
   .gitignore
   src/projecttracker/
@@ -126,15 +127,28 @@ world = seahaven.World(
     name="projecttracker",
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema"),
+    description=(
+        "A Seahaven world: a fictional issue tracker for a fictional company, and the reference "
+        "world the framework is developed against. Nothing here mimics a real product's names, "
+        "schema or error text."
+    ),
 )
 ```
 
-The full signature is `World(name, version, schema, *, fixtures_dir=None, work_dir=None,
-untracked_tables=())`. One `World` per package, in `world.py`, so tool modules import it without an
-import cycle. `schema` is the ordered DDL (section 8). `work_dir` is the directory instance copies
-live in (section 10). `untracked_tables` names the tables the changeset session does not attach
-(section 10). `name` and `version` are informational and appear in the OpenEnv metadata and fixture
-sidecars.
+The full signature is `World(name, version, schema, *, description=None, fixtures_dir=None,
+work_dir=None, untracked_tables=())`. One `World` per package, in `world.py`, so tool modules import
+it without an import cycle. `schema` is the ordered DDL (section 8). `work_dir` is the directory
+instance copies live in (section 10). `untracked_tables` names the tables the changeset session does
+not attach (section 10). `name` and `version` are informational and appear in the OpenEnv metadata
+and fixture sidecars. `description` is the one line the OpenEnv metadata publishes beside them
+(section 16): free text, optional, and the only thing that sets it.
+
+*Corrected 2026-09-13 — the signature and the sketch gained `description=`. **It replaces the
+derivation of that one line from the world's README**, which section 16 and
+`components/openenv.md` §2 specified and which is now deleted; the README is unchanged and is still
+the environment's README content. The sketch is headed with the reference world's real path, so it
+quotes that world's real sentence rather than a shorter invented one;
+`components/projecttracker.md` §2 sketches the same file and says the same thing.*
 
 ### 3.2 Registration: three verbs, one mechanism
 
@@ -556,8 +570,16 @@ the agent side.
   which diverges from OpenEnv's convention of reserving `error` for transport failures; the docs say
   so, because a tool error is data an agent reads and must not close the session.
 - **State.** The `state` message returns `episode_id`, `step_count`, `fixture`, `now` and `world`.
-- **Metadata** comes from the world's name and version, and the README content is the world's
-  top-level `README.md`, next to `pyproject.toml`.
+- **Metadata** comes from the world's name and version; the README content is the world's
+  top-level `README.md`, next to `pyproject.toml`, published whole; and the one-line description is
+  `World(description=...)`, an optional plain string on the world. Nothing is derived from the
+  README. A world that gives no description — or gives one that is blank — publishes
+  `Seahaven world <name>`.
+
+  *Corrected 2026-09-13 — this bullet's one-line description was derived from the README's first
+  paragraph, which `components/openenv.md` §2 specified as four CommonMark rules; **the derivation
+  was replaced by an explicit `description=` argument on `World`** and the reader deleted. The
+  README content itself is unchanged.*
 - **Idle sessions** are reaped after `--session-timeout` seconds, 3600 by default; `0` disables the
   reaper. A held session costs its fixture copy on disk plus about a megabyte of memory, so the
   default exists to stop dropped clients accumulating instances.

@@ -265,6 +265,22 @@ def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) 
     assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path).work_dir is None
 
 
+def test_the_description_is_kept_as_given_and_carried_by_a_copy(tmp_path: Path) -> None:
+    """A free string, unvalidated, and `None` when it is not given.
+
+    It is the one-line description the OpenEnv metadata publishes and nothing
+    else reads it. Unlike `name` it never becomes a path or an identifier, so
+    there is no rule to enforce -- an empty string is accepted here and falls
+    back at publication, which `tests/test_env.py` pins.
+    """
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="  A world.  ")
+
+    assert world.description == "  A world.  "
+    assert copy.copy(world).description == "  A world.  "
+    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path).description is None
+    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="").description == ""
+
+
 def test_the_registry_is_ordered_and_read_only(world: World) -> None:
     world.tool(echo)
 

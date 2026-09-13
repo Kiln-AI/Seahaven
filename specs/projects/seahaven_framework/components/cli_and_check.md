@@ -41,7 +41,8 @@ pyproject.toml           # [project] name, requires-python >=3.14, dependencies 
 README.md                # "# <Name>\n\nA Seahaven world.\n" plus the section headings the docs ask for
 AGENTS.md                # the evergreen text plus a "## About this world" stub
 src/<pkg>/__init__.py    # from .world import world; from . import tools, middleware  (explicit imports of each module)
-src/<pkg>/world.py       # world = seahaven.World(name, version="0.1.0", schema=seahaven.sql_files(__package__, "schema"))
+src/<pkg>/world.py       # world = seahaven.World(name, version="0.1.0", schema=seahaven.sql_files(__package__, "schema"),
+                         #   description="A Seahaven world.")
 src/<pkg>/errors.py      # NotFound, InvalidInput (with from_violations), Internal: seahaven.ToolError subclasses
 src/<pkg>/openenv_app.py # app = seahaven.openenv.app(world)
 src/<pkg>/schema/001_items.sql        # one STRICT table `items(id TEXT PK, name TEXT NOT NULL, created_at TEXT NOT NULL)`
@@ -69,6 +70,13 @@ because `fixtures_src/generate.py`'s `build`/`_package_world` were otherwise ren
 a `$package` substitution slip in the one line naming the package would have shipped unnoticed. The
 count of files is the only thing that moved; see `components/world_and_dispatch.md` §1.1.1 for the
 `world=` seam it builds through, and `BACKLOG.md` B19.*
+
+*Corrected 2026-09-13 — the `world.py` line gained `description="A Seahaven world."`, which the
+template now renders. `World` gained the argument (`components/world_and_dispatch.md` §1.1) and it
+is the only thing that sets the OpenEnv one-line description, replacing the derivation of that line
+from the README that `components/openenv.md` §2 specified and no longer does. A scaffold that said
+nothing would publish the fallback `Seahaven world <name>`, so the template ships a placeholder
+sentence with a comment telling its author to replace it. No file is added or removed by this.*
 
 ## 3. `seahaven check`
 

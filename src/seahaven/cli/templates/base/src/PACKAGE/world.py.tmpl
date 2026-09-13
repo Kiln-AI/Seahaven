@@ -11,4 +11,9 @@ world = seahaven.World(
     name="$name",
     version="0.1.0",
     schema=seahaven.sql_files(__package__, "schema"),
+    # The one line an OpenEnv hub shows beside this world's name. Replace it
+    # with a sentence about this world; `README.md` is the card's whole body,
+    # and nothing is derived from it. Left unset, the card reads
+    # "Seahaven world $name".
+    description="A Seahaven world.",
 )

@@ -41,6 +41,7 @@ class World:
         version: str,
         schema: str,
         *,
+        description: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
@@ -49,12 +50,14 @@ class World:
 
 One per world package, built at import in `world.py`. `schema` is the DDL as one string, usually
 from `sql_files`. `name` and `version` are informational and appear in the OpenEnv metadata and in
-every fixture's sidecar. `fixtures_dir` defaults to `fixtures/` at the project root, found by
-walking up from the constructing module to the directory holding `pyproject.toml`, and to
-`fixtures/` beside the package where there is none. `work_dir` is where instance copies live; the
-default is a per-process directory under the system temp directory, which is swept of previous
-processes' leftovers, and a directory you name is used exactly as given and never swept.
-`untracked_tables` names tables the changeset session does not attach.
+every fixture's sidecar. `description` is the one-line description the OpenEnv metadata publishes —
+a free string, unvalidated, and the only thing that sets it; a world that gives none, or gives a
+string that is blank, publishes `Seahaven world <name>`. `fixtures_dir` defaults to `fixtures/` at the
+project root, found by walking up from the constructing module to the directory holding
+`pyproject.toml`, and to `fixtures/` beside the package where there is none. `work_dir` is where
+instance copies live; the default is a per-process directory under the system temp directory, which
+is swept of previous processes' leftovers, and a directory you name is used exactly as given and
+never swept. `untracked_tables` names tables the changeset session does not attach.
 
 A `World` whose DDL does not execute cannot be constructed: the schema is built in memory to compute
 the schema hash, and SQLite's own message is reported. Nor is one whose `name` is not a single
@@ -73,7 +76,7 @@ a separator, a leading dot or a NUL is refused with `not a world name`.
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |
 | `world.accepted_startup_kwargs` | every keyword some hook names |
-| `world.name`, `world.version`, `world.schema`, `world.schema_hash`, `world.fixtures_dir` | as given, plus the hash of the normalised DDL |
+| `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir` | as given, plus the hash of the normalised DDL |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
 [../authoring.md](../authoring.md).

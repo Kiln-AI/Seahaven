@@ -18,40 +18,6 @@ it. Close an item by deleting it in the commit that fixes it.
 
 ## Open
 
-### B16. The README rules are a quarter of `seahaven/openenv/env.py` and belong in their own module
-
-**Found:** Phase 6 code review, round 4. **Owner:** unassigned. **Risk:** low as a defect, real as a
-maintenance shape — every defect this phase's reviews found was in this one block.
-
-`_first_paragraph` and its six helpers — `_after_front_matter`, `_is_rule`, `_is_underline`,
-`_is_thematic_break`, `_is_title_line`, `_is_prose` — are about 130 lines and a large share of
-`env.py`'s 106 statements. What they implement is a small CommonMark reader: front matter as a
-block, thematic breaks, setext underlines, a byte-order mark. What the module they live in is *for*
-is the server side of the wire: sessions, actions, observations, state. The block is there because
-`get_metadata` needs a one-line description, which is a one-line need answered by a hundred and
-thirty lines of someone else's format.
-
-Four review rounds found four defects, and all four were in this block: an unbounded block skip
-(round 1), that fix regressing the well-formed case (round 2), `*` missing from the break set
-(round 3), and two miscounted kill rows for its own mutants (round 4). Round 5 found no defect in
-the code and two more faults in its record: a kill count read off a mutant narrower than the row
-describing it, and the block's one accidental deviation from CommonMark (a heading is any line
-starting with `#`) with neither a case nor a note; that deviation is now stated in
-`components/openenv.md` §2. None of them was in `reset`, `step`, `state`, `close` or the client.
-That is not a coincidence about difficulty so much as about
-*locality*: the rules are the only part of this module that is a parser, and a parser wants its own
-file, its own suite and its own name.
-
-The move is small and mechanical — `seahaven/openenv/readme.py`, `_first_paragraph` re-exported or
-imported by `env.py`, and `tests/test_readme.py` taking the fifty-five parametrized cases with it.
-It is filed rather than done because `components/openenv.md` §1 names the subpackage's module list,
-so adding a module changes the surface a `status: complete` artifact describes. That is a different
-call from the one made on 2026-09-13, which corrected wrong sentences in completed artifacts
-(B2, B7, B8, B10, B12, B14, B21) without touching what they design: this one would change the
-design, so it still needs the maintainer.
-
----
-
 ### B20. The concurrency gate starves a caller whenever it binds
 
 **Decision (2026-09-13, maintainer): leave the behaviour; do not replace the semaphore.** Record it

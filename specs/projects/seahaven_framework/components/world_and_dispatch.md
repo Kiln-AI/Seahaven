@@ -14,10 +14,12 @@ parameters rather than hand-written.
 ```python
 class World:
     def __init__(self, name: str, version: str, schema: str, *,
+                 description: str | None = None,
                  fixtures_dir: Path | str | None = None,
                  work_dir: Path | str | None = None,
                  untracked_tables: Sequence[str] = ()) -> None
     name: str; version: str; schema: str; schema_hash: str
+    description: str | None                   # the OpenEnv metadata's one line; free text, unvalidated
     fixtures_dir: Path; work_dir: Path | None; untracked_tables: tuple[str, ...]
     tools: Mapping[str, Tool]                 # read-only view, insertion ordered, control tools included
     middlewares: Sequence[Middleware]
@@ -57,6 +59,11 @@ type StartupHook = Callable[..., None]
    found names `World(fixtures_dir=...)` in its message. Cached on the instance.
 4. Control tools (`controller_run_sql`, `controller_changes`) are registered immediately with
    `control=True`.
+5. `description`: kept exactly as given, and `None` when it is not given. It is the one-line
+   description the OpenEnv metadata publishes (`components/openenv.md` §2) and nothing else reads
+   it. Deliberately unvalidated: unlike `name`, which becomes a path component, it is free text
+   with nothing for a rule to protect, and `None` and any blank string alike mean the fallback at
+   publication.
 
 ### 1.1.1 Copying
 
@@ -83,6 +90,12 @@ else wants is the shallow one — `copy.copy` is that seam.
 `build(fixture_id, *, world=...)`: a plain shallow copy inherits the instance manager, which hands
 the *original* world to every instance it makes and so freezes back into the original's fixtures
 directory. Closes `BACKLOG.md` B19.*
+
+*Corrected 2026-09-13 — `World` gained `description`, an optional plain string, in §1's sketch and
+§1.1's construction list. **It replaces the derivation of the OpenEnv one-line description from the
+world's README**, which `components/openenv.md` §2 specified as four CommonMark rules and now does
+not; that reader is deleted. Nothing here validates or copies it specially — `__copy__` carries it
+with the rest of `__dict__`, as it does `name` and `version`.*
 
 ### 1.2 Registration
 

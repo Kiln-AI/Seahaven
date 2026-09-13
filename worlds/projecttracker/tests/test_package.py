@@ -168,6 +168,41 @@ def test_the_world_reads_its_fixtures_from_the_package_directory() -> None:
     assert (world.fixtures_dir.parent / "pyproject.toml").is_file()
 
 
+def test_the_worlds_description_is_a_sentence_the_readme_really_contains() -> None:
+    """The hand-kept invariant `world.py` states, pinned as containment and no more.
+
+    `world.py` carries the one-line description as a literal and says in a
+    comment that it is kept in step with the README's opening paragraph by hand.
+    Nothing derives it -- deriving prose from the README is precisely the
+    machinery this design removed -- so without a test the two drift apart
+    silently the next time someone edits the README, and the drift shows up on a
+    published hub card and nowhere else.
+
+    The check is deliberately loose: the sentence has to appear *somewhere* in
+    the README, not be equal to its first paragraph and not be located by
+    parsing one. A test that went looking for the opening paragraph would be a
+    paragraph reader again, in the test suite instead of the runtime, and would
+    fail on a heading added above it or a line rewrapped beneath it. This fails
+    on one thing only, which is the thing that matters: the README no longer
+    says what the card says.
+
+    Whitespace is normalised on both sides because the README is hard-wrapped at
+    a hundred columns and the literal is joined from three source lines, so the
+    two agree on words and disagree on newlines. That is not a parse; it is the
+    same sentence, read with the line breaks ignored.
+
+    The README is located the way `get_metadata` locates it and the way the
+    fixtures test above derives its path -- beside the world's `pyproject.toml`,
+    from `fixtures_dir.parent` -- rather than by counting `..` from this file.
+    """
+    readme = (world.fixtures_dir.parent / "README.md").read_text(encoding="utf-8")
+    assert world.description is not None
+    assert " ".join(world.description.split()) in " ".join(readme.split()), (
+        "worlds/projecttracker/README.md no longer contains world.py's description verbatim; "
+        "they are kept in step by hand, so update whichever one is now wrong"
+    )
+
+
 @pytest.mark.parametrize(
     "role",
     ["admin", "member", "viewer"],
