@@ -47,6 +47,11 @@ _REGISTERED = re.compile(r'code="(SH\d+)"')
 # exactly the staleness these tests exist to catch.
 _DOCUMENTED = re.compile(r"^\|\s*(SH\d+)\s*\|", re.MULTILINE)
 
+# A markdown link target that is meant to name a page of the layout. An `http`
+# target is a link *out* of the docs, and the test below is about which pages
+# exist -- matching one would fail the layout test over a working link.
+_PAGE_LINK = re.compile(r"\]\((?!https?://)([^)]+)\)")
+
 DOCS = Path(docs_path())
 SOURCE = Path(seahaven.__file__).resolve().parent
 
@@ -98,8 +103,18 @@ def test_the_docs_are_where_seahaven_docs_says_they_are() -> None:
 def test_every_page_index_md_links_to_is_a_page_of_the_layout() -> None:
     """`index.md` is the reading order, and it ships: a dead link in it ships too."""
     index = (DOCS / "index.md").read_text(encoding="utf-8")
-    linked = set(re.findall(r"\]\(([^)]+)\)", index))
+    linked = set(_PAGE_LINK.findall(index))
     assert linked <= set(PAGES), f"{sorted(linked - set(PAGES))} is linked from index.md"
+
+
+def test_a_link_out_of_the_docs_is_not_read_as_a_page_of_the_layout() -> None:
+    """`index.md` has no external link today, and the first one must not fail the test above.
+
+    Asserted on a sample rather than on the page, because the page that has no
+    such link is exactly the page that cannot show this.
+    """
+    sample = "[the OpenEnv spec](https://example.invalid/spec) and [concepts](concepts.md)\n"
+    assert set(_PAGE_LINK.findall(sample)) == {"concepts.md"}
 
 
 def test_every_registered_lint_code_is_documented() -> None:

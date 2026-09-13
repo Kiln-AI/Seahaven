@@ -23,6 +23,12 @@ rebuild a fixture here:
 
     uv run python worlds/projecttracker/fixtures_src/generate.py small_startup
 
+`build` and `main` both take `world=`, defaulting to this package's. A fixture is
+frozen into the world it is handed, so that is how `tests/test_fixtures.py`
+rebuilds all three into a temporary directory to compare them with the committed
+bytes -- rather than moving the imported world's fixtures directory, which every
+other caller in the process would see.
+
 Every fixture is frozen from a *blank* instance at `NOW`, so the tracker's clock
 is the same instant in all of them and a scenario written against one reads the
 same as a scenario written against another. Nothing here reads the wall clock,
@@ -319,26 +325,44 @@ def agency(inst: seahaven.Instance) -> None:
 BUILDERS = {"empty": empty, "small_startup": small_startup, "agency": agency}
 
 
-def build(fixture_id: str) -> seahaven.Fixture:
-    """Freeze `fixture_id` into the world's fixtures directory, and return it.
+def build(fixture_id: str, *, world: seahaven.World | None = None) -> seahaven.Fixture:
+    """Freeze `fixture_id` from a blank instance at `NOW`, and return it.
+
+    `world` is which world to freeze into, defaulting to this package's. A
+    fixture lands in `world.fixtures_dir`, so this is the seam a test builds
+    through: `tests/test_fixtures.py` rebuilds all three into a temporary
+    directory to compare them with the committed bytes, and hands in a world
+    pointed there rather than moving the imported one's -- which is a
+    process-wide change every other test in the run would see.
 
     The instance is destroyed whether the build succeeds or not, and a failure
     leaves no fixture directory behind: `freeze` publishes by rename.
     """
-    # Imported here, not at module import: `seahaven fixture freeze --run` imports
-    # this module for one function, and a builder should not cost a world import
-    # until it is called. Spelled through `world.py` rather than through the
-    # package attribute, which is a `World` shadowing the module of that name.
-    from projecttracker.world import world
-
+    into = world if world is not None else _package_world()
     builder = BUILDERS[fixture_id]
-    with world.instance(None, now=NOW) as inst:
+    with into.instance(None, now=NOW) as inst:
         builder(inst)
         return inst.freeze(fixture_id, DESCRIPTIONS[fixture_id])
 
 
-def main(argv: list[str]) -> int:
+def _package_world() -> seahaven.World:
+    """This world, imported when a build asks for it and not before.
+
+    `seahaven fixture freeze --run` imports this module for one function, and a
+    builder should not cost a world import until it is called. Spelled through
+    `world.py` rather than through the package attribute, which is a `World`
+    shadowing the module of that name.
+    """
+    from projecttracker.world import world
+
+    return world
+
+
+def main(argv: list[str], *, world: seahaven.World | None = None) -> int:
     """`python generate.py <fixture-id>...`, or with no arguments, every fixture.
+
+    `world` is `build`'s, passed straight through, so the whole set can be
+    rebuilt somewhere other than this checkout's `fixtures/`.
 
     Refuses to overwrite: `freeze` fails if the directory exists, because a
     fixture is immutable once it is published. Rebuilding one means deleting it
@@ -351,7 +375,7 @@ def main(argv: list[str]) -> int:
         print(f"known fixtures: {', '.join(sorted(BUILDERS))}", file=sys.stderr)
         return 1
     for fixture_id in ids:
-        fixture = build(fixture_id)
+        fixture = build(fixture_id, world=world)
         print(f"froze {fixture.id} at {fixture.now} -> {fixture.dir}")
     return 0
 

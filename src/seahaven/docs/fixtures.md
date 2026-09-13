@@ -116,6 +116,12 @@ Choose it once, write it in the generator's docstring, and never move it.
 
 `fork` needs no `--now`: a fork inherits its parent's clock, which is the point of forking.
 
+The scaffold's `build(fixture_id, *, world=...)` is that same freeze with `--now` and the
+description carried for you, and `world=` is the seam a test builds through: a fixture is frozen
+into `world.fixtures_dir`, so a test that rebuilds one to compare it with the committed bytes hands
+in `copy.copy(world)` pointed at a temporary directory rather than moving the imported world's,
+which every other caller in the process would see.
+
 ## Descriptions are for eval authors
 
 The `description` is the one field written for a person — or an agent — choosing between fixtures.

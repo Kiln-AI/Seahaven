@@ -1,5 +1,6 @@
 """The world object: construction, the three registration verbs, and what each of them refuses."""
 
+import copy
 import importlib.resources
 import importlib.util
 import os
@@ -25,6 +26,9 @@ from seahaven.world import World, sql_files
 SRC_DIR = str(Path(seahaven.__file__).parent.parent)
 
 SCHEMA = "CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;"
+
+# A fixed instant, so a fixture frozen in a test carries a clock somebody chose.
+NOW = "2026-01-01T00:00:00.000Z"
 
 MODULE_SOURCE = f"""
 from seahaven import World
@@ -156,6 +160,50 @@ def test_an_installed_package_has_its_fixtures_beside_it(tmp_path: Path) -> None
     world = world_built_in(site_packages / "generated" / "world.py")
 
     assert world.fixtures_dir == site_packages / "fixtures"
+
+
+def test_a_copy_keeps_the_registrations_and_freezes_where_it_is_pointed(tmp_path: Path) -> None:
+    """`copy.copy(world)` is how a caller says "this world, writing somewhere else".
+
+    The reason it needs a `__copy__` at all is the instance manager: a `World`
+    makes one lazily and hands *itself* to every instance it creates, so a plain
+    attribute copy -- which would carry the original's manager -- makes instances
+    belonging to the original and freezes them back into the original's fixtures
+    directory, silently. A world's fixture test rebuilds the committed fixtures
+    into a temporary directory through this, and that is the failure it would
+    otherwise get.
+    """
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path / "here", work_dir=tmp_path / "work")
+    world.tool(echo)
+    (tmp_path / "here").mkdir()
+    (tmp_path / "there").mkdir()
+    # A manager on the original before the copy is taken: the case that fails.
+    with world.instance(None, now=NOW):
+        pass
+
+    elsewhere = copy.copy(world)
+    elsewhere.fixtures_dir = tmp_path / "there"
+    with elsewhere.instance(None, now=NOW) as live:
+        assert live.call("echo", word="hi") == {"word": "hi"}
+        frozen = live.freeze("only", "The one fixture, frozen by a copy.")
+
+    assert frozen.dir == tmp_path / "there" / "only"
+    assert [fixture.id for fixture in elsewhere.fixtures()] == ["only"]
+    assert world.fixtures() == []
+    assert world.fixtures_dir == tmp_path / "here"
+
+
+def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
+    """The registries are copied, not shared: a tool added to a copy does not reach back."""
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world.tool(echo)
+
+    elsewhere = copy.copy(world)
+    elsewhere.tool(echo, name="echo_twice")
+
+    assert "echo_twice" in elsewhere.tools
+    assert "echo_twice" not in world.tools
+    assert "echo" in elsewhere.tools
 
 
 def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) -> None:

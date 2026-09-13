@@ -142,6 +142,7 @@ class _Gate(threading.BoundedSemaphore):
         return self._initial_value  # ty: ignore[unresolved-attribute]
 
 
+# Enhancement: a FIFO gate hands slots out in arrival order; this one starves (`BACKLOG.md` B20).
 _gate: _Gate | None = _Gate(default_concurrency())
 
 

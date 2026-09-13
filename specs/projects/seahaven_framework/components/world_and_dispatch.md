@@ -34,6 +34,7 @@ class World:
                  now: str | datetime | None = None,
                  **startup_kwargs: Any) -> Instance
     def fixtures(self) -> list[Fixture]
+    def __copy__(self) -> World                 # `copy.copy(world)`: same registrations, its own instances
     chain: Handler                              # the middleware chain, rebuilt on each middleware registration
 
 type Handler = Callable[[Ctx, Call], Any]
@@ -56,6 +57,19 @@ type StartupHook = Callable[..., None]
    found names `World(fixtures_dir=...)` in its message. Cached on the instance.
 4. Control tools (`controller_run_sql`, `controller_changes`) are registered immediately with
    `control=True`.
+
+### 1.1.1 Copying
+
+`copy.copy(world)` is how a caller says "this world, writing somewhere else": the copy carries the
+identity, the schema and copies of the three registries, and `fixtures_dir` is then set on it. It
+is what a world's fixture test builds through, so that rebuilding the committed fixtures into a
+temporary directory does not move the imported world's directory for every other caller in the
+process (`fixtures_src/generate.py`'s `build(fixture_id, *, world=...)`).
+
+The registries are copied and not shared, so registering on a copy does not reach back. The
+instance manager is **not** carried over: a manager hands the world it was made for to every
+instance it creates, and that world is the one an instance freezes into — a copy that inherited one
+would freeze back into the directory it was copied from, silently.
 
 ### 1.2 Registration
 
@@ -307,7 +321,8 @@ helper explicitly does (`run_sql` in the SQLite dialect does, by design).
   are used by that instance; decorator and call forms of all three verbs return the right objects; middleware shape
   check accepts functions, callables with `__call__`, and `*args`; rejects two-parameter callables;
   startup hook signature rules, refusal of `fixture`/`seed`/`now` parameters, and
-  `accepted_startup_kwargs`.
+  `accepted_startup_kwargs`; a copy with a moved `fixtures_dir` freezes there and leaves the
+  original's directory empty, and a tool registered on a copy does not appear on the original.
 - `test_tool.py`: argument models for `str`, `int`, `float`, `bool`, `None` unions, `list[str]`,
   `dict[str, int]`, `Literal`, a nested `BaseModel`, a `TypedDict`, `Annotated` with description and
   constraints; `Enum` and `datetime` parameters **rejected** at registration; defaults and required;

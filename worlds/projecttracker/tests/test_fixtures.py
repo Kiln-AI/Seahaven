@@ -7,6 +7,7 @@ what its description promises an eval author, and that `fixtures_src/generate.py
 still makes it -- so the recipe cannot rot beside the files it produced.
 """
 
+import copy
 import hashlib
 import importlib
 import importlib.util
@@ -108,6 +109,21 @@ def generate() -> Any:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def world_writing_into(directory: Path) -> seahaven.World:
+    """This world, with its fixtures directory pointed at `directory`.
+
+    `build(..., world=...)` freezes into the world it is handed, so this is how a
+    test says "build them over here". A copy and not the imported object: moving
+    the imported world's `fixtures_dir` moves it for everything else in the run,
+    and a test that failed halfway would leave the rest of the session reading
+    fixtures out of a deleted temporary directory. `World.__copy__` gives the
+    copy its own instance manager, which is what makes the redirect hold.
+    """
+    elsewhere = copy.copy(world)
+    elsewhere.fixtures_dir = directory
+    return elsewhere
 
 
 def test_the_generator_is_reachable_by_the_module_path_its_docstring_names() -> None:
@@ -341,32 +357,27 @@ def test_using_a_fixture_does_not_touch_the_committed_file(fixture_id: str) -> N
 
 
 @pytest.fixture
-def rebuilt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> tuple[Any, Any]:
+def rebuilt(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> tuple[Any, Any]:
     """Run the committed recipe into `tmp_path`, and hand back what it made and what is committed.
 
     Through `generate.main`, not through a copy of what it does: a test that
     rebuilt the fixture its own way would pass while the committed recipe rotted.
-    The world's fixtures directory is redirected for the duration so the rebuild
-    lands in `tmp_path` -- `freeze` refuses to overwrite, and nothing may write
-    into the repository from a test.
+    `main` passes its `world=` down to `build`, which is the seam that lets the
+    rebuild land in `tmp_path` -- `freeze` refuses to overwrite, and nothing may
+    write into the repository from a test.
     """
-    # Resolved before the redirect, because afterwards `world.fixtures()` is
-    # the rebuild. A `Fixture` holds absolute paths, so it stays readable.
     committed = _by_id()
     module = generate()
 
     rebuilt_dir = tmp_path / "fixtures"
     rebuilt_dir.mkdir()
-    monkeypatch.setattr(world, "fixtures_dir", rebuilt_dir)
-    assert module.main([]) == 0
+    assert module.main([], world=world_writing_into(rebuilt_dir)) == 0
 
     printed = capsys.readouterr()
     for fixture_id in committed:
         assert f"froze {fixture_id} at {FIXTURE_NOW}" in printed.out
 
-    made = _by_id()
+    made = fixture_files.load_all(rebuilt_dir)
     assert sorted(made) == sorted(committed)
     return made, committed
 
@@ -456,6 +467,7 @@ def test_the_generators_functions_say_in_their_types_what_a_builder_is() -> None
     }
     assert inspect.get_annotations(module.build, eval_str=True) == {
         "fixture_id": str,
+        "world": seahaven.World | None,
         "return": seahaven.Fixture,
     }
 
@@ -521,14 +533,15 @@ def test_the_generator_freezes_what_its_builder_wrote(
 
     monkeypatch.setitem(module.BUILDERS, "one_user", one_user)
     monkeypatch.setitem(module.DESCRIPTIONS, "one_user", "One user, for a test.")
-    monkeypatch.setattr(world, "fixtures_dir", tmp_path / "fixtures")
     (tmp_path / "fixtures").mkdir()
+    elsewhere = world_writing_into(tmp_path / "fixtures")
 
-    fixture = module.build("one_user")
+    fixture = module.build("one_user", world=elsewhere)
 
     assert fixture.description == "One user, for a test."
     assert fixture.now == FIXTURE_NOW
-    with world.instance("one_user") as instance:
+    assert fixture.dir.parent == tmp_path / "fixtures"
+    with elsewhere.instance("one_user") as instance:
         (only,) = instance.call("list_users")["users"]
         assert only["email"] == "founder@example.invalid"
 

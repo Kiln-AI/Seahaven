@@ -96,7 +96,7 @@ def world(request: pytest.FixtureRequest) -> World:
 @pytest.fixture
 def instance(request: pytest.FixtureRequest, world: World) -> Iterator[Instance]:
     """A fresh instance per test, from the fixture the `seahaven` marker names."""
-    _refuse_two_markers_on_one_test(request.node)
+    _refuse_two_markers_on_one_node(request.node)
     marker = request.node.get_closest_marker(MARKER)
     if marker is None:
         pytest.fail(f"the `instance` fixture needs a marker: {_EXAMPLE}", pytrace=False)
@@ -105,23 +105,25 @@ def instance(request: pytest.FixtureRequest, world: World) -> Iterator[Instance]
         yield live
 
 
-def _refuse_two_markers_on_one_test(node: pytest.Item) -> None:
-    """Two `seahaven` markers on one test: the second one written wins, silently.
+def _refuse_two_markers_on_one_node(item: pytest.Item) -> None:
+    """Two `seahaven` markers on one node -- test, class or module: one wins, silently.
 
-    `own_markers` and not `iter_markers`: a module's `pytestmark` and a marker on
-    a test are two nodes and the closest one is meant to win, which is how a
-    module of fixture tests spells its one blank-instance case. Two decorators on
-    the *same* test are one node, nothing chooses between them on purpose, and
-    the one that wins is the lower of the two -- which is the opposite of how a
-    reader going down the file reads them.
+    `own_markers` over `listchain()` and not `iter_markers`: a module's
+    `pytestmark` and a marker on a test are two *different* nodes, and the
+    closest one is meant to win -- that is how a module of fixture tests spells
+    its one blank-instance case. Two markers on a single node are the ambiguity:
+    nothing chooses between them on purpose, and the two spellings do not even
+    choose the same end of the list. The lower of two decorators wins; the first
+    entry of a `pytestmark` list wins.
     """
-    markers = [mark for mark in node.own_markers if mark.name == MARKER]
-    if len(markers) > 1:
-        pytest.fail(
-            f"the test carries {len(markers)} @pytest.mark.{MARKER} markers and only the last "
-            f"would be used; keep one: {_EXAMPLE}",
-            pytrace=False,
-        )
+    for node in item.listchain():
+        markers = [mark for mark in node.own_markers if mark.name == MARKER]
+        if len(markers) > 1:
+            pytest.fail(
+                f"{node.nodeid} carries {len(markers)} @pytest.mark.{MARKER} markers and only "
+                f"one of them would be used; keep one: {_EXAMPLE}",
+                pytrace=False,
+            )
 
 
 def _fixture_and_kwargs(marker: pytest.Mark) -> tuple[str | None, dict[str, Any]]:

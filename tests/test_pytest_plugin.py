@@ -286,6 +286,34 @@ def test_two_markers_on_one_test_are_refused(pytester: pytest.Pytester) -> None:
     result.stdout.fnmatch_lines(["*2 @pytest.mark.seahaven markers*"])
 
 
+def test_two_markers_in_a_modules_pytestmark_are_refused(pytester: pytest.Pytester) -> None:
+    """The same ambiguity a level up, and it does not even resolve the same way.
+
+    `pytestmark` as a list is one node carrying two markers, and `get_closest_marker`
+    takes the *first* -- the opposite end from the two decorators above. Both tests
+    run, both against `empty`, and nothing says so; the guard has to reach past the
+    item into the nodes above it.
+    """
+    write_world(pytester)
+    freeze_fixture(pytester)
+    pytester.makepyfile(
+        """
+        import pytest
+
+        pytestmark = [
+            pytest.mark.seahaven(fixture="empty"),
+            pytest.mark.seahaven(fixture=None),
+        ]
+
+        def test_it(instance):
+            assert instance is not None
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*2 @pytest.mark.seahaven markers*"])
+
+
 def test_a_marker_on_a_test_overrides_the_modules(pytester: pytest.Pytester) -> None:
     """The legitimate override, which the refusal above must not touch.
 

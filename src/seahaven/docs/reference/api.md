@@ -68,6 +68,7 @@ a separator, a leading dot or a NUL is refused with `not a world name`.
 | `world.instance_startup(obj=None)` | register a startup hook, as a decorator or a call |
 | `world.instance(fixture=None, *, seed=None, now=None, **startup_kwargs)` | make an instance; a context manager |
 | `world.fixtures()` | every fixture in the fixtures directory, by id. A world with no fixtures directory has none, which is not an error |
+| `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only |
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |

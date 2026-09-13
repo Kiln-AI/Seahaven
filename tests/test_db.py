@@ -210,8 +210,8 @@ def test_closing_the_database_closes_the_clock_helper(db_path: Path, clock: Cloc
     `_FUNCTIONS` that `register_clock_functions` puts on the world connection is
     a closure over the helper -- the three in `_CONSTANTS` hold a string read at
     registration and are not -- so the helper outlives the `Db` for as long as
-    the world connection does. Left unclosed it is a live SQLite connection per instance, and an eval
-    run makes thousands of instances.
+    the world connection does. Left unclosed it is a live SQLite connection per
+    instance, and an eval run makes thousands of instances.
     """
     database = open_instance(db_path, clock)
     helper = database._helper

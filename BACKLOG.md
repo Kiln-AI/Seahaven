@@ -161,55 +161,6 @@ design, so it still needs the maintainer.
 
 ---
 
-### B18. The pytest plugin's two-marker guard sees only the test's own node
-
-**Found:** Phase 8 code review, round 2, verified by running it. **Owner:** unassigned. **Risk:**
-low: a test silently runs against a fixture other than the one a reader would pick, in a spelling
-nobody writes on purpose.
-
-`src/seahaven/pytest_plugin.py`'s `_refuse_two_markers_on_one_test` counts the `seahaven` markers in
-`request.node.own_markers`, which refuses two decorators on one test. The same ambiguity a level up
-is not refused:
-
-```python
-pytestmark = [pytest.mark.seahaven(fixture="empty"), pytest.mark.seahaven(fixture=None)]
-```
-
-`get_closest_marker` resolves that to the **first** of the two, which is the opposite of the
-decorator case the guard does refuse (there the lower one wins), so the two spellings of "two
-markers" disagree with each other as well as being silent. Scanning `own_markers` over
-`node.listchain()` rather than the item alone would refuse both; `iter_markers` still must not be
-used, because a module's `pytestmark` plus one marker on a test is the legitimate override and is
-tested as such (`tests/test_pytest_plugin.py::test_a_marker_on_a_test_overrides_the_modules`).
-
-Not fixed in Phase 8 because the fix belongs with a test of the module-level case and the phase's
-diff was under review; it is a residual of a defect that review found, not a new one.
-
-Smaller, found beside it: `tests/test_docs.py::test_every_page_index_md_links_to_is_a_page_of_the_layout`
-matches every `](...)` target in `index.md`, so the first external `http` link Phase 12 adds to that
-page fails a test about the docs *layout*. Filtering to targets that are not `http` would make the
-test say what it means.
-
-### B19. A fixture generator cannot be pointed at a world, so testing one means monkeypatching
-
-**Found:** Phase 10 code review (Mild 6). **Owner:** unassigned. **Risk:** low; it costs every world
-a monkeypatch in its own fixture test.
-
-`seahaven fixture freeze --run module:function` calls a generator with a live instance, and the
-scaffolded `generate.py` gets that instance by importing the world package and calling
-`world.instance(...)` itself. The fixtures directory is therefore whatever the imported `World`
-object says, and a test that rebuilds the fixtures to compare them with the committed bytes cannot
-say "build them over here" — it has to reach into the singleton
-(`monkeypatch.setattr(world, "fixtures_dir", tmp_path)`), which is what
-`worlds/projecttracker/tests/test_fixtures.py` does.
-
-Nothing is broken: the CLI works, the recipe works, and the monkeypatch is contained. What is
-missing is a seam. Either the scaffold's `build()` should take the world (`build(fixture_id, *,
-world=...)`, defaulting to the package's), which is a template change and a docs sentence, or
-`Instance.freeze` should take a destination directory, which is a framework change. It was not taken
-in Phase 10 because it is the scaffold's shape as much as the framework's and belongs with the
-template work rather than inside one world's diff.
-
 ### B20. The concurrency gate starves a caller whenever it binds
 
 **Decision (2026-09-13, maintainer): leave the behaviour; do not replace the semaphore.** Record it
@@ -270,8 +221,9 @@ per world, but it is the same problem in every world that has an activity feed.
 *Renumbered from a second B18 in Phase 12, which was the first phase to cite it by number alone.
 `phase_plans/phase_10.md` cites it twice and was not edited, being `status: complete`: its `:241`
 quotes this heading beside the number, so that citation still lands here, and its `:288` is a bare
-"`BACKLOG.md` B18", which now lands on the surviving B18 -- the pytest plugin's two-marker guard --
-and means this item. That one dangling citation is the price of leaving a completed artifact alone.*
+"`BACKLOG.md` B18", which means this item -- and which now lands on no entry at all, the pytest
+plugin's two-marker guard having been closed. That one dangling citation is the price of leaving a
+completed artifact alone.*
 
 An instance's clock is frozen (`functional_spec.md` §11, and a progressing clock is a §24 non-goal),
 so every row an episode writes carries one `created_at`. A table whose rows are meant to be read in

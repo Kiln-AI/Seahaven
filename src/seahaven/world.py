@@ -232,6 +232,32 @@ class World:
         """
         return sorted(load_all(self.fixtures_dir).values(), key=lambda fixture: fixture.id)
 
+    def __copy__(self) -> World:
+        """This world, to be pointed somewhere else: `copy.copy(world)`, then set an attribute.
+
+        A world is imported once and everything in the process holds the same
+        object, so moving `fixtures_dir` on it -- what a test that rebuilds the
+        committed fixtures into a temporary directory wants -- moves it for every
+        other caller too, for the rest of the run. A copy is how that is said
+        locally.
+
+        The registrations are copied rather than shared, so registering a tool on
+        a copy does not reach back into the world it came from. The instance
+        manager is deliberately *not* carried over: a manager hands the world it
+        was made for to every instance it makes, and that world is the one an
+        instance freezes into -- so a copy that inherited one would quietly
+        freeze back into the directory the copy was taken from, which is the one
+        thing a copy exists to avoid.
+        """
+        twin = object.__new__(World)
+        twin.__dict__.update(self.__dict__)
+        twin._tools = dict(self._tools)
+        twin._middlewares = list(self._middlewares)
+        twin._startup_hooks = list(self._startup_hooks)
+        twin._manager = None
+        twin._manager_lock = threading.Lock()
+        return twin
+
     def _instances(self) -> InstanceManager:
         with self._manager_lock:
             if self._manager is None:
