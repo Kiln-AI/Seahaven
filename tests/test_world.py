@@ -1,5 +1,6 @@
 """The world object: construction, the three registration verbs, and what each of them refuses."""
 
+import copy
 import importlib.resources
 import importlib.util
 import os
@@ -25,6 +26,9 @@ from seahaven.world import World, sql_files
 SRC_DIR = str(Path(seahaven.__file__).parent.parent)
 
 SCHEMA = "CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;"
+
+# A fixed instant, so a fixture frozen in a test carries a clock somebody chose.
+NOW = "2026-01-01T00:00:00.000Z"
 
 MODULE_SOURCE = f"""
 from seahaven import World
@@ -70,6 +74,45 @@ def test_a_world_is_its_name_its_version_and_its_schema(tmp_path: Path) -> None:
     world = World("projecttracker", "1.2.0", SCHEMA, fixtures_dir=tmp_path)
 
     assert (world.name, world.version, world.schema) == ("projecttracker", "1.2.0", SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        ".",
+        "..",
+        "../..",
+        "../escaped",
+        "a/b",
+        "a/",
+        "/abs",
+        "a\\b",
+        ".hidden",
+        "a/../b",
+        "a\x00b",
+    ],
+)
+def test_a_world_name_that_is_not_a_directory_name_is_refused(tmp_path: Path, bad: str) -> None:
+    """The name becomes a path component, and `_open_child`'s `O_NOFOLLOW` does not stop a `..`.
+
+    `World("..")` used to put an instance in the working root beside the
+    per-process directories, and `World("../..")` a live `state.sqlite` outside
+    the root entirely, where the sweep never looks.
+    """
+    with pytest.raises(WorldBug, match="not a world name"):
+        World(bad, "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+
+
+def test_a_world_name_is_refused_before_anything_is_built(tmp_path: Path) -> None:
+    """The name is checked first, so a bad name reads as a bad name and not as bad DDL."""
+    with pytest.raises(WorldBug, match="not a world name"):
+        World("..", "1.0.0", "CREATE TALBE notes (id TEXT PRIMARY KEY);", fixtures_dir=tmp_path)
+
+
+def test_a_dot_inside_a_world_name_is_fine(tmp_path: Path) -> None:
+    """Only a *leading* dot is refused: `..` is the traversal, `a.b` is a name."""
+    assert World("a.b", "1.0.0", SCHEMA, fixtures_dir=tmp_path).name == "a.b"
 
 
 def test_the_schema_hash_ignores_layout_and_nothing_else(tmp_path: Path) -> None:
@@ -119,6 +162,93 @@ def test_an_installed_package_has_its_fixtures_beside_it(tmp_path: Path) -> None
     assert world.fixtures_dir == site_packages / "fixtures"
 
 
+def test_a_copy_keeps_the_registrations_and_freezes_where_it_is_pointed(tmp_path: Path) -> None:
+    """`copy.copy(world)` is how a caller says "this world, writing somewhere else".
+
+    The reason it needs a `__copy__` at all is the instance manager: a `World`
+    makes one lazily and hands *itself* to every instance it creates, so a plain
+    attribute copy -- which would carry the original's manager -- makes instances
+    belonging to the original and freezes them back into the original's fixtures
+    directory, silently. A world's fixture test rebuilds the committed fixtures
+    into a temporary directory through this, and that is the failure it would
+    otherwise get.
+    """
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path / "here", work_dir=tmp_path / "work")
+    world.tool(echo)
+    (tmp_path / "here").mkdir()
+    (tmp_path / "there").mkdir()
+    # A manager on the original before the copy is taken: the case that fails.
+    with world.instance(None, now=NOW):
+        pass
+
+    elsewhere = copy.copy(world)
+    elsewhere.fixtures_dir = tmp_path / "there"
+    with elsewhere.instance(None, now=NOW) as live:
+        assert live.call("echo", word="hi") == {"word": "hi"}
+        frozen = live.freeze("only", "The one fixture, frozen by a copy.")
+
+    assert frozen.dir == tmp_path / "there" / "only"
+    assert [fixture.id for fixture in elsewhere.fixtures()] == ["only"]
+    assert world.fixtures() == []
+    assert world.fixtures_dir == tmp_path / "here"
+
+
+def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
+    """All three registries are copied, not shared: nothing added to a copy reaches back."""
+
+    def passthrough(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        return next_(ctx, call)
+
+    def startup(ctx: Ctx) -> None:
+        pass
+
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world.tool(echo)
+
+    elsewhere = copy.copy(world)
+    elsewhere.tool(echo, name="echo_twice")
+    elsewhere.middleware(passthrough)
+    elsewhere.instance_startup(startup)
+
+    assert "echo_twice" in elsewhere.tools
+    assert "echo_twice" not in world.tools
+    assert "echo" in elsewhere.tools
+    assert elsewhere.middlewares == (passthrough,)
+    assert world.middlewares == ()
+    assert [hook.fn for hook in elsewhere.startup_hooks] == [startup]
+    assert world.startup_hooks == ()
+
+
+def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -> None:
+    """The other direction, which the docstring and the spec both promise.
+
+    `world.py`'s module docstring says registration is open for the life of the
+    world and that the registry and the chain are read at call time. A copy is
+    the one place that stops: it holds the three registries as they were, so a
+    world is copied once import-time registration is done and not before.
+    """
+
+    def passthrough(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        return next_(ctx, call)
+
+    def startup(ctx: Ctx) -> None:
+        pass
+
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world.tool(echo)
+    elsewhere = copy.copy(world)
+    frozen_chain = elsewhere.chain
+
+    world.tool(echo, name="echo_twice")
+    world.middleware(passthrough)
+    world.instance_startup(startup)
+
+    assert "echo_twice" not in elsewhere.tools
+    assert elsewhere.middlewares == ()
+    assert elsewhere.startup_hooks == ()
+    assert elsewhere.chain is frozen_chain
+
+
 def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) -> None:
     world = World(
         "w",
@@ -133,6 +263,22 @@ def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) 
     assert world.untracked_tables == ("audit", "sessions")
     # `None` is the default: a per-process temporary directory, resolved later.
     assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path).work_dir is None
+
+
+def test_the_description_is_kept_as_given_and_carried_by_a_copy(tmp_path: Path) -> None:
+    """A free string, unvalidated, and `None` when it is not given.
+
+    It is the one-line description the OpenEnv metadata publishes and nothing
+    else reads it. Unlike `name` it never becomes a path or an identifier, so
+    there is no rule to enforce -- an empty string is accepted here and falls
+    back at publication, which `tests/test_env.py` pins.
+    """
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="  A world.  ")
+
+    assert world.description == "  A world.  "
+    assert copy.copy(world).description == "  A world.  "
+    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path).description is None
+    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="").description == ""
 
 
 def test_the_registry_is_ordered_and_read_only(world: World) -> None:

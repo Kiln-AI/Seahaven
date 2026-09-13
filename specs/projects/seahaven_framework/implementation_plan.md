@@ -31,29 +31,33 @@ specs; nothing here restates them.
       `components/openenv.md`: environment class, `SeahavenClient`, end-to-end tests with the stock
       and typed clients against the placeholder, the 500-session smoke test. The placeholder needs
       only its `openenv_app.py`; the hub files are Phase 7's, as template output.
-- [ ] **Phase 7: CLI and `seahaven check`.** `cli/` and `lint/` per `components/cli_and_check.md`:
+- [x] **Phase 7: CLI and `seahaven check`.** `cli/` and `lint/` per `components/cli_and_check.md`:
       `new` with templates, `--hub` and the hub files it writes, `check` with every lint code,
       `docs`, `fixture`, `serve`, world discovery. A scaffolded world passes `check` and its own
       tests.
-- [ ] **Phase 8: pytest plugin and the docs skeleton.** `pytest_plugin.py` and the `docs/` layout
+- [x] **Phase 8: pytest plugin and the docs skeleton.** `pytest_plugin.py` and the `docs/` layout
       with stub pages, per `components/pytest_and_docs.md`. ProjectTracker's tests move to the
       plugin.
-- [ ] **Phase 9: the XML-RPC example extension.** A separate package in the repository proving the
+- [x] **Phase 9: the XML-RPC example extension.** A separate package in the repository proving the
       extension contract (`functional_spec.md` §21): tool factory, fault-mapping middleware, tests
       on a copy of ProjectTracker.
-- [ ] **Phase 10: ProjectTracker, in full.** `components/projecttracker.md`: the schema, errors,
+- [x] **Phase 10: ProjectTracker, in full.** `components/projecttracker.md`: the schema, errors,
       the 25 world tools and the two helpers, the fixture generator and the three fixtures, tests on
       the plugin. The first real consumer of everything before it; API friction found here is fixed
       in the framework, not worked around in the world.
-- [ ] **Phase 11: benchmark and tuning.** `bench/` with the two workloads over `agency`; a tuning
+- [x] **Phase 11: benchmark and tuning.** `bench/` with the two workloads over `agency`; a tuning
       sweep over the concurrency gate's default (cold and warm cache) which confirms or adjusts it;
       results committed as `bench/results/latest.md`.
-- [ ] **Phase 12: docs.** The prose and reference pages, hand-written, including the ProjectTracker
+- [x] **Phase 12: docs.** The prose and reference pages, hand-written, including the ProjectTracker
       walkthrough and every lint code, plus the README. The authoring-experience phase
       (`functional_spec.md` §20).
-- [ ] **Phase 13: OSS readiness (sign-off gated).** Contribution guide, licence file, package
+- [x] **Phase 13: OSS readiness (sign-off gated).** Contribution guide, licence file, package
       publication, hub publication of ProjectTracker. Nothing in this phase starts without explicit
-      maintainer sign-off.
+      maintainer sign-off. **Closed with the contribution guide only.** Publication is not part of
+      this project: neither the package nor the hub is published here, and the `seahaven` name on
+      PyPI keeps the placeholder it already holds (`BACKLOG.md` B22 records what that costs a
+      reader). The licence file was not written and is still gated by `AGENTS.md`; it is a
+      maintainer decision, not a phase deliverable, and nothing downstream waits on it.
 
 ## Order and dependencies
 

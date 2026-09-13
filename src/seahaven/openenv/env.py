@@ -245,12 +245,24 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
         self._forget()
 
     def get_metadata(self) -> EnvironmentMetadata:
-        """The world's identity and its README, which is the card a hub shows."""
+        """The world's identity and its README, which is the card a hub shows.
+
+        The one-line description is the world's own `description=`, an explicit
+        argument rather than anything read out of the README. A world that gives
+        none -- or gives a blank string -- publishes `Seahaven world <name>`,
+        which is a fallback and never a wrong sentence.
+        """
         readme = self._readme()
+        # Blank, not just empty: a description of nothing but spaces would put a
+        # blank-looking line on the card, which is the one thing the fallback is
+        # here to prevent. The test is on the stripped string and the published
+        # value is the unstripped one, so a description with content in it
+        # reaches the card exactly as its author wrote it.
+        given = self.world.description or ""
         return EnvironmentMetadata(
             name=self.world.name,
             version=self.world.version,
-            description=_first_paragraph(readme) or f"Seahaven world {self.world.name}",
+            description=given if given.strip() else f"Seahaven world {self.world.name}",
             readme_content=readme,
         )
 
@@ -317,9 +329,11 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
         try:
             # `utf-8-sig`, not `utf-8`: a README written by a Windows editor
             # begins with a byte-order mark, and read as plain UTF-8 that mark
-            # becomes the first character of the first line -- which stops the
-            # line being an opening fence or a heading and publishes it as
-            # prose. Decoding drops it, so no rule below has to know about it.
+            # becomes the first character of `readme_content` -- an invisible
+            # character at the head of the published card, in front of its
+            # opening heading or fence. This codec drops it, which is the only
+            # place it can be dropped: `readme_content` is published exactly as
+            # it is read here.
             return path.read_text(encoding="utf-8-sig")
         # Unparenthesized on the formatter's insistence, not as a flourish:
         # PEP 758 allows it where nothing is bound with `as`, and `ruff format`
@@ -349,159 +363,3 @@ def _internal_error() -> dict[str, Any]:
     from them.
     """
     return ToolError(INTERNAL_ERROR_CODE, INTERNAL_ERROR_MESSAGE).to_dict()
-
-
-FRONT_MATTER_FENCE = "---"
-
-# The two kinds of furniture a line can be, spelled as CommonMark spells them
-# rather than as one list of characters. A thematic break is three or more of
-# `-`, `_` or `*` with spaces allowed between them, so `***` and `* * *` are
-# breaks and `**` is not. A setext underline is a run of `=` or of `-` with no
-# interior space, of any length, so `===` and `--` underline a heading and
-# `___` does not. The two overlap only on `-`, and keeping them apart is what
-# stops `* *` -- a bullet list whose item is `*` -- being read as furniture
-# while `***` is read as prose. Review round 3 found `*` missing from a single
-# combined list, which published `***` as a world's description.
-THEMATIC_BREAK_CHARACTERS = "-_*"
-SETEXT_UNDERLINE_CHARACTERS = "-="
-THEMATIC_BREAK_MINIMUM = 3
-
-# A UTF-8 byte-order mark. `_readme` decodes it away, but `_first_paragraph` is
-# given strings by callers and tests too, so it strips one here as well rather
-# than trust every future caller to have used the right codec. `str.strip()`
-# does not remove it: it is not whitespace.
-BOM = "\ufeff"
-
-
-def _first_paragraph(readme: str) -> str:
-    """The first real paragraph of a README, for the one-line description.
-
-    Not simply the text up to the first blank line. A README opens with a
-    Markdown heading, and a Space card -- which is what `README.md` is once a
-    world is pushed to a hub -- opens with YAML front matter between `---`
-    fences. Neither is prose, and a description reading `# ProjectTracker` or
-    `title: ...` is worse than no description at all, so front matter is skipped
-    as a block and the paragraph is the first run of lines that is none of the
-    things a README opens with: a blank line, a heading, a rule, or a title
-    underlined by one.
-
-    The block is what keeps YAML out of a card, and `_after_front_matter` gives
-    it an end even when the file does not -- see there. `_is_prose`'s rule test
-    is a *separate* job: a `---` or `===` further down a document is a thematic
-    break or a setext underline, and neither starts or continues a paragraph.
-    The setext lookahead is a third: `Title` followed by `=====` is a heading
-    spelled without a `#`, so it is skipped exactly as `# Title` is.
-
-    Answers `""` when there is no paragraph -- an empty file, a heading and
-    nothing else, front matter and nothing else -- and the caller supplies the
-    fallback.
-    """
-    body = readme.lstrip(BOM).splitlines()
-    paragraph: list[str] = []
-    for index in range(_after_front_matter(body), len(body)):
-        line = body[index]
-        # The setext test is scoped to the paragraph's first line on purpose.
-        # A rule under the line that *starts* a paragraph makes that line a
-        # heading; a rule under a later line ends the paragraph it is already
-        # part of, which the `_is_prose` branch below handles when it gets
-        # there. Widening it would eat the last line of every paragraph that
-        # happens to be followed by a horizontal rule.
-        if not _is_prose(line) or (not paragraph and _is_title_line(body, index)):
-            if paragraph:
-                break  # the paragraph ended
-            continue  # it has not started: skip blanks, headings and rules
-        paragraph.append(line.strip())
-    return " ".join(paragraph)
-
-
-def _after_front_matter(lines: list[str]) -> int:
-    """Where the document starts: past a Space card's front matter, if any.
-
-    `0` when the document's first non-blank line is not an opening fence. When
-    it is, the block ends at the closing fence -- and when there is no closing
-    fence anywhere, at the first blank line, or at the end of the file.
-
-    The two searches are ordered, and the order is the whole correctness
-    argument. Whether a blank line is inside the block or after it depends on
-    whether a closing fence exists at all, and that is not known until the file
-    has been scanned to its end -- so the closing fence is looked for *first*,
-    across the whole file, and the blank-line bound is only consulted once no
-    fence has been found. Round 1 of review found the fallback missing, which
-    published `title: Notes sdk: docker` as a world's description; round 2
-    found it fused into a single loop, which published the same YAML for the
-    opposite reason -- a blank line is legal inside YAML and routine in a card,
-    and the fused loop stopped at it while the closing fence was still ahead.
-    A malformed card is not a document whose first paragraph is YAML, and a
-    well-formed one is not either.
-    """
-    opening = next((index for index, line in enumerate(lines) if line.strip()), None)
-    if opening is None or lines[opening].strip() != FRONT_MATTER_FENCE:
-        return 0
-    for index in range(opening + 1, len(lines)):  # a closing fence anywhere wins
-        if lines[index].strip() == FRONT_MATTER_FENCE:
-            return index + 1
-    for index in range(opening + 1, len(lines)):  # only then: an unterminated block
-        if not lines[index].strip():
-            return index
-    return len(lines)
-
-
-def _is_rule(stripped: str) -> bool:
-    """Whether a stripped line is furniture: a thematic break or an underline.
-
-    Both halves are needed and neither contains the other. `***` is a break and
-    not an underline; `===` is an underline and not a break; `---` is both,
-    which is why a front-matter fence needs no case of its own here.
-    """
-    return _is_underline(stripped) or _is_thematic_break(stripped)
-
-
-def _is_underline(stripped: str) -> bool:
-    """A setext heading's underline: a run of `=`, or of `-`, and nothing else.
-
-    The set test comes first and carries the empty line: `set("")` has no single
-    element, so `""` is not an underline and the index below is never reached on
-    one. That is load-bearing rather than incidental -- `_is_title_line` asks
-    about the line past the end of the document and gets `""` back -- so it has
-    a mutant. CommonMark allows no interior space in an underline, which is why
-    this test does not condense one out the way the break test below does.
-    """
-    return len(set(stripped)) == 1 and stripped[0] in SETEXT_UNDERLINE_CHARACTERS
-
-
-def _is_thematic_break(stripped: str) -> bool:
-    """A thematic break: three or more `-`, `_` or `*`, spaces allowed between.
-
-    The spaces are condensed before the run is tested, because `* * *` and
-    `- - -` are breaks that a README written by hand is as likely to carry as
-    `***`. The length bound is the other half of the same rule: two characters
-    are not a break, so `**` and `* *` stay prose -- the first is literal text
-    and the second is a bullet list whose item is `*`, and eating either would
-    be the mirror of publishing `***`.
-    """
-    condensed = stripped.replace(" ", "").replace("\t", "")
-    return (
-        len(condensed) >= THEMATIC_BREAK_MINIMUM
-        and len(set(condensed)) == 1
-        and condensed[0] in THEMATIC_BREAK_CHARACTERS
-    )
-
-
-def _is_title_line(body: list[str], index: int) -> bool:
-    """Whether the line at `index` is a title: a line with furniture under it.
-
-    Wider than CommonMark's setext heading on purpose. Only `=` and `-`
-    underline a heading there, so `Title` over `___` is strictly a paragraph
-    followed by a thematic break -- but it is still a title, and publishing a
-    world's title as its description is the thing this rule set exists to
-    prevent. So the question is `_is_rule` and not `_is_underline`: any
-    furniture under the line that would *start* the paragraph makes that line a
-    title.
-    """
-    return _is_rule(body[index + 1].strip() if index + 1 < len(body) else "")
-
-
-def _is_prose(line: str) -> bool:
-    """Whether a README line is part of a paragraph rather than around one."""
-    stripped = line.strip()
-    return bool(stripped) and not stripped.startswith("#") and not _is_rule(stripped)

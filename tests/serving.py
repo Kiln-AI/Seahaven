@@ -9,7 +9,7 @@ talk to it the way an eval does.
 Port `0` rather than a scan for a free one: asking the kernel is the only way
 that does not race with whatever takes the port between the scan and the bind.
 
-`worlds/projecttracker/tests/test_openenv_app.py` carries the same helper,
+`worlds/projecttracker/tests/test_openenv.py` carries the same helper,
 because a world's suite is a world author's suite: it runs with that directory
 as its rootdir and cannot import the framework's tests.
 

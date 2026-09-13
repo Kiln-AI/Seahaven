@@ -27,7 +27,11 @@ its three sync triggers, none reading a clock.
 ```python
 # world.py
 world = seahaven.World(name="projecttracker", version="1.0.0",
-                       schema=seahaven.sql_files(__package__, "schema"))
+                       schema=seahaven.sql_files(__package__, "schema"),
+                       description="A Seahaven world: a fictional issue tracker for a fictional "
+                                   "company, and the reference world the framework is developed "
+                                   "against. Nothing here mimics a real product's names, schema "
+                                   "or error text.")
 
 # errors.py: the product's shapes (fictional, Linear-flavoured codes), plain ToolError subclasses
 class NotFound(seahaven.ToolError):
@@ -46,6 +50,15 @@ class Internal(seahaven.ToolError):
 plus one product-specific rule: `DbError` from `run_sql` passes through with SQLite's text (a SQL
 door shows SQL errors), and a `DbError` from `search_issues` (an FTS5 syntax error) becomes
 `InvalidInput("query", ...)`.
+
+*Corrected 2026-09-13 — the `World(...)` sketch gained `description=`, carrying the sentence this
+world really passes. `World` gained the argument (`components/world_and_dispatch.md` §1.1) and it is
+the only thing that sets the OpenEnv one-line description, replacing the derivation of that line
+from the README that `components/openenv.md` §2 specified and no longer does. This section sketches
+`worlds/projecttracker/src/projecttracker/world.py`, the file that carries it, and without the
+argument it described that file differently from `functional_spec.md` §3.1. The sentence is kept in
+step with `README.md`'s opening paragraph by hand; `tests/test_package.py` pins that the README
+still contains it.*
 
 ## 3. Tools (25 world tools plus the two helpers)
 

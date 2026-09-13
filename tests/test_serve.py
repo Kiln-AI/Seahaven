@@ -20,7 +20,15 @@ import pytest
 from seahaven import instances
 from seahaven.world import World
 
-pytest.importorskip("openenv", reason="the serve extra is not installed")
+# The subpackage and not `openenv`: what this module imports is
+# `seahaven.openenv`, so that is what has to import for the tests below to mean
+# anything. Only an `ImportError` skips -- an extra that is absent, or installed
+# and unimportable. Anything else raises, and CI asserts this import separately,
+# because an installed extra that skips quietly is a green run that tested none
+# of this.
+pytest.importorskip(
+    "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
+)
 
 from seahaven.openenv import DEFAULT_MAX_CONCURRENT_ENVS, DEFAULT_SESSION_TIMEOUT
 from seahaven.openenv import serve as serve_module

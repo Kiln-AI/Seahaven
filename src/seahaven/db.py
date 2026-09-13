@@ -169,6 +169,12 @@ class Db:
             finally:
                 # The statement is left mid-step; retire it now rather than
                 # leaving it to refcounting inside the caller's transaction.
+                # Deleting this is an equivalent mutant under CPython, where this
+                # frame holds the cursor's last reference and it is finalised as
+                # the frame goes: what the line buys is a statement retired at a
+                # moment this module chooses rather than one the interpreter's
+                # collector chooses. `test_one_leaves_no_statement_in_flight`
+                # states the property and passes either way.
                 cursor.close(force=True)
 
     def rows(self, sql: str, *params: SqlValue) -> list[dict[str, Any]]:
@@ -228,8 +234,17 @@ class Db:
         try:
             self._conn.close()
         finally:
-            # The world connection refuses to close while statements are
-            # outstanding; the helper is released either way.
+            # The helper is released whatever the world connection's close does.
+            # That close can raise -- not on outstanding statements, which apsw
+            # 3.53 closes over without complaint (checked with a mid-step cursor,
+            # an open blob and a backup in flight), but `sqlite3_close` can still
+            # fail -- and the helper must not be the casualty: nothing else
+            # closes it. It is not garbage either, whatever its `:memory:` name
+            # suggests, because every override in `_FUNCTIONS` is a closure over
+            # it (the three in `_CONSTANTS` are not -- they hold a string read at
+            # registration -- but seven closures are enough), so a `Db` that does
+            # not close it leaves a live SQLite connection per instance.
+            # `test_closing_the_database_closes_the_clock_helper` pins it.
             if self._helper is not None:
                 self._helper.close()
 
@@ -241,7 +256,14 @@ def open_instance(path: Path, clock: Clock) -> Db:
     conn.pragma("journal_mode", "WAL")
     conn.pragma("synchronous", "NORMAL")
     # One writer per instance by construction, so waiting on a lock can only
-    # mean a bug. Fail loudly instead of hanging.
+    # mean a bug. Fail loudly instead of hanging. Said rather than left to the
+    # default: APSW opens a connection with no busy handler at all, so deleting
+    # this line is an equivalent mutant and the whole suite stays green under it.
+    # What is pinned is the value -- a timeout long enough to matter fails
+    # `test_a_second_writer_fails_instead_of_waiting`, five seconds of waiting
+    # against its half-second bound -- and the line is here anyway because a
+    # default nobody stated is one that can change under the project with nothing
+    # to notice.
     conn.set_busy_timeout(0)
     # SQLite's own sqlite3_limit defaults are left alone: world code is trusted,
     # and the sandbox lowers the value cap for the length of an agent statement.

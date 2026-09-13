@@ -179,7 +179,13 @@ The functional spec (`functional_spec.md`) states each of these precisely.
 
 ## 8. Constraints
 
-- Permissive-only runtime dependencies (MIT, Apache-2.0, BSD-class), checked in CI.
+- No copyleft in anything shipped: the runtime closure and every declared extra are checked in CI.
+  Permissive, MPL-2.0 (copyleft per file) and CC0-1.0 pass; GPL, AGPL and LGPL never do, and an
+  unrecognised licence fails rather than being assumed.
+
+  *Corrected 2026-09-13 — this constraint read "Permissive-only runtime dependencies (MIT,
+  Apache-2.0, BSD-class), checked in CI", which was both the wrong bar and the wrong scope: the
+  `serve` extra is a runtime one and the gate did not look at it. Closes `BACKLOG.md` B15.*
 - No real customer data in the repository, ever. The reference world is fictional; no real product's
   names, schema or error text.
 - The framework never depends on a world or on where it runs.

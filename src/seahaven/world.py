@@ -42,6 +42,7 @@ from seahaven.tool import Tool
 
 __all__ = [
     "CONTROL_TOOL_NAMES",
+    "DDL_DOES_NOT_EXECUTE",
     "RESERVED_TOOL_NAMES",
     "Handler",
     "Middleware",
@@ -71,6 +72,13 @@ RESET_ARGUMENTS = frozenset({"fixture", "now", "seed"})
 
 FIXTURES_DIRNAME = "fixtures"
 SQL_SUFFIX = ".sql"
+
+# What `_prove_the_ddl_executes` says when SQLite refuses a world's schema. Named
+# here because `seahaven check` has to tell that failure from every other
+# `SeahavenError` an import can raise -- the first is SH104, the rest are SH501 --
+# and it should read the framework's own constant rather than match a sentence it
+# does not own.
+DDL_DOES_NOT_EXECUTE = "has DDL that does not execute"
 
 _POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 _WHITESPACE = re.compile(r"\s+")
@@ -105,15 +113,23 @@ class World:
         version: str,
         schema: str,
         *,
+        description: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
     ) -> None:
+        _check_name(name)
         self.name = name
         self.version = version
         self.schema = schema
         self.schema_hash = _schema_hash(schema)
         _prove_the_ddl_executes(name, schema)
+        # The one-line description the OpenEnv metadata publishes, and nothing
+        # else reads it. A free string, deliberately unvalidated: unlike `name`
+        # it never becomes a path, a filename or an identifier, so there is
+        # nothing for a rule to protect. `None` -- and, at publication, a string
+        # that is blank -- means the fallback, `Seahaven world <name>`.
+        self.description = description
         self.fixtures_dir = (
             Path(fixtures_dir)
             if fixtures_dir is not None
@@ -222,6 +238,37 @@ class World:
         A world with no fixtures directory has no fixtures; that is not an error.
         """
         return sorted(load_all(self.fixtures_dir).values(), key=lambda fixture: fixture.id)
+
+    def __copy__(self) -> World:
+        """This world, to be pointed somewhere else: `copy.copy(world)`, then set an attribute.
+
+        A world is imported once and everything in the process holds the same
+        object, so moving `fixtures_dir` on it -- what a test that rebuilds the
+        committed fixtures into a temporary directory wants -- moves it for every
+        other caller too, for the rest of the run. A copy is how that is said
+        locally.
+
+        A copy is a *snapshot of the three registries*, taken at copy time and
+        severed in both directions: the copy does not see a tool, a middleware or
+        a startup hook registered on the original afterwards, its `chain` stays
+        as it was, and nothing registered on the copy reaches back. That is the
+        one place a world stops being open for registration for the life of the
+        process, so take the copy after import-time registration is done.
+
+        The instance manager is deliberately *not* carried over: a manager hands
+        the world it was made for to every instance it makes, and that world is
+        the one an instance freezes into -- so a copy that inherited one would
+        quietly freeze back into the directory the copy was taken from, which is
+        the one thing a copy exists to avoid.
+        """
+        twin = object.__new__(type(self))
+        twin.__dict__.update(self.__dict__)
+        twin._tools = dict(self._tools)
+        twin._middlewares = list(self._middlewares)
+        twin._startup_hooks = list(self._startup_hooks)
+        twin._manager = None
+        twin._manager_lock = threading.Lock()
+        return twin
 
     def _instances(self) -> InstanceManager:
         with self._manager_lock:
@@ -552,6 +599,40 @@ def _read_sql(path: Traversable, package: str, directory: str, name: str) -> str
         ) from error
 
 
+def _check_name(name: str) -> None:
+    """A world's name becomes a directory name, so it has to be one.
+
+    The default working directory is `<root>/<pid namespace>-<pid>/<world name>/`
+    and `instances._open_child` hardens the *lookup* of every component of it --
+    `O_NOFOLLOW`, an owner check, a `dir_fd` -- on the understanding that what it
+    is given is one component. `O_NOFOLLOW` says nothing about `..`, which is not
+    a symlink, so nothing below this refuses a name that walks upwards:
+    `World("..")` put an instance in the working root beside the per-process
+    directories, and `World("../..")` put a live database outside the working root
+    entirely, where the sweep never looks and the files stay for ever.
+
+    The rule is `fixtures.check_id`'s -- one path segment, no leading dot, no NUL
+    -- with both separators refused rather than the platform's, because a world is
+    spelled once and read on every platform. (That is the one place the two rules
+    differ, and deliberately: `check_id`'s is `components/fixtures_instances.md`
+    §1's, which names the platform's own separator.) A name is also headed for
+    more than a path -- a log line, a sidecar, a URL -- which is the other reason
+    it is checked here, where the name is accepted, rather than where a directory
+    is made from it.
+    """
+    if (
+        not name
+        or "\x00" in name
+        or _SEPARATOR.search(name)
+        or name.startswith(".")
+        or name != Path(name).name
+    ):
+        raise WorldBug(
+            f"not a world name: {name!r}; World(name=...) is one directory name, with no "
+            f"separator and no leading dot"
+        )
+
+
 def _schema_hash(schema: str) -> str:
     """The DDL's identity, insensitive to how it is laid out.
 
@@ -573,7 +654,7 @@ def _prove_the_ddl_executes(name: str, schema: str) -> None:
     try:
         build_blank(":memory:", schema).close()
     except apsw.Error as error:
-        raise WorldBug(f"world {name!r} has DDL that does not execute: {error}") from error
+        raise WorldBug(f"world {name!r} {DDL_DOES_NOT_EXECUTE}: {error}") from error
 
 
 def _derive_fixtures_dir(caller_file: str | None) -> Path:

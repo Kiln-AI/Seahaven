@@ -20,9 +20,16 @@ from projecttracker.middleware.error_handler import SEARCH_TOOLS, SQL_DOOR_TOOLS
 from seahaven.helpers import run_sql
 
 # An FTS5 table for the search door to fail on, added to the probe world's
-# schema. The real `issues_fts` is Phase 10's; what this needs is a table that
-# gives FTS5 a query string to reject, which any FTS5 table does.
+# schema. Not this world's own `issues_fts`, because what these tests need is a
+# tool that only does the failing -- `search_issues` itself is driven against the
+# real index in `test_search.py`. Any FTS5 table rejects the same query strings.
 SEARCH_SCHEMA = "\nCREATE VIRTUAL TABLE memos_fts USING fts5(body);\n"
+
+# A table no world here has, for the `DbError` an ordinary tool provokes by
+# writing SQL that cannot run. Spelled as a constant because two tests use it and
+# because a name that *is* in this world's schema would make both of them pass by
+# succeeding rather than by failing the way they mean to.
+MISSING_TABLE = "sprints"
 
 # A table in the world but not behind the SQL door, for the refusal the door
 # answers with in this framework's words rather than SQLite's.
@@ -100,7 +107,7 @@ def test_a_database_error_under_an_ordinary_tool_becomes_internal(probe: Probe) 
     """SQLite's complaint about this world's own SQL is this world's bug, not the agent's."""
 
     def broken(ctx: seahaven.Ctx) -> None:
-        ctx.db.rows("SELECT * FROM issues")
+        ctx.db.rows(f"SELECT * FROM {MISSING_TABLE}")
 
     world = probe(a_tool(broken, "broken"))
     with world.instance(None, now=BLANK_NOW) as instance:
@@ -112,12 +119,12 @@ def test_a_database_error_under_an_ordinary_tool_becomes_internal(probe: Probe) 
             "details": None,
         }
         # The whole point of the branch: none of SQLite's text got out.
-        assert "issues" not in repr(raised.value)
+        assert MISSING_TABLE not in repr(raised.value)
         assert "no such table" not in repr(raised.value)
         # And the author can still find it: the `DbError` is the cause, with the text.
         cause = raised.value.__cause__
         assert isinstance(cause, seahaven.DbError)
-        assert "no such table: issues" in cause.sqlite_message
+        assert f"no such table: {MISSING_TABLE}" in cause.sqlite_message
 
 
 def test_a_database_error_the_agent_never_sees_is_written_to_the_log(
@@ -131,7 +138,7 @@ def test_a_database_error_the_agent_never_sees_is_written_to_the_log(
     """
 
     def broken(ctx: seahaven.Ctx) -> None:
-        ctx.db.rows("SELECT * FROM issues")
+        ctx.db.rows(f"SELECT * FROM {MISSING_TABLE}")
 
     world = probe(a_tool(broken, "broken"))
     with (
@@ -147,8 +154,8 @@ def test_a_database_error_the_agent_never_sees_is_written_to_the_log(
         logged = record.exc_info[1]
         assert isinstance(logged, seahaven.DbError)
         # The text the agent did not get, and the APSW error behind it.
-        assert logged.sqlite_message == "no such table: issues"
-        assert "no such table: issues" in str(logged.__cause__)
+        assert logged.sqlite_message == f"no such table: {MISSING_TABLE}"
+        assert f"no such table: {MISSING_TABLE}" in str(logged.__cause__)
 
 
 def test_a_constraint_violation_becomes_internal_too(probe: Probe) -> None:

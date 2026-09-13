@@ -23,6 +23,13 @@ jobs:
       - name: Install the project
         run: uv sync --locked --extra serve
 
+      # The suites guard the OpenEnv modules with `pytest.importorskip`, so an
+      # extra that is installed but does not import would skip them and leave
+      # CI green having tested none of `seahaven serve`, the environment or the
+      # client. This is the one step that fails instead.
+      - name: The serve extra imports
+        run: uv run python -c "import seahaven.openenv"
+
       - name: Format
         run: uv run ruff format --check
 
@@ -40,7 +47,16 @@ jobs:
       - name: Reference world tests
         run: uv run pytest worlds/projecttracker
 
-      # Seahaven is vendored into other people's products: what it installs at
-      # runtime stays MIT, Apache-2.0 or BSD-class.
+      # The example extension is its own package with its own suite too, and its
+      # world is a copy of ProjectTracker under its `tests/`. What it proves is
+      # the extension contract: that a protocol the framework knows nothing about
+      # rides on the published seams.
+      - name: Example extension tests
+        run: uv run pytest extensions/seahaven-xmlrpc
+
+      # Seahaven is vendored into other people's products: nothing it installs
+      # at runtime is copyleft. The gate covers every extra the project declares,
+      # so it has to run in the environment the `--extra serve` sync above built
+      # -- an extra whose licences cannot be read is not cleared, it fails.
       - name: Dependency licences
         run: uv run python scripts/check_licences.py

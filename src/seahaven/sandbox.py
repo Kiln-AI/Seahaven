@@ -244,8 +244,9 @@ class Authorizer:
     instead: a statement that failed while this object was refusing things failed
     *because* of the refusal.
 
-    One per call: `refusals` is per-statement state, so an `Authorizer` is never
-    shared between calls or instances. The two allowlists are decided once, by
+    One per call: `refusals` and `_wrote_a_row` are per-call state -- both are
+    cleared in `reset()`, which `run_statement` calls once -- so an `Authorizer`
+    is never shared between calls or instances. The two allowlists are decided once, by
     whatever builds the tool, and passed in; both are folded here, so a caller may
     spell a table or a function in any case SQLite would accept.
     """

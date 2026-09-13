@@ -90,9 +90,27 @@ def default_concurrency() -> int:
     """How many tool calls run at once unless an operator says otherwise.
 
     `process_cpu_count` follows a container's CPU affinity rather than the host's
-    core count, and is `None` on a platform that cannot say. A call is mostly
-    Python and SQLite on a warm page cache, so the core count is where throughput
-    tops out; the cap keeps a very large host from over-subscribing.
+    core count, and is `None` on a platform that cannot say. The cap keeps a very
+    large host from over-subscribing.
+
+    **This is not the throughput optimum, and it was never measured to be.** The
+    sweep in `bench/results/latest.md` found no optimum above 1 on a build with
+    the GIL: most of a call is Python, so a second runnable thread buys contention
+    rather than parallelism, and `n = 1` ran 22% to 37% more calls a second than
+    this default on every workload, cache state and offered load measured.
+
+    **Nor is it fair.** The same sweep found that a gate starves a waiting caller
+    whenever it binds -- at this size exactly as at any other, because the cause is
+    the semaphore and not the number (`BACKLOG.md` B20).
+
+    One measured reason is left: no value the sweep tried was better than this one
+    on every axis at once, everywhere it was measured. (`n = 1` is better on every
+    axis at 32 sessions; at four, and with one slow call in the process, it is the
+    value that waits worst.) Following cpu affinity is *not* a measured advantage --
+    this build has the GIL, and the sweep says nothing about what a free-threaded
+    one would do -- it is the shape that keeps that door open, which is a design
+    intent and is recorded here as one. An operator with a measurement of their own
+    world should reach for `serve --concurrency`.
     """
     return min(os.process_cpu_count() or 4, 16)
 
@@ -124,6 +142,7 @@ class _Gate(threading.BoundedSemaphore):
         return self._initial_value  # ty: ignore[unresolved-attribute]
 
 
+# Enhancement: a FIFO gate hands slots out in arrival order; this one starves (`BACKLOG.md` B20).
 _gate: _Gate | None = _Gate(default_concurrency())
 
 
@@ -530,7 +549,8 @@ class InstanceManager:
 
         A directory from the layout before this one -- a bare `<pid>`, with no
         namespace prefix -- is not swept, and nothing else will remove it either.
-        `BACKLOG.md` B3 records the leak.
+        Deliberately: the condition that would make it safe to sweep is the
+        cross-namespace hazard the pid prefix was added to remove.
         """
         if self._world.work_dir is not None or not _POSIX_WORK_ROOT:
             return 0
@@ -625,12 +645,20 @@ class InstanceManager:
         rather than relying on the root's mode, because the root's mode protects
         what is under it only as far as the root itself is trustworthy, and
         `_open_root` exists precisely because a root found already in place is
-        not. `fchmod` on a descriptor, and not `mkdir(mode=...)` on a path, for
-        three reasons: `mkdir`'s mode is masked by the process umask, so it is a
-        ceiling and not a setting; `exist_ok` says nothing about the mode of a
-        directory that is already there, so the mode is re-asserted on every
-        call and a root left by an earlier run is repaired; and a path can be
-        redirected between the two calls.
+        not. Both are used, and neither replaces the other. `mkdir(mode=0o700)`
+        is a ceiling and not a setting, because the process umask masks it, so it
+        cannot be relied on to leave `0o700` behind -- which is the whole reason
+        the `fchmod` exists. What it does do is make the ceiling `0o700` rather
+        than `mkdir`'s default `0o777` for the window between the two calls: the
+        argument that the mode is only a ceiling is a reason to follow it with an
+        `fchmod`, not a reason to leave the ceiling wide, and under `umask 000`
+        that is the difference between a root that is briefly world-writable and
+        one that never is. The `fchmod` settles the mode, and it is on a
+        descriptor and not on a path for two further reasons of its own:
+        `exist_ok` says nothing about the mode of a directory that is already
+        there, so the mode is re-asserted on every call and a root left by an
+        earlier run is repaired; and a path can be redirected between the two
+        calls, while an inode cannot.
         """
         configured = self._world.work_dir
         if configured is not None:
@@ -650,7 +678,7 @@ class InstanceManager:
         root = _default_work_root()
         process = _process_dirname(os.getpid())
         try:
-            root.mkdir(parents=True, exist_ok=True)
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
             with _open_root(root) as root_fd:
                 os.fchmod(root_fd, 0o700)
                 # The per-process directory is one per process and not one per

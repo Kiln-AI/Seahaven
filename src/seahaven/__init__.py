@@ -1,7 +1,14 @@
 """Seahaven: a framework for building synthetic worlds.
 
-The public API is exactly the names below, plus the `helpers` and `sandbox`
-modules. Everything else is internal.
+The names below are the short-import subset of the public API, plus the
+`helpers` and `sandbox` modules. They are not the whole of it: a name the
+component document section covering a module lists as part of that module's
+interface is public too, and is imported from that module -- `Handler`,
+`Middleware` and `StartupHook` from `seahaven.world`, `load`, `load_all`,
+`verify` and `freeze` from `seahaven.fixtures`, `SeahavenClient` and the action
+and observation models from `seahaven.openenv` in the `serve` extra.
+`docs/reference/api.md` is the published list and `architecture.md` section 1 is
+the rule. A name in neither place is internal and may change without notice.
 """
 
 from importlib.metadata import PackageNotFoundError, version

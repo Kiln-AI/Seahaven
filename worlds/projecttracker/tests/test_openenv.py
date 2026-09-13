@@ -26,9 +26,17 @@ from contextlib import contextmanager
 
 import pytest
 
-from conftest import FIXTURE_NOW
+from conftest import FIXTURE_NOW, SMALL_STARTUP
 
-pytest.importorskip("openenv", reason="the serve extra is not installed")
+# The subpackage and not `openenv`: what this module imports is
+# `seahaven.openenv`, so that is what has to import for the tests below to mean
+# anything. Only an `ImportError` skips -- an extra that is absent, or installed
+# and unimportable. Anything else raises, and CI asserts this import separately,
+# because an installed extra that skips quietly is a green run that tested none
+# of this.
+pytest.importorskip(
+    "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
+)
 
 import uvicorn
 from openenv import GenericEnvClient
@@ -79,13 +87,41 @@ def test_the_typed_client_lists_and_calls_this_worlds_tools() -> None:
     """The flow an eval runs: connect, reset onto a fixture, list, call, read state."""
     with serving() as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(fixture="empty")
-        assert reset.observation.result == {"fixture": "empty", "now": FIXTURE_NOW, "tools": 1}
-        assert [tool["name"] for tool in env.list_tools()] == ["ping"]
-        observation = env.call("ping", message="over the wire")
+        assert reset.observation.result == {"fixture": "empty", "now": FIXTURE_NOW, "tools": 27}
+        names = {tool["name"] for tool in env.list_tools()}
+        assert {"create_issue", "search_issues", "run_sql"} <= names
+        observation = env.call("create_user", email="ada@tracker.invalid", name="Ada")
         assert observation.error is None
-        assert observation.result == {"message": "over the wire", "now": FIXTURE_NOW, "users": 0}
+        assert observation.result["email"] == "ada@tracker.invalid"
+        assert observation.result["created_at"] == FIXTURE_NOW
         state = env.state()
         assert (state.world, state.fixture, state.now) == ("projecttracker", "empty", FIXTURE_NOW)
+
+
+def test_reset_names_the_person_the_session_drives_the_tracker_as() -> None:
+    """`user_id` is this world's startup keyword, and it reaches the hook over the wire.
+
+    The property `functional_spec.md` §21 point 3 is about, on this world's own
+    hook: what an eval passes to `reset` becomes the actor of every write that
+    names none.
+    """
+    with serving() as url, SeahavenClient(base_url=url) as env:
+        env.reset(fixture=SMALL_STARTUP)
+        admin = env.call("list_users", role="admin").result["users"][0]
+        member = env.call("list_users", role="member").result["users"][0]
+        project = env.call("list_projects").result["projects"][0]
+        # No `user_id`: the hook fell back to the workspace's first admin.
+        assert (
+            env.call("create_issue", project_id=project["id"], title="A").result["creator_id"]
+            == admin["id"]
+        )
+
+    with serving() as url, SeahavenClient(base_url=url) as env:
+        env.reset(fixture=SMALL_STARTUP, user_id=member["id"])
+        assert (
+            env.call("create_issue", project_id=project["id"], title="B").result["creator_id"]
+            == member["id"]
+        )
 
 
 def test_the_stock_client_reaches_the_same_world_with_no_seahaven_on_its_side() -> None:
@@ -93,14 +129,14 @@ def test_the_stock_client_reaches_the_same_world_with_no_seahaven_on_its_side() 
     with serving() as url, GenericEnvClient(base_url=url) as env:
         env.reset(fixture="empty")
         listed = env.step(ListToolsAction().model_dump()).observation
-        assert [tool["name"] for tool in listed["tools"]] == ["ping"]
-        (ping,) = listed["tools"]
-        assert "reachable" in ping["description"]
-        assert ping["input_schema"]["properties"]["message"]["default"] == "pong"
-        result = env.step(CallToolAction(tool_name="ping", arguments={}).model_dump())
+        tools = {tool["name"]: tool for tool in listed["tools"]}
+        assert len(tools) == 27
+        assert "full-text" in tools["search_issues"]["description"]
+        assert tools["list_issues"]["input_schema"]["properties"]["limit"]["default"] == 50
+        result = env.step(CallToolAction(tool_name="list_issues", arguments={}).model_dump())
         assert result.observation == {
-            "tool_name": "ping",
-            "result": {"message": "pong", "now": FIXTURE_NOW, "users": 0},
+            "tool_name": "list_issues",
+            "result": {"issues": [], "next_cursor": None, "has_next": False},
             "error": None,
             "metadata": {},
         }
@@ -112,18 +148,20 @@ def test_this_worlds_error_words_survive_the_wire() -> None:
     with serving() as url, GenericEnvClient(base_url=url) as env:
         env.reset(fixture="empty")
         result = env.step(
-            CallToolAction(tool_name="ping", arguments={"message": "x" * 201}).model_dump()
+            CallToolAction(
+                tool_name="create_user", arguments={"email": "nope", "name": "Ada"}
+            ).model_dump()
         )
         assert result.observation["result"] is None
         assert result.observation["error"]["code"] == "INVALID_INPUT"
-        assert result.observation["error"]["details"] == {"field": "message"}
+        assert result.observation["error"]["details"] == {"field": "email"}
 
 
 def test_control_tools_are_not_served_by_this_worlds_app() -> None:
     """The app is built with the default, which is that an agent cannot reach them."""
     with serving() as url, SeahavenClient(base_url=url) as env:
         env.reset(fixture="empty")
-        assert [tool["name"] for tool in env.list_tools()] == ["ping"]
+        assert "controller_run_sql" not in {tool["name"] for tool in env.list_tools()}
         assert env.call("controller_run_sql", sql="SELECT 1").error == {
             "code": "unknown_tool",
             "message": "unknown tool: controller_run_sql",
@@ -141,8 +179,9 @@ def test_two_sessions_of_this_world_do_not_see_each_other() -> None:
         first.reset(fixture="empty")
         second.reset(fixture="empty")
         assert first.state().episode_id != second.state().episode_id
-        assert first.call("ping").result["users"] == 0
-        assert second.call("ping").result["users"] == 0
+        first.call("create_user", email="ada@tracker.invalid", name="Ada")
+        assert len(first.call("list_users").result["users"]) == 1
+        assert second.call("list_users").result["users"] == []
 
 
 def test_seahaven_serve_really_serves_this_world() -> None:
@@ -177,12 +216,8 @@ def test_seahaven_serve_really_serves_this_world() -> None:
                 break
         assert url is not None, "the server never said where it was listening"
         with SeahavenClient(base_url=url) as env:
-            env.reset(fixture="empty")
-            assert env.call("ping").result == {
-                "message": "pong",
-                "now": FIXTURE_NOW,
-                "users": 0,
-            }
+            env.reset(fixture=SMALL_STARTUP)
+            assert env.call("get_issue", key="ENG-1").result["key"] == "ENG-1"
     finally:
         server.terminate()
         server.wait(STOP_TIMEOUT)

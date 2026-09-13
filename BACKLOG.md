@@ -18,379 +18,166 @@ it. Close an item by deleting it in the commit that fixes it.
 
 ## Open
 
-### B1. `db.py` connection hardening is untested
+### B20. The concurrency gate starves a caller whenever it binds
 
-**Found:** Phase 3 code review, round 4 — a clean-bytecode mutation sweep of 912 statements across
-phases 1–3. **Owner:** unassigned. **Risk:** security-relevant; not a known regression.
+**Decision (2026-09-13, maintainer): leave the behaviour; do not replace the semaphore.** Record it
+as a possible enhancement in one comment line where the `BoundedSemaphore` is created — one line, not
+a treatise. The entry stays open as the full account.
 
-`src/seahaven/db.py` was written in Phase 1 and never mutation-tested. Each of these can be deleted
-with the entire suite still green:
+**Found:** Phase 11, the gate sweep (`bench/results/latest.md` §4). **Owner:** unassigned.
+**Risk:** real under load; no call is lost, but a session can wait seconds for a slot while
+others are served thousands of times.
 
-- `db.py:257` — `_harden(conn)` in `open_inspection()`. Nothing proves the inspection connection
-  gets `foreign_keys`, `DEFENSIVE`, `TRUSTED_SCHEMA=0` or extension loading off.
-- `db.py:342` — `conn.enable_load_extension(False)` inside `_harden()`. No test proves extension
-  loading is refused on any connection.
-- `db.py:360-363` — the `SQLITE_PRAGMA` clause and its `return apsw.SQLITE_DENY` in
-  `_deny_writes()`. The read-only-pragma denial on the *inspection* authorizer has no test.
-  `tests/test_sandbox.py` exercises `sandbox.py`'s authorizer, a different code path — it does not
-  cover this one.
+`instances.gate` is a `threading.BoundedSemaphore`, and a semaphore is not a queue. A thread that
+releases a slot and immediately asks for another usually wins the race against the waiter that was
+just woken: the waiter needs the GIL to make progress and the barging thread is already holding it.
+So the gate has no fairness at all, and the effect is not subtle. With five threads calling and the
+gate at 1, 2 or 4, one three-second window of the benchmark served its worst-served session **once**
+while another session, in that same window, was served 12,874 times. (The probe reports the counts
+per window rather than pooled across its repeats, so that range is two sessions running side by
+side and not two different windows.) At a gate of 8 -- above the five threads offered, so the gate
+never binds -- every session got 2,659 to 2,816 calls, and the same evenness holds at 16 and with
+no gate. The sweep's `worst` column says the same thing at 32 sessions: 1.2-5.0 s for the worst
+call at every gate that binds, against 148-244 ms with no gate at all.
 
-Two further survivors need judgement rather than tests, and should be either pinned or recorded as
-equivalent mutants in the style the phase plans use: `db.py:245` `conn.set_busy_timeout(0)`, and
-`db.py:172, 233-234` `cursor.close(force=True)` and the helper close.
+**The shipped default is not exempt.** On the four-cpu machine the benchmark ran on, the default is
+4, and gate 4 is one of the three sizes above that starved a reader to a single call. Any default
+that is smaller than the number of sessions calling at once binds, and every gate that binds does
+this; a server with 500 sessions and a gate of 16 is the ordinary case, not an edge one.
 
-The hardening is believed correct — it is unproven, not broken. If any of it turns out to be
-actually broken, that is a finding to report, not to quietly fix.
+No value of `n` fixes this, which is why Phase 11 left the default alone and recorded the finding
+here instead. `functional_spec.md` §13.1's promise -- "calls queue and nothing is rejected" -- is
+kept to the letter, but a call that queues for seconds behind a thread that keeps barging in front
+of it is not the service that sentence implies, and an eval whose episode times out because its
+session was the unlucky one will read it as a dropped request.
 
-### B2. `components/runtime_db.md` §1.2 states something false about APSW
+The shape of a fix is a gate that hands slots out in arrival order -- a ticket lock, or a condition
+variable with an explicit FIFO of waiters -- replacing the semaphore in `gate()` and
+`set_concurrency`. It needs a test that drives more threads than slots and asserts that every
+thread is served, which is a test the suite does not have today: the existing gate tests check that
+`n` calls run at once and that the size is published, not that the `n + 1`th caller is ever let in.
 
-**Found:** Phase 1 implementation. **Owner:** unassigned. **Risk:** low now, rises with each phase.
+Worth knowing before acting: the benchmark measures a closed loop with no think time, which is the
+worst case for barging. A scouting run before the harness existed, with a millisecond of think time
+per session, did not reproduce it -- nobody is barging when everybody has just gone away to do
+something else. That observation is not in `latest.md` and was not made by the committed harness;
+take it as a hint about where to look, not as a measurement. It does suggest this is a saturation
+defect rather than a defect of every serving process, which is worth establishing before deciding
+how much to spend on it.
 
-§1.2 claims APSW returns a bare value for single-column rows. That is false on the pinned
-`apsw>=3.53` floor: the bare value comes from `Cursor.get`, which `Db` never uses. The code is
-right and the deviation is recorded in `phase_plans/phase_1.md` with a tripwire test.
+### B23. A world has no way to order rows by when they were written within one episode
 
-The artifact is marked `status: complete` and still carries the claim, where a later-phase
-implementer will read it as the spec. Left unedited because editing a completed artifact cascades
-its dependents to `draft`; the fix needs a maintainer's call on whether to take that cascade or to
-annotate the section in place.
+**Decision (2026-09-13, maintainer): defer, and do not solve it with a column.** A per-table
+sequence number is a client-side workaround for a static clock. The right fix is to the clock — a
+monotonic option, or similar — which is a design question and not a backlog item. The entry stays
+open as the record of the problem, not of the proposed workaround.
 
-### B3. Working directories from the bare-`<pid>` layout are never swept
+**Found:** Phase 10 implementation (code review, Moderate 3). **Owner:** unassigned. **Risk:** low
+per world, but it is the same problem in every world that has an activity feed.
 
-**Found:** Phase 3 code review, round 5. **Owner:** unassigned. **Risk:** low — a disk leak, no
-correctness or security consequence.
+*Renumbered from a second B18 in Phase 12, which was the first phase to cite it by number alone.
+`phase_plans/phase_10.md` cites it twice and was not edited, being `status: complete`: its `:241`
+quotes this heading beside the number, so that citation still lands here, and its `:288` is a bare
+"`BACKLOG.md` B18", which means this item -- and which now lands on no entry at all, the pytest
+plugin's two-marker guard having been closed. That one dangling citation is the price of leaving a
+completed artifact alone.*
 
-Phase 3 round 4 changed the default working directory from `<tempdir>/seahaven-<uid>/<pid>/` to
-`<tempdir>/seahaven-<uid>/<pid namespace>-<pid>/`, because `os.kill(pid, 0)` answers in the
-caller's pid namespace and two containers sharing a `<tempdir>` were sweeping each other's live
-instances.
+An instance's clock is frozen (`functional_spec.md` §11, and a progressing clock is a §24 non-goal),
+so every row an episode writes carries one `created_at`. A table whose rows are meant to be read in
+the order they happened therefore has no ordering key for the part of its contents the episode
+itself produced: `ORDER BY created_at` is not an order, and the usual tiebreak on a UUID primary key
+is stable but arbitrary.
 
-`instances.py:_pid_of` matches a directory name only when it starts with this namespace's prefix, so
-on a machine where procfs exists a directory left by an earlier build — a bare `999999/` — returns
-`None` and is stepped over. Nothing else removes it either: the sweep is the only thing that ever
-deletes a working directory it did not create. Verified: a bare-numeric directory is still PRESENT
-after a sweep. The behaviour is deliberate and safe (an unprefixed name cannot be judged against
-this namespace's pids), but it silently leaks disk for anyone who ran an earlier build.
+For a reader writing raw SQL the answer is `ORDER BY created_at, rowid`, which ProjectTracker's
+`AGENTS.md` gives for `issue_events`. For a *tool* it is not: a keyset cursor has to carry its
+tiebreaker as a value, and `rowid` is not a column a world projects. ProjectTracker's
+`list_comments` therefore documents the behaviour rather than fixing it, and
+`tools/comments.py` records why a per-table sequence column was not taken.
 
-A fix would sweep a bare-numeric sibling too, but only where the name can be judged safely: where
-`/proc/self/ns/pid` is unreadable the prefix is empty and bare names *are* this layout, so the
-condition is "procfs exists, the name is bare numeric, and the pid is not alive" — which is exactly
-the cross-namespace hazard the prefix was added to remove, and is therefore a decision about a
-one-off migration, not a rule to add to the sweep. A one-shot cleanup at the root, or documented
-`rm -rf`, is the likelier answer.
-
-### B4. `world.name` is an unvalidated path component
-
-**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — not attacker
-reachable; a world's name is written by the world's author and never arrives off the wire.
-
-The default working directory is `<tempdir>/seahaven-<uid>/<namespace>-<pid>/<world name>/`.
-`instances.py:_open_child` hardens the *lookup* of each component — `O_NOFOLLOW`, an owner check,
-`dir_fd` — and assumes the component it is given is a single path segment. `World.__init__` in
-`world.py` never checks that. `O_NOFOLLOW` is no help here: `..` is not a symlink.
-
-Verified by making a real instance of each:
-
-- `World("..")` puts the instance directly in the working root, beside the per-process directories.
-- `World("../..")` puts a live `state.sqlite` **outside the working root entirely**, where the sweep
-  will never see it — a permanent leak of the world's data into `<tempdir>`.
-- `World("../escaped")` lands inside the root but outside any per-process directory, likewise
-  never swept.
-- `World("a/b")` and `World("")` are refused, but only incidentally, as `ENOENT` wrapped in the
-  working-directory `WorldBug`.
-
-The fix is validation shaped like `fixtures.check_id` — one path segment, no leading dot, not `.`
-or `..` — in `World.__init__`, refusing with a `WorldBug` that names `World(name=...)`. It is
-recorded here rather than fixed in Phase 3 because the *use* is Phase 3's but the *validation*
-belongs in `world.py`, which is Phase 2's and already committed. A world name is also likely to end
-up in more than a path (a log line, a sidecar, a URL in Phase 6/7), so the rule belongs where the
-name is accepted.
-
-### B5. The default working root is created `0o777` and only then tightened
-
-**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — hardening, not a
-hole; every consequence of winning the window is refused by something else.
-
-`instances.py:_make_instance_dir` does `root.mkdir(parents=True, exist_ok=True)` and then
-`os.fchmod(root_fd, 0o700)` on a checked descriptor. `mkdir`'s default mode is `0o777`, masked by
-the umask, so under `umask 000` the root exists world-writable between the two calls (confirmed:
-mode at creation `0o777`, mode after the `fchmod` `0o700`). Anything planted in that window is
-refused when it is used — `_open_child` checks owner and `O_NOFOLLOW` at every level, which is what
-round 5 and round 6 verified with a second uid — so this is depth, not a live defect.
-
-`root.mkdir(mode=0o700, parents=True, exist_ok=True)` costs nothing and makes the ceiling `0o700`
-instead of `0o777` for the window. Note that the docstring's "`mkdir`'s mode is masked by the umask,
-so it is a ceiling and not a setting" argument is the reason the `fchmod` exists, not a reason to
-leave the ceiling at `0o777`; whoever makes this change should extend that paragraph to say both are
-used and why.
-
-### B6. The descriptor-anchored final `mkdir` is claimed by a docstring and pinned by no test
-
-**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — harmless on today's
-code; a test gap around a structural property.
-
-`instances.py:_make_instance_dir` ends with `os.mkdir(instance_id, 0o700, dir_fd=world_fd)`, and its
-docstring says the instance directory is created relative to the checked `<world>` descriptor rather
-than composed as a string and resolved again. Replacing that line with a composed-path
-`(root / process / world / instance_id).mkdir(0o700)` survives the entire suite under both umasks.
-It is harmless today because every component above it has just been checked and is `0o700` and ours,
-so there is nothing to redirect the composed path — the same position the `S_ISDIR` guard in the
-sweep is in, where the structural property was pinned rather than the line dropped.
-
-Two ways to close it, and the choice is the point: stage the swap (rename the checked `<world>`
-directory away and leave a symlink at its name between the `_open_child` and the `mkdir`, in the
-monkeypatch style `test_the_sweep_removes_through_the_descriptor_it_judged_through` uses) and assert
-the instance is not made through the link; or soften the docstring to claim only what is tested.
-Pinning it is the better answer if the anchoring is meant to survive later edits.
-
-### B7. The FTS5 recipe does not work as written, in both artifacts that state it
-
-**Found:** Phase 4 implementation. **Owner:** unassigned. **Risk:** low — the code is right and the
-phase plan records it; a later reader of the artifact would follow the recipe and be stuck.
-
-The table in §4 tells a world that wants `MATCH` through `run_sql` to list the FTS5 table's shadow
-tables and "add `bm25`, `snippet`, `highlight` to the function allowlist". A world that does exactly
-that gets `not allowed: function 'match'`: SQLite asks the authorizer about the `MATCH` *operator*
-under the function name `match`, which the sentence omits. With `match` added it then gets
-`action PRAGMA 'data_version'`, because FTS5 reads that pragma while preparing the statement —
-which §4 does not mention at all, and which no spelling of the allowlists in the published API could
-have allowed.
-
-Phase 4 closed both in code: `sandbox.ALLOWED_FUNCTIONS`'s comment names `match` as the fourth
-function to pass, and `sandbox._PRAGMAS` allows the `PRAGMA data_version` question (never its
-assignment form) with the reasoning in place; `tests/test_fts5.py` drives the whole recipe through a
-real world and pins both refusals a world that lists too little gets. What is left is the artifact:
-§4 is `status: complete` and still carries the three-function sentence, and says nothing about the
-pragma. Same shape as B2, and the same call to make — editing a complete artifact cascades its
-dependents to `draft`, so whether to take that cascade or annotate in place is a maintainer's.
-
-**Two artifacts, not one.** `components/runtime_db.md` §4 carries the same three-function sentence
-("FTS5 auxiliary functions (`bm25`, `snippet`, `highlight`) are not in the default list"), so the
-`match` omission is in both places and a fix to one leaves the other. `runtime_db.md` is also where
-the pragma claim lives, and that side of it is B8.
-
-### B8. Three `complete` artifacts describe the control path the Phase 4 Critical replaced
-
-**Found:** Phase 4 code review, round 2. **Owner:** unassigned. **Risk:** the
-`helpers_and_control.md` entry is the highest in this register: a later-phase implementer who
-follows it as written reintroduces an interpreter-wide deadlock.
-
-Phase 4's round-1 review raised a Critical: `controller_run_sql` ran `sandbox.run_statement` on the
-`inspect()` handle, which the spec documents as readable *without* the instance lock. Two threads on
-one connection, one setting the authorizer while the other steps a cursor, wedge inside SQLite — and
-take the interpreter with them, because the thread waiting on the connection holds the GIL. The fix
-gave the control tools a second read-only handle of their own (`Instance._control_db()`), opened once
-and closed with the instance. Three committed artifacts still describe the connection that was
-replaced, or facts that followed from it:
-
-- `components/helpers_and_control.md` §3: "thin wrappers over `Instance.inspect()` and
-  `Instance.changes()`", and "`controller_run_sql` runs on the instance's inspection `Db`
-  (`Instance.inspect()`, opened on first use)". Both false now, and false in the direction that
-  reintroduces the deadlock. A **third** sentence in the same section, at `:98-100`, states the
-  `RLock`'s reason exactly as `fixtures_instances.md` §2.4 does: "the reads it then makes through
-  the `inspect()` handle do not take it, which is why the lock is a `threading.RLock` and why the
-  first control call does not deadlock." It is listed here because the next bullet attributes that
-  sentence to the other file alone, and an amendment worked from this list would fix two sentences
-  here and leave the third — which is this register's own recurring finding, that a fix closes the
-  demonstrated case and leaves the adjacent one.
-- `components/fixtures_instances.md` §2.4: the control-dispatch bullet repeats the same claim; the
-  `RLock`'s stated reason ("the reads it then makes through the `inspect()` handle do not [take the
-  lock]") has changed — the conclusion still holds, but the reason is now same-thread re-entry, a
-  control tool asking the instance for its changeset and its control handle with the lock already
-  held; and the `destroy()` bullet's list of what is closed ("close inspection, session, db") is
-  missing the fourth handle.
-- `components/runtime_db.md` §4: an `Authorizer` "carries per-statement mutable state (`refusals`)"
-  is now incomplete — it also carries `_wrote_a_row`, whose scope is the call, not the statement.
-  §5's test plan says "`ATTACH`/`PRAGMA` refused", which is contradicted for `PRAGMA data_version`
-  (see B7) and needs a sentence for the changeset session's `table_xinfo` allowance.
-
-Everything else in those sections holds word for word — one statement, positional params, no
-authorizer beyond the connection's permanent write denial, no caps, `run_sql`'s result shape,
-SQLite's message, and the lock-free `inspect()` reads, which are now true where they were not. All
-three are `status: complete`, so this is the same call B2 and B7 leave open: editing a completed
-artifact cascades its dependents to `draft`, and whether to take that cascade or annotate in place
-is a maintainer's. The reasoning behind each change is recorded in
-`specs/projects/seahaven_framework/phase_plans/phase_4.md`.
-
-### B9. SH405 as specified fires on every fresh clone of a world that commits a fixture
-
-**Found:** Phase 5, freezing the reference world's `empty` fixture. **Owner:** unassigned.
-**Risk:** `seahaven check` (Phase 7) reports an error on a correct world; a world author's first
-`check` after cloning their own repository fails.
-
-`components/cli_and_check.md` §3 defines SH405 as "state file not read-only or has `-wal`/`-shm`
-companions", and `components/fixtures_instances.md` §1 has `freeze` `chmod 0o444` the state file.
-Both are right about the file `freeze` writes. Neither survives version control: git records only
-the executable bit, so `fixtures/<id>/state.sqlite` comes out of a clone with whatever the umask
-gave it — `0o644` under the usual `umask 022` — and the read-only half of SH405 reports an error on
-a fixture that is byte-for-byte the one that was frozen.
-
-The information SH405 wants is not lost, it is just not in the mode: the sidecar's `file_sha256`
-(SH402) and `schema_hash` (SH403) already prove the bytes are the frozen ones, and the journal-file
-half of SH405 is genuine and unaffected. Options, for whoever owns the lint: drop the mode check;
-keep it as a warning rather than an error; or keep it as an error but only for a file the *running*
-process froze, which in practice means dropping it. Nothing about `freeze` should change — a live
-instance must not be able to write a fixture in place.
-
-This affects Phase 7 (the lint) and Phase 10 (three fixtures instead of one).
-`worlds/projecttracker/tests/test_empty_fixture.py::test_the_state_file_carries_no_journal_or_lock_file_beside_it`
-asserts the half that survives a clone and says in its docstring why it does not assert the mode.
-
-### B10. `architecture.md` says every name outside `__init__` is internal, and the code does not
-
-**Found:** Phase 5, writing the reference world's `middleware/error_handler.py` — the first
-middleware written outside the framework's own tests. **Owner:** unassigned. **Risk:** ergonomic,
-and a stated rule that contradicts the shipped code; it already misled this phase.
-
-This is a conflict inside a `complete` artifact, not a blank to fill in. `architecture.md:68` says,
-of the list of names `seahaven/__init__.py` re-exports:
-
-> Everything else is internal. `Tool.from_function` is part of that public surface: it is how an
-> extension builds a tool. `seahaven.sandbox` is public too — `Authorizer`, `run_statement`,
-> `SqlResult` and the refusal names, which are a documented `Literal` and are stable.
-
-Read as written, the first sentence is the rule and the two that follow are its complete set of
-exceptions: `Tool.from_function`, and `Authorizer`, `run_statement`, `SqlResult` and the refusal
-names in `seahaven.sandbox`. Anything else a world imports from a `seahaven.*` module — the sentence
-says — is internal.
-
-The component documents then list wider interfaces, and the code implements them. `world_and_dispatch.md`
-§1 gives `Handler` and `Middleware` beside the `World` they describe, and `seahaven/world.py` duly
-re-exports both from `call.py` in its `__all__`, with a comment naming exactly the world-author case;
-`fixtures_instances.md` §1 gives `load`, `load_all`, `verify` and `freeze` in `seahaven.fixtures`.
-None of those are in `__init__`, and none are named as exceptions at `architecture.md:68`. So a world
-author who reads §1 and believes it concludes that `from seahaven.world import Handler` reaches into
-a private module, and declares a local copy of the type instead. That is what this phase's first
-draft did, and the copy is exactly the drift a world should not carry.
-
-Closing it means **amending `architecture.md` §1**, which is `complete`; a phase should not widen it
-on its own judgement, and adding a sentence elsewhere would leave line 68 still saying the opposite.
-The amendment is to replace the blanket "Everything else is internal" plus its two hand-listed
-exceptions with the rule the codebase actually follows — *a name a component document's §1 lists as
-part of a module's interface is public; `seahaven/__init__` re-exports only the subset worth a short
-import* — under which `Tool.from_function` and the `sandbox` names stop being exceptions and become
-instances. Separately, `Handler` and `Middleware` are strong candidates for that convenience subset:
-a typed middleware is the ordinary case, not an advanced one, and `seahaven new`'s `middleware/`
-template is where every world author meets it. Phase 5's world imports them from `seahaven.world`
-under the rule above, and its `middleware/error_handler.py` docstring says why.
-
-### B11. A built world wheel ships no fixtures, so `instance(id)` fails from an install
-
-**Found:** Phase 5, building `worlds/projecttracker` and installing the wheel into a clean
-environment. **Owner:** Phase 6 (`serve`) and Phase 7 (the `--hub` image). **Risk:** a world
-installed rather than checked out can only be run blank; every fixture-backed eval fails at startup.
-
-A world's `fixtures/` directory sits at the project root, beside `src/`, which is where `freeze`
-writes it and where `World`'s `fixtures_dir` default finds it by walking up to the `pyproject.toml`.
-A wheel has no project root. `uv build --project worlds/projecttracker` produces a wheel holding
-`projecttracker/` and nothing else — the schema travels because `schema/*.sql` is *inside* the
-package and `sql_files` reads it through `importlib.resources`, but `fixtures/` is outside it and is
-simply absent. Installed into a clean venv, `projecttracker.world.fixtures()` is `[]` and
-
-```
-world.instance("empty")
-WorldBug: world 'projecttracker' has no fixture 'empty' in .../site-packages/fixtures;
-freeze one, or name the directory with World(fixtures_dir=...)
-```
-
-while `world.instance()` — blank, from the schema — works. The error message is good and the
-`fixtures_dir=` escape hatch exists, so nothing here is broken as specified. What is missing is a
-statement of which way a world is meant to be deployed — and `functional_spec.md` §2.2 half-makes
-one already: `fixtures_dir` falls back "to `fixtures/` beside the package where there is none, as in
-an installed wheel", which says the installed case was thought about and leaves open how the
-directory gets there.
-
-Three ways to close it have been looked at, and **none of the three is a one-line change**; this
-entry records what each actually costs rather than proposing a fix.
-
-*Move `fixtures/` inside the package* (`src/projecttracker/fixtures/`) and read it through
-`importlib.resources` as the schema already is. This is the only shape that also survives a zipped
-wheel, but it is **framework work, not a world's directory move**: `fixtures_dir` is not a
-`Traversable` anywhere in the framework. `World.__init__` coerces whatever it is given with
-`Path(fixtures_dir)` (in `World.__init__`, `src/seahaven/world.py:117` as this phase leaves it),
-and `seahaven.fixtures` is `Path`-typed
-throughout — `Fixture.dir` and `Fixture.state_path`, `load`, `load_all`, `verify`, `freeze` and the
-copy that makes an instance all take or return `Path`, and `verify` hashes files off the filesystem.
-`importlib.resources.files()` hands back a `Traversable`, which `Path(...)` rejects for a zip member.
-Closing it this way means deciding whether fixtures are read through `Traversable` (and how `freeze`,
-which writes, fits a read-only abstraction), which is a fixtures-component change.
-
-*Keep the layout and have the build carry the directory* — hatchling's `force-include`, one line in
-the world's `pyproject.toml`, which `seahaven new` would then render. This does build and install,
-but it lands `fixtures/` **at the top of `site-packages`**, not under the package: the directory has
-no package to be inside, so there is nowhere namespaced to put it. Two installed worlds that each
-scaffolded an `empty` fixture then write to the same `site-packages/fixtures/empty/`, and the second
-install silently overwrites the first — breaking *both* worlds, since each then loads the other's
-state. That makes it unusable as the default a template renders, whatever it is worth for a single
-world pinned in its own venv.
-
-*Say plainly that a served world is a checkout and never a wheel.* This is defensible — `architecture.md`
-§6's `serve` runs from a world directory — and it is the only one of the three that costs nothing to
-state. But it needs saying explicitly, because Phase 7's `--hub` `Dockerfile` does `pip install .[serve]`
-and would otherwise decide the question by accident, in the direction the first two paragraphs show
-does not work.
-
-Phase 5 changed nothing: the layout is what `functional_spec.md` §2.1 specifies, and the choice is
-not a placeholder slice's to make.
-
-**Phase 6 did not close it either, and can be struck off the owner line.** `components/openenv.md`
-gives neither `app(world, ...)` nor `serve(world, ...)` a fixtures argument, so there is nothing in
-this component's spec for `serve` to pass: a world reaches the server already built, and where its
-fixtures live was decided before `serve` saw it. What Phase 6 adds is the consequence — a served
-world that is an install rather than a checkout answers every fixture-backed `reset` with the
-`WorldBug` above, over the wire, to an agent that cannot do anything about it. The choice is Phase
-7's, where the `--hub` `Dockerfile` makes it whether or not anyone writes it down.
+The framework question is whether `Ctx` should offer a monotonic per-instance counter beside
+`ctx.ids` and `ctx.clock` — one that a world can store in a column and page on — or whether the
+right answer is that evals should grade on state and on changesets rather than on the order of an
+activity feed. Either way it is a decision for the framework, not for one world, and it should be
+settled before the docs phase describes activity tables as a pattern.
 
 ---
 
-### B12. `components/openenv.md` contradicts itself on tool listing, and its two code sketches are wrong
 
-**Found:** Phase 6 implementation. **Owner:** unassigned. **Risk:** the §5 sketch is the higher of
-the two — it is copied verbatim into the per-world client that the same section schedules for a
-later release, and it is broken in exactly the mode a training harness runs in.
+### B25. `_make_instance_dir` anchors the `mkdir` and then returns a composed path
 
-Three statements in an artifact that is otherwise accurate line by line. Each is recorded with what
-the code does instead and why, in
-`specs/projects/seahaven_framework/phase_plans/phase_6.md`; none of them was worked around silently.
+**Found:** 2026-09-13, closing B6 — the test written for it is what made this visible. **Owner:**
+unassigned. **Risk:** low and of the same shape as B6's: not reachable on today's code, because
+every component above the instance directory has just been checked. It is the half of the anchoring
+that stops at the `mkdir`.
 
-- **§2 `:61` and `:71` cannot both hold.** `:61` says `ListToolsAction` → `ListToolsObservation(tools=instance.tools())`
-  is "checked first", which needs an instance; `:71` says "A `step` before `reset` raises
-  `WorldBug("reset first")`". OpenEnv's own `/mcp` `tools/list` handler steps a `ListToolsAction` on
-  a session that has never been reset, and MCP's contract is that discovery does not require one, so
-  a literal reading makes every standard MCP client fail against every Seahaven world. The code
-  answers the listing before the guard and derives it from `world.tools` when there is no instance,
-  with a test pinning that the two derivations agree. Whichever way a maintainer settles it, one of
-  the two sentences has to go.
-- **§2 `:67` writes the generic internal error with two keys**, `{"code": "internal", "message": "internal error"}`,
-  where `architecture.md` §6 defines the wire shape of every error as `{"code", "message", "details"}`.
-  Architecture wins on a cross-component shape, and a client that reads `error["details"]` should not
-  have to special-case the one error a world did not write. The code builds it through
-  `ToolError.to_dict()` so that it cannot drift from the others.
-- **§5 `:146` sketches `call` as `self.step(CallToolAction(...)).observation`.** `EnvClient.step` is
-  dual-mode: in asynchronous code it answers an awaitable, and `.observation` on an awaitable is not
-  an observation. The sketch is right about the signature and wrong about the mechanism; `call` and
-  `list_tools` go through `EnvClient._dispatch`, which is how the base client produces a value in
-  synchronous code and an awaitable in asynchronous code from one method. This is not a theoretical
-  reading: Phase 6 ran the sketch as a hand mutation, and it passes the synchronous end-to-end test
-  and fails only the asynchronous one. §5 is also silent on `__enter__`/`__aenter__`, which
-  `EnvClient` annotates as returning `EnvClient`, so `with SeahavenClient(...) as env` type-checks
-  as a value with neither `call` nor `list_tools` until the subclass narrows them — worth a sentence
-  wherever the first is fixed.
-- **§5 `:146` also writes the tool name as an ordinary parameter, `def call(self, tool, **arguments)`.**
-  `Instance.call` is `def call(self, name: str, /, **arguments)` — positional-only, deliberately, so
-  that `**arguments` can carry an argument the world happened to call `name`. A world may equally
-  call one `tool`, or `self`; without the `/` such a tool lists, works through
-  `step(CallToolAction(...))` and raises `TypeError: got multiple values for argument 'tool'` through
-  the documented convenience, which is a tool no harness can call. Found in Phase 6's code review,
-  round 1, and fixed in the code there with a test; the sketch should grow the `/` wherever §5 is
-  next touched, since a per-world generated client written from it would reintroduce the same hole
-  for every world.
+`instances.py:_make_instance_dir` creates the instance directory relative to the checked `<world>`
+descriptor — `os.mkdir(instance_id, 0o700, dir_fd=world_fd)`, which B6 now pins — and then answers
+`root / process / self._world.name / instance_id`, a string composed from the same names all over
+again. Every caller after it works on that path: `state = directory / STATE_NAME`, the
+`build_blank` or `copyfile` that fills it, and every later open. So the inode the framework created
+and the file it then writes are resolved twice, by two different routes, and only the first route
+is the checked one.
 
-`components/openenv.md` is `status: complete`, so this is the same call B2, B7 and B8 leave open:
-editing a completed artifact cascades its dependents to `draft`, and whether to take that cascade or
-annotate in place is a maintainer's.
+Staged with B6's own swap — the `<world>` directory renamed away and a symlink to a victim left at
+its name between the `_open_child` and the `mkdir`, plus a fixed instance id so the attacker's
+directory can be named — a real `world.instance(None)` puts the empty directory where it belongs
+and the database where it does not:
+
+```
+returned dir                        : <root>/<ns>-<pid>/notesworld/1111...5555
+inode made through the descriptor   : ['1111...5555']          # under the renamed-away directory
+what the attacker's directory holds : ['state.sqlite', 'state.sqlite-shm', 'state.sqlite-wal']
+state.sqlite in the checked dir     : False
+```
+
+Without the pre-created `victim/<instance id>` the same staging fails at `build_blank` with a bare
+`apsw.CantOpenError: unable to open database file`, which is what makes this hard to see: the
+obvious staging of it looks like a crash rather than a redirection.
+
+The docstring is already honest about what comes back — "What comes back is a path, because that is
+what SQLite and the rest of this module take; by then every component of it is an inode this user
+made or owns" — and that sentence is exactly the assumption above. It could say so in one clause:
+the path is composed, and it is only as good as the components having been checked a moment
+earlier.
+
+Two ways to close it, and neither is a line: hand the caller the `<world>` descriptor (or an
+`os.open` of the new directory) so that the state file is created with `dir_fd` as well, which
+means `build_blank`, `shutil.copyfile` and `apsw.Connection` all taking a descriptor — APSW takes a
+path, so this bottoms out at `/proc/self/fd/<n>` on Linux and at nothing portable; or `os.fstat`
+the new directory through the descriptor and again through the composed path and refuse if they are
+not the same inode, which closes the window without widening any signature. The second is the
+cheaper and is not free of races either. Filed rather than taken because the choice belongs with
+whoever decides how far down the descriptor discipline goes, and because B6's decision was about
+the `mkdir` specifically.
 
 ---
+### B26. ProjectTracker's two rebuild tests are marked `@slow` and are no longer slow
+
+**Found:** 2026-09-13, instrumenting the suites with `--durations` to answer "are the tests slow?".
+**Owner:** unassigned. **Risk:** none to correctness. The cost is that the marker stops meaning
+anything, which is how a real slow test later gets marked and ignored.
+
+`pyproject.toml:95` defines `slow` for tests that take tens of seconds, and
+`worlds/projecttracker/tests/test_fixtures.py`'s two rebuild tests --
+`test_the_generator_still_makes_the_fixtures_that_are_committed` and
+`test_the_generator_still_makes_the_committed_fixtures_byte_for_byte` -- carry it. Measured on
+CPython 3.14.0 they are **0.26s and 0.23s of setup and 0.06s of call**, not tens of seconds. The
+rebuild got cheap at some point and nobody re-measured; the whole ProjectTracker suite with both of
+them running is 15.6s, and the pair is under 3% of it.
+
+Two ways to close it, and the choice is a maintainer's: drop the marker from these two (they cost
+nothing, so the default `-m "not slow"` run may as well cover them, which also removes the only
+tests in the repo that a plain CI run skips), or keep it and re-state what `slow` means in
+`pyproject.toml` so the definition matches the only tests that use it. Not taken here because the
+measurement came out of a task that was told not to change tests for speed.
+
+---
+
+## Deferred — upstream
+
+**Deferred 2026-09-13: not part of this project.** All three are OpenEnv's, reproduced against a
+real server, each a small fix upstream and none fixable from inside Seahaven. Kept as the record
+of what was found and verified, so nobody re-derives it.
 
 ### B13. Three OpenEnv behaviours a Seahaven world cannot fix from its own side
 
@@ -436,106 +223,47 @@ OpenEnv uses the base `State` type where the environment's own subclass was mean
 
 ---
 
-### B14. "First paragraph of README" is four rules, and `components/openenv.md` states it as a phrase
+## Deferred — publication
 
-**Found:** Phase 6 code review, rounds 1, 2 and 3. **Owner:** unassigned. **Risk:** low as a
-defect, high as a time sink — the phrase cost three review rounds and is the only line of the
-component document that a reader would not know was under-specified.
+**Deferred 2026-09-13: publication is not part of this project** (see Phase 13's plan). These stay
+open as a record rather than as work. Nothing here is wrong with the code; each becomes correct, or
+becomes real, only if the framework is published. Revisit them together if that ever changes.
 
-`components/openenv.md` §2 `:79` says the metadata's `description` is the "first paragraph of README
-or `f"Seahaven world {name}"`". §6 `:180` then says that same `README.md` is the Space card. A Space
-card does not begin with a paragraph: it begins with YAML front matter between `---` fences, usually
-followed by a heading. So the phrase has to be read as four rules, and Phase 6 wrote all four:
+### B22. Three places tell a user to install `seahaven` from PyPI, where a placeholder answers
 
-- front matter is skipped as a block — closing fence searched for across the whole file *first*, and
-  only if there is none does the block end at the first blank line or at the end of the file;
-- a line that is furniture rather than prose is not the description, and "furniture" is two rules
-  and not one: a thematic break is three or more `-`, `_` or `*` with spaces allowed between them,
-  and a setext underline is a run of `=` or of `-` with no interior space. A rule is the whole line
-  or nothing, so `- a bullet` and `--- not a rule ---` stay prose, and `**` and `* *` stay prose
-  because two characters are not a break;
-- a line with furniture under it is a heading, skipped as `# Title` is, scoped to the line that
-  would start the paragraph;
-- a UTF-8 byte-order mark is decoded away, because `str.strip()` does not remove it.
+**Found:** Phase 12 (docs), checking what the docs and the scaffold may tell a reader to install.
+**Owner:** unassigned. **Risk:** low but silent: every one of them succeeds and installs nothing
+useful, which is worse than failing.
 
-A sentence in §2 should also say what a heading is, because Seahaven's rule and CommonMark's differ
-by a space: any line starting with `#` is furniture here, while CommonMark's ATX heading needs a
-space (or the end of the line) after the run of `#`, so `#1 priority is shipping.` is a paragraph
-there and skipped here. The effect is a fallback description (`f"Seahaven world {name}"`) and never
-a wrong one, which is why Phase 6 recorded and pinned it rather than widening the rule — see that
-phase's plan. A reader of §2 should know it, since the deviation is conservative by luck rather than
-by design.
+The framework is not published (Phase 13, sign-off gated). What *is* on PyPI under `seahaven` is a
+placeholder release -- 0.0.1, uploaded 2026-09-11, a 1.4 KB wheel with no dependencies and
+`requires_python >=3.10` -- and `seahaven~=0.0` (`>=0.0, ==0.*`) resolves to it. Three artifacts send
+a user there:
 
-Each rule exists because the naive reading published something worse than no description: the card's
-own YAML, a `---`, a `***`, or the world's title. Three review rounds were spent on two of the
-rules — round 1 on a block with no end, round 2 on a well-formed block with a blank line in it, and
-round 3 on `*`, the one thematic-break character the rule test did not name. The implementation and
-the reasoning are in `specs/projects/seahaven_framework/phase_plans/phase_6.md`; fifty-five
-parametrized cases and just under a million generated documents pin them.
+- `src/seahaven/cli/serve.py:19` answers a missing extra with `pip install "seahaven[serve]"`. That
+  resolves, reports success, provides no `serve` extra, and the user is told again that the extra is
+  missing.
+- `src/seahaven/cli/new.py` prints `next: cd <name> / uv sync / uv run pytest / uv run seahaven
+  check`. The `uv sync` resolves the scaffold's `seahaven~=0.0` to the placeholder and succeeds,
+  installing two packages and no pytest -- the scaffold declares no test dependency. `uv run pytest`
+  therefore runs whatever pytest is on `PATH`, which reports `ModuleNotFoundError: No module named
+  'seahaven'` from outside the new environment; with a pytest inside it
+  (`uv run --with pytest pytest`) collection succeeds and all three tests error with `fixture
+  'instance' not found` / `fixture 'world' not found` under an unknown-marker warning, the
+  placeholder having no pytest plugin. `uv run seahaven check` answers `error: Failed to spawn:
+  seahaven`, it having no console script either. The world's own `ModuleNotFoundError: No module
+  named 'seahaven.world'` waits for something to import the package, which the scaffold's tests do
+  not. No message names the placeholder, or PyPI.
+- `src/seahaven/cli/templates/hub/Dockerfile.tmpl` runs `uv sync --extra serve`, and the scaffold's
+  `serve` extra is `seahaven[serve]`. The image builds and the container cannot start.
 
-Worth a sentence in the component document wherever §2 is next touched, because the next world
-server written from that phrase will start from the naive reading. `components/openenv.md` is
-`status: complete`, so this is the same maintainer's call as B2, B7, B8 and B12.
-
----
-
-### B15. CI installs the `serve` extra, and the licence gate does not cover it
-
-**Found:** Phase 6 code review, round 3. **Owner:** unassigned. **Risk:** low today, and the
-decision is a policy one rather than a code one.
-
-`scripts/check_licences.py` evaluates dependency markers with `{"extra": ""}` and says so in its own
-docstring: it gates "what `pip install seahaven` pulls in, extras excluded". That was the right
-scope while every extra was a development tool. Phase 6 made `serve` a *runtime* extra — CI now runs
-`uv sync --locked --extra serve` because the OpenEnv server tests need it — so there is now an
-installed, shipped-to-users closure that no gate looks at. Its licences are not all in the
-MIT/Apache-2.0/BSD set `AGENTS.md` names: MPL-2.0 (certifi, orjson, tqdm), CC0-1.0 inside numpy's
-licence expression, and MIT-CMU (pillow). None of those is copyleft-viral for linking a server
-process, which is why this is recorded rather than fixed.
-
-Two things have to be decided together, and both are a maintainer's call:
-
-- **Does an extra's closure need a licence policy at all?** An extra is opt-in and not part of
-  `pip install seahaven`, so a defensible answer is "no, and the docstring already says so".
-- **If it does, which policy?** Widening `check_licences.py` to every extra would fail the gate
-  today on the four licences above, so the change is not a one-line marker edit: it needs an
-  allowed-set decision (permissive plus MPL-2.0 and CC0-1.0, say) or a per-extra scope.
-
-Not fixed in Phase 6 on purpose: the phase's diff is the OpenEnv subpackage, and quietly widening a
-project-wide gate — or quietly loosening its allowed set to keep it green — is the kind of change
-that should be its own review. What Phase 6 does owe is that the gap is not invisible, which is this
-entry.
-
----
-
-### B16. The README rules are a quarter of `seahaven/openenv/env.py` and belong in their own module
-
-**Found:** Phase 6 code review, round 4. **Owner:** unassigned. **Risk:** low as a defect, real as a
-maintenance shape — every defect this phase's reviews found was in this one block.
-
-`_first_paragraph` and its six helpers — `_after_front_matter`, `_is_rule`, `_is_underline`,
-`_is_thematic_break`, `_is_title_line`, `_is_prose` — are about 130 lines and a large share of
-`env.py`'s 106 statements. What they implement is a small CommonMark reader: front matter as a
-block, thematic breaks, setext underlines, a byte-order mark. What the module they live in is *for*
-is the server side of the wire: sessions, actions, observations, state. The block is there because
-`get_metadata` needs a one-line description, which is a one-line need answered by a hundred and
-thirty lines of someone else's format.
-
-Four review rounds found four defects, and all four were in this block: an unbounded block skip
-(round 1), that fix regressing the well-formed case (round 2), `*` missing from the break set
-(round 3), and two miscounted kill rows for its own mutants (round 4). Round 5 found no defect in
-the code and two more faults in its record: a kill count read off a mutant narrower than the row
-describing it, and the block's one accidental deviation from CommonMark (a heading is any line
-starting with `#`) with neither a case nor a note — see B14. None of them was in `reset`,
-`step`, `state`, `close` or the client. That is not a coincidence about difficulty so much as about
-*locality*: the rules are the only part of this module that is a parser, and a parser wants its own
-file, its own suite and its own name.
-
-The move is small and mechanical — `seahaven/openenv/readme.py`, `_first_paragraph` re-exported or
-imported by `env.py`, and `tests/test_readme.py` taking the fifty-five parametrized cases with it.
-It is filed rather than done because `components/openenv.md` §1 names the subpackage's module list,
-so adding a module changes the surface a `status: complete` artifact describes. Same maintainer's
-call as B2, B7, B8 and B12, and worth pairing with whichever of those is answered first.
+`src/seahaven/docs/{authoring,serving}.md` and `reference/cli.md` say all of this in prose and give
+the checkout install instead, which is why this is recorded rather than fixed there: all three are
+Phase 7's code, and the fix wants one decision about what they should say between now and
+publication (name the checkout install, or drop the command and say "install the framework"). Once
+Phase 13 publishes a real release every one of them becomes correct as written, so the cheapest
+resolution may be to close this when that happens -- provided someone checks that it *was* closed by
+the release rather than assumed to be.
 
 ---
 
