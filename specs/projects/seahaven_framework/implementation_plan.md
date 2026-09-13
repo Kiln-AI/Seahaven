@@ -48,7 +48,7 @@ specs; nothing here restates them.
 - [x] **Phase 11: benchmark and tuning.** `bench/` with the two workloads over `agency`; a tuning
       sweep over the concurrency gate's default (cold and warm cache) which confirms or adjusts it;
       results committed as `bench/results/latest.md`.
-- [ ] **Phase 12: docs.** The prose and reference pages, hand-written, including the ProjectTracker
+- [x] **Phase 12: docs.** The prose and reference pages, hand-written, including the ProjectTracker
       walkthrough and every lint code, plus the README. The authoring-experience phase
       (`functional_spec.md` §20).
 - [ ] **Phase 13: OSS readiness (sign-off gated).** Contribution guide, licence file, package

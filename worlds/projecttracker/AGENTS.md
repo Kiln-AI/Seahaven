@@ -7,9 +7,9 @@ what is particular to this world.
 Commands: `uv run seahaven check` runs every lint over this world and is what to run before a
 commit; `uv run seahaven fixture list` lists its fixtures and `uv run seahaven fixture freeze` mints
 one; `uv run seahaven docs` prints the directory the bundled authoring documentation is installed
-in. Every page of that layout exists and `reference/lints.md` is complete, but the prose is Phase 12
-of the implementation plan, so the specifications under `specs/projects/seahaven_framework/` remain
-the place to read until then.
+in. Those pages are written: start at `index.md`, then `concepts.md` and `authoring.md`, and read
+`projecttracker.md` there for a walkthrough of this world. The specifications under
+`specs/projects/seahaven_framework/` remain the source of truth where the two disagree.
 
 This world lives inside the Seahaven repository rather than beside it, so the repository's own
 `AGENTS.md` — Python 3.14, fully typed, `ty` and `ruff` and the tests clean before any commit —
@@ -50,7 +50,7 @@ applies here too.
   that — a keyset cursor carries its tiebreaker as a value and `rowid` is not a projected column —
   so it orders by `(created_at, id)` and says so: oldest first across a fixture's history, id order
   among the comments one episode wrote. Do not write an eval that grades on the order of comments an
-  agent added; grade on the rows. The framework-level question this raises is `BACKLOG.md` B18.
+  agent added; grade on the rows. The framework-level question this raises is `BACKLOG.md` B23.
 - **The closed-issue rule.** A `done` or `canceled` issue has no assignee: transitioning to one
   drops the assignee and records the drop, and assigning a closed issue is a `CONFLICT`. An eval may
   rely on `status IN ('done','canceled') AND assignee_id IS NOT NULL` being a state this world

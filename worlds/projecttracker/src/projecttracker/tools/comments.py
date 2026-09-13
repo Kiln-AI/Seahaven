@@ -27,7 +27,7 @@ __all__ = ["BY_CREATION", "add_comment", "list_comments"]
 # projects. A monotonic sequence column on `comments` would carry, and was
 # considered and not taken, for three reasons: the cause is the framework's frozen
 # clock rather than anything this table does, so the fix belongs where the cause
-# is (`BACKLOG.md` B18); `components/projecttracker.md` is `status: complete` and
+# is (`BACKLOG.md` B23); `components/projecttracker.md` is `status: complete` and
 # its §1 spells this table's columns, so adding one is a deviation with no
 # correctness argument behind it, unlike the three the phase plan records; and
 # saying it costs nothing, because `seahaven.tool` publishes a tool's whole

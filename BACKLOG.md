@@ -605,84 +605,6 @@ matches every `](...)` target in `index.md`, so the first external `http` link P
 page fails a test about the docs *layout*. Filtering to targets that are not `http` would make the
 test say what it means.
 
----
-
-## Method notes
-
-Standing practice discovered the hard way; kept here because it changes how findings above are
-verified.
-
-- **Mutation testing needs clean bytecode.** CPython invalidates a `.pyc` on (size, whole-second
-  mtime), so a byte-length-identical mutation — a statement reordering, most often — written and run
-  inside the same second silently executes the *original* bytecode and reports a false survivor.
-  Clear `__pycache__` and set `PYTHONDONTWRITEBYTECODE=1`. Found in Phase 3; the audit it prompted
-  re-ran every recorded survivor in phases 1–3 and found no concealed kills, so the existing records
-  stand.
-- **Verify end-to-end, through the real entry point.** Every defect that has cost a review round on
-  this project passed its unit test and failed on a real call. Phase 4's second-worst defect — a
-  denied authorizer call latching `SQLITE_AUTH` into the changeset session and voiding
-  `Instance.changes()` for the life of an instance — was found this way and by nothing else: the
-  unit tests were green, because the session had already been shown every table a world's own
-  fixtures seeded.
-- **A mutation harness that edits the repository must never be killed; it must be waited out.** The
-  harnesses that mutate the working tree rather than a copy — the `ty` survivor check, and the pass
-  that names every test a mutant kills — restore each file in a `finally`, which protects against a
-  failing mutant and not against a signal. Phase 6 killed one by `pkill` and left a mutated
-  `_after_front_matter` in `src/`, where it survived until the next `pytest` run and would have
-  survived into a commit if that run had been a green one. Two rules follow: wait for such a harness
-  instead of signalling it, and make `git status` plus a full suite run part of finishing with one,
-  not part of debugging it. A file the harness owns that is *untracked* — as a new phase's source
-  is — cannot be recovered with `git checkout`, which is what makes this worth a note rather than a
-  shrug.
-- **"Randomized order" is not something this repository can claim without bringing a shuffler.**
-  No randomization plugin is installed, so `uv run pytest` runs collection order every time and
-  `-p no:randomly` disables a plugin that is not there. Phase 6 reported "three randomized orders"
-  that were three passes of one order. Order-independence is worth checking — it is what the
-  autouse isolation fixtures exist for — and the cheap way is a `pytest_collection_modifyitems`
-  plugin kept outside the tree and loaded with `-p`, seeded from the environment: no dependency, no
-  lockfile change, and a command a reader can repeat. Note too that a mutant of an isolation
-  fixture may only be visible in *some* orders (dropping Phase 6's gate restore fails in five of
-  seven), so a single green shuffled run is not evidence a fixture is redundant.
-- **A mutation harness's tally must be reconciled with the test runner's own summary.** Phase 6
-  reported a mutant at 151 killed tests where the suite said `159 failed, 572 passed, 5 errors`:
-  the harness read pytest's `-rf` short summary, which lists failures and *not* errors, and keyed
-  its results on a `(\w+)` match that collapsed every parametrized case of one function into a
-  single name. Both defects only ever undercount, both look plausible, and neither shows up in a
-  kill/survive verdict — only in the number beside it. Ask for `-rfE`, keep whole node ids, and
-  assert the count against the summary line. A row quoting a number no run can reproduce is the
-  same class of finding as a row naming the wrong mutant.
-- **Before trusting a mutation survivor, prove the mutant is the code that ran.** Assert
-  `module.__file__` points inside the mutation tree, from the same process the tests run in. Phase 4
-  produced two independent false-survivor runs, each from a different cause and each reporting
-  perfectly plausible output: a workspace path passed relative, so `PYTHONPATH` resolved against the
-  subprocess's own `cwd` and every one of 37 mutants "survived"; and a workspace copied with its
-  `.venv`, so an installed-package finder resolved `seahaven` back to the real tree and a restored
-  Critical "survived". A whole sweep at 0% kills is obvious. One survivor in a sweep that otherwise
-  looks right is not, and that is the one this check catches.
-
-### B18. A world has no way to order rows by when they were written within one episode
-
-**Found:** Phase 10 implementation (code review, Moderate 3). **Owner:** unassigned. **Risk:** low
-per world, but it is the same problem in every world that has an activity feed.
-
-An instance's clock is frozen (`functional_spec.md` §11, and a progressing clock is a §24 non-goal),
-so every row an episode writes carries one `created_at`. A table whose rows are meant to be read in
-the order they happened therefore has no ordering key for the part of its contents the episode
-itself produced: `ORDER BY created_at` is not an order, and the usual tiebreak on a UUID primary key
-is stable but arbitrary.
-
-For a reader writing raw SQL the answer is `ORDER BY created_at, rowid`, which ProjectTracker's
-`AGENTS.md` gives for `issue_events`. For a *tool* it is not: a keyset cursor has to carry its
-tiebreaker as a value, and `rowid` is not a column a world projects. ProjectTracker's
-`list_comments` therefore documents the behaviour rather than fixing it, and
-`tools/comments.py` records why a per-table sequence column was not taken.
-
-The framework question is whether `Ctx` should offer a monotonic per-instance counter beside
-`ctx.ids` and `ctx.clock` — one that a world can store in a column and page on — or whether the
-right answer is that evals should grade on state and on changesets rather than on the order of an
-activity feed. Either way it is a decision for the framework, not for one world, and it should be
-settled before the docs phase describes activity tables as a pattern.
-
 ### B19. A fixture generator cannot be pointed at a world, so testing one means monkeypatching
 
 **Found:** Phase 10 code review (Mild 6). **Owner:** unassigned. **Risk:** low; it costs every world
@@ -773,3 +695,123 @@ carries them. What is left is the artifact. It is `status: complete`, and no pha
 repository has edited a completed spec artifact -- B2 is the same situation and made the same call.
 Whether to rewrite the paragraph, and take the cascade to `draft` that comes with it, is a
 maintainer's decision.
+
+### B22. Three places tell a user to install `seahaven` from PyPI, where a placeholder answers
+
+**Found:** Phase 12 (docs), checking what the docs and the scaffold may tell a reader to install.
+**Owner:** unassigned. **Risk:** low but silent: every one of them succeeds and installs nothing
+useful, which is worse than failing.
+
+The framework is not published (Phase 13, sign-off gated). What *is* on PyPI under `seahaven` is a
+placeholder release -- 0.0.1, uploaded 2026-09-11, a 1.4 KB wheel with no dependencies and
+`requires_python >=3.10` -- and `seahaven~=0.0` (`>=0.0, ==0.*`) resolves to it. Three artifacts send
+a user there:
+
+- `src/seahaven/cli/serve.py:19` answers a missing extra with `pip install "seahaven[serve]"`. That
+  resolves, reports success, provides no `serve` extra, and the user is told again that the extra is
+  missing.
+- `src/seahaven/cli/new.py` prints `next: cd <name> / uv sync / uv run pytest / uv run seahaven
+  check`. The `uv sync` resolves the scaffold's `seahaven~=0.0` to the placeholder and succeeds,
+  installing two packages and no pytest -- the scaffold declares no test dependency. `uv run pytest`
+  therefore runs whatever pytest is on `PATH`, which reports `ModuleNotFoundError: No module named
+  'seahaven'` from outside the new environment; with a pytest inside it
+  (`uv run --with pytest pytest`) collection succeeds and all three tests error with `fixture
+  'instance' not found` / `fixture 'world' not found` under an unknown-marker warning, the
+  placeholder having no pytest plugin. `uv run seahaven check` answers `error: Failed to spawn:
+  seahaven`, it having no console script either. The world's own `ModuleNotFoundError: No module
+  named 'seahaven.world'` waits for something to import the package, which the scaffold's tests do
+  not. No message names the placeholder, or PyPI.
+- `src/seahaven/cli/templates/hub/Dockerfile.tmpl` runs `uv sync --extra serve`, and the scaffold's
+  `serve` extra is `seahaven[serve]`. The image builds and the container cannot start.
+
+`src/seahaven/docs/{authoring,serving}.md` and `reference/cli.md` say all of this in prose and give
+the checkout install instead, which is why this is recorded rather than fixed there: all three are
+Phase 7's code, and the fix wants one decision about what they should say between now and
+publication (name the checkout install, or drop the command and say "install the framework"). Once
+Phase 13 publishes a real release every one of them becomes correct as written, so the cheapest
+resolution may be to close this when that happens -- provided someone checks that it *was* closed by
+the release rather than assumed to be.
+
+### B23. A world has no way to order rows by when they were written within one episode
+
+**Found:** Phase 10 implementation (code review, Moderate 3). **Owner:** unassigned. **Risk:** low
+per world, but it is the same problem in every world that has an activity feed.
+
+*Renumbered from a second B18 in Phase 12, which was the first phase to cite it by number alone.
+`phase_plans/phase_10.md` cites it twice and was not edited, being `status: complete`: its `:241`
+quotes this heading beside the number, so that citation still lands here, and its `:288` is a bare
+"`BACKLOG.md` B18", which now lands on the surviving B18 -- the pytest plugin's two-marker guard --
+and means this item. That one dangling citation is the price of leaving a completed artifact alone.*
+
+An instance's clock is frozen (`functional_spec.md` §11, and a progressing clock is a §24 non-goal),
+so every row an episode writes carries one `created_at`. A table whose rows are meant to be read in
+the order they happened therefore has no ordering key for the part of its contents the episode
+itself produced: `ORDER BY created_at` is not an order, and the usual tiebreak on a UUID primary key
+is stable but arbitrary.
+
+For a reader writing raw SQL the answer is `ORDER BY created_at, rowid`, which ProjectTracker's
+`AGENTS.md` gives for `issue_events`. For a *tool* it is not: a keyset cursor has to carry its
+tiebreaker as a value, and `rowid` is not a column a world projects. ProjectTracker's
+`list_comments` therefore documents the behaviour rather than fixing it, and
+`tools/comments.py` records why a per-table sequence column was not taken.
+
+The framework question is whether `Ctx` should offer a monotonic per-instance counter beside
+`ctx.ids` and `ctx.clock` — one that a world can store in a column and page on — or whether the
+right answer is that evals should grade on state and on changesets rather than on the order of an
+activity feed. Either way it is a decision for the framework, not for one world, and it should be
+settled before the docs phase describes activity tables as a pattern.
+
+---
+
+## Method notes
+
+Standing practice discovered the hard way; kept here because it changes how findings above are
+verified.
+
+- **Mutation testing needs clean bytecode.** CPython invalidates a `.pyc` on (size, whole-second
+  mtime), so a byte-length-identical mutation — a statement reordering, most often — written and run
+  inside the same second silently executes the *original* bytecode and reports a false survivor.
+  Clear `__pycache__` and set `PYTHONDONTWRITEBYTECODE=1`. Found in Phase 3; the audit it prompted
+  re-ran every recorded survivor in phases 1–3 and found no concealed kills, so the existing records
+  stand.
+- **Verify end-to-end, through the real entry point.** Every defect that has cost a review round on
+  this project passed its unit test and failed on a real call. Phase 4's second-worst defect — a
+  denied authorizer call latching `SQLITE_AUTH` into the changeset session and voiding
+  `Instance.changes()` for the life of an instance — was found this way and by nothing else: the
+  unit tests were green, because the session had already been shown every table a world's own
+  fixtures seeded.
+- **A mutation harness that edits the repository must never be killed; it must be waited out.** The
+  harnesses that mutate the working tree rather than a copy — the `ty` survivor check, and the pass
+  that names every test a mutant kills — restore each file in a `finally`, which protects against a
+  failing mutant and not against a signal. Phase 6 killed one by `pkill` and left a mutated
+  `_after_front_matter` in `src/`, where it survived until the next `pytest` run and would have
+  survived into a commit if that run had been a green one. Two rules follow: wait for such a harness
+  instead of signalling it, and make `git status` plus a full suite run part of finishing with one,
+  not part of debugging it. A file the harness owns that is *untracked* — as a new phase's source
+  is — cannot be recovered with `git checkout`, which is what makes this worth a note rather than a
+  shrug.
+- **"Randomized order" is not something this repository can claim without bringing a shuffler.**
+  No randomization plugin is installed, so `uv run pytest` runs collection order every time and
+  `-p no:randomly` disables a plugin that is not there. Phase 6 reported "three randomized orders"
+  that were three passes of one order. Order-independence is worth checking — it is what the
+  autouse isolation fixtures exist for — and the cheap way is a `pytest_collection_modifyitems`
+  plugin kept outside the tree and loaded with `-p`, seeded from the environment: no dependency, no
+  lockfile change, and a command a reader can repeat. Note too that a mutant of an isolation
+  fixture may only be visible in *some* orders (dropping Phase 6's gate restore fails in five of
+  seven), so a single green shuffled run is not evidence a fixture is redundant.
+- **A mutation harness's tally must be reconciled with the test runner's own summary.** Phase 6
+  reported a mutant at 151 killed tests where the suite said `159 failed, 572 passed, 5 errors`:
+  the harness read pytest's `-rf` short summary, which lists failures and *not* errors, and keyed
+  its results on a `(\w+)` match that collapsed every parametrized case of one function into a
+  single name. Both defects only ever undercount, both look plausible, and neither shows up in a
+  kill/survive verdict — only in the number beside it. Ask for `-rfE`, keep whole node ids, and
+  assert the count against the summary line. A row quoting a number no run can reproduce is the
+  same class of finding as a row naming the wrong mutant.
+- **Before trusting a mutation survivor, prove the mutant is the code that ran.** Assert
+  `module.__file__` points inside the mutation tree, from the same process the tests run in. Phase 4
+  produced two independent false-survivor runs, each from a different cause and each reporting
+  perfectly plausible output: a workspace path passed relative, so `PYTHONPATH` resolved against the
+  subprocess's own `cwd` and every one of 37 mutants "survived"; and a workspace copied with its
+  `.venv`, so an installed-package finder resolved `seahaven` back to the real tree and a restored
+  Critical "survived". A whole sweep at 0% kills is obvious. One survivor in a sweep that otherwise
+  looks right is not, and that is the one this check catches.
