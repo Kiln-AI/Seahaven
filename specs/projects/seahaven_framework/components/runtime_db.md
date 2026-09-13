@@ -40,9 +40,13 @@ positional one is what SQLite's own docs lead with.
 
 ### 1.2 Behaviour
 
-- **Rows as dicts.** `one`/`rows` build dicts from `cursor.get_description()` names; APSW returns a
-  bare value for a single-column row, which is normalised to a tuple first. Duplicate column names
-  in a `SELECT` keep the last (SQLite's own behaviour in `row_factory`s); the docs say to alias.
+- **Rows as dicts.** `one`/`rows` build dicts from `cursor.get_description()` names. Iterating an
+  APSW cursor yields a **tuple** per row whatever the column count, so there is nothing to
+  normalise: the bare value a single-column row can arrive as belongs to `Cursor.get`, which `Db`
+  never uses. Checked against `apsw>=3.53`, the floor this project pins, and held by a tripwire
+  test. Duplicate column names in a `SELECT` keep the last (SQLite's own behaviour in
+  `row_factory`s); the docs say to alias. *Corrected 2026-09-13 — measured in Phase 1, which
+  recorded the deviation and its tripwire in `phase_plans/phase_1.md`; closes `BACKLOG.md` B2.*
 - **Error wrapping.** Every method catches `apsw.Error` and raises `DbError(sqlite_message=str(e),
   sqlite_code=e.extendedresult if present, refusals=())`.
 - **`transaction()`** returns `conn` itself used as a context manager (APSW semantics: BEGIN or
@@ -151,9 +155,13 @@ def run_statement(db: Db, sql: str, params: Sequence[SqlValue] = (), *, authoriz
                   max_rows: int | None = None, max_bytes: int | None = None) -> SqlResult
 ```
 
-An `Authorizer` carries per-statement mutable state (`refusals`), so one is constructed per call and
-never shared between calls or instances. The table allowlist and the function allowlist are computed
-once, at factory time, and passed in.
+An `Authorizer` carries mutable state, so one is constructed per call and never shared between calls
+or instances. Two pieces of it, and the scope of both is the **call** and not the statement, because
+both are cleared only in `reset()`, which `run_statement` calls once: `refusals`, what it turned
+down, and `_wrote_a_row`, which records that this call has already been allowed a row write. The
+flag is what makes the changeset session's `PRAGMA table_xinfo` question answerable without giving
+an agent a pragma of its own (see below). The table allowlist and the function allowlist are
+computed once, at factory time, and passed in.
 
 Behaviour of `run_statement`:
 
@@ -174,14 +182,33 @@ worth stopping.
 
 `ALLOWED_FUNCTIONS` allows aggregates, window, text, numeric, math and JSON functions and the clock
 overrides. Left out on purpose: `random`, `randomblob`, `load_extension`, `sqlite_version`,
-`changes`, `last_insert_rowid`, `total_changes`, `sqlite_offset`. FTS5 auxiliary functions (`bm25`,
-`snippet`, `highlight`) are not in the default list because shadow tables are denied; a world
-exposing search through SQL would add them and allow the shadow tables explicitly (not recommended,
-documented).
+`changes`, `last_insert_rowid`, `total_changes`, `sqlite_offset`. FTS5's functions are not in the
+default list because shadow tables are denied, and there are **four** of them, not three: the
+auxiliaries `bm25`, `snippet` and `highlight`, plus **`match`**, which is the name SQLite asks the
+authorizer about when it meets the `MATCH` *operator*. A world exposing search through SQL passes
+all four as `functions` and allows the shadow tables explicitly (not recommended, documented); one
+that passes only the three auxiliaries is refused with `function 'match'`.
+
+`_PRAGMAS` is the other half of that recipe, and it is the framework's rather than a world's: FTS5
+reads `PRAGMA data_version` while *preparing* a `MATCH`, so `data_version` — asked as a question,
+never in its assignment form — is allowed on every door, because no spelling of the published
+allowlists could have allowed it and `MATCH` through `run_sql` is impossible without it. What that
+buys an agent is a counter only another connection's commit moves, and an instance has one writer,
+so the answer is the same number on every run. Every other pragma is an `action PRAGMA` refusal,
+the introspection ones included. The single exception is `_SESSION_PRAGMA`: `PRAGMA
+table_xinfo(<table>)`, which SQLite's session extension prepares inside an agent's statement the
+first time the instance's changeset session sees a table change, is allowed only when this call has
+already been allowed a row write to a table the door lists (`_wrote_a_row`, above). Denying it
+would poison the session and lose `Instance.changes()` — the eval's score — for the life of the
+instance; an agent's own `PRAGMA table_xinfo` follows no allowed write and stays a refusal.
 
 The authorizer's table check folds ASCII case only (SQLite canonicalises differently for column
 reads and bare row reads). Reads of `sqlite_master`/`sqlite_schema` are allowed when the caller
 lists them (the helpers do).
+
+*Corrected 2026-09-13 — the fourth function name and the two pragma allowances, measured in Phase 4
+(`phase_plans/phase_4.md`) and pinned by `tests/test_fts5.py` and `tests/test_sandbox.py`; closes
+`BACKLOG.md` B7 and B8.*
 
 ## 5. Test plan
 
@@ -204,7 +231,14 @@ lists them (the helpers do).
   `SQLITE_IGNORE` regression (`count(*)` on a denied table refuses), case-folded table names,
   multi-statement payloads (`SELECT 1; DROP TABLE t`), writes under `read_only`, allowed writes to
   listed tables only when `read_only=False`, function allowlist (`random()` refused,
-  `load_extension` refused), `ATTACH`/`PRAGMA` refused, the fixed value cap turning
-  `printf('%1000000000d')` into an immediate failure with flat memory and a refusal classification,
-  row and byte truncation flags, bytes as base64, authorizer and limit restored after success and
-  after failure, and the quadratic-builtin overrun pinned as a documented residual.
+  `load_extension` refused), `ATTACH` refused and every pragma refused but the two named in section
+  4 — the `PRAGMA data_version` *question* (its assignment form refused) and the changeset
+  session's `PRAGMA table_xinfo`, which is allowed only after a row write this same call was
+  already allowed and is a refusal on a read-only door and a writable one alike — the fixed value
+  cap turning `printf('%1000000000d')` into an immediate failure with flat memory and a refusal
+  classification, row and byte truncation flags, bytes as base64, authorizer and limit restored
+  after success and after failure, and the quadratic-builtin overrun pinned as a documented
+  residual.
+
+*Corrected 2026-09-13 — the pragma line of this plan, which said every pragma is refused; measured
+in Phase 4 and pinned by `tests/test_sandbox.py`; closes `BACKLOG.md` B8.*

@@ -33,6 +33,7 @@ optional, its import costs seconds, and on this interpreter it is `BACKLOG.md`
 B17. Server-side examples are fragments, or shell.
 """
 
+import annotationlib
 import ast
 import functools
 import importlib
@@ -500,10 +501,13 @@ def _compare(block: Block, name: str, node: ast.FunctionDef, target: Any) -> Non
         inspect.Parameter.KEYWORD_ONLY: "keyword-only",
         inspect.Parameter.VAR_KEYWORD: "**kwargs",
     }
-    real = [
-        (parameter.name, kinds[parameter.kind])
-        for parameter in inspect.signature(target).parameters.values()
-    ]
+    # `Format.STRING` leaves annotations unevaluated. Only names and kinds are
+    # compared below, and evaluating would fail on any documented callable
+    # annotated with a `TYPE_CHECKING`-only import -- `fixtures.freeze` takes an
+    # `Instance`, which `fixtures.py` cannot import at runtime because
+    # `instances.py` imports it.
+    signature = inspect.signature(target, annotation_format=annotationlib.Format.STRING)
+    real = [(parameter.name, kinds[parameter.kind]) for parameter in signature.parameters.values()]
     if isinstance(target, type):
         # A class's signature is its `__init__`'s without `self`, which the stub
         # writes out. Documenting `__init__` is what the reference does, so the

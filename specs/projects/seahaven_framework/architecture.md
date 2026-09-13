@@ -64,10 +64,28 @@ fastmcp and pandas, about 354 MB). `seahaven.openenv` imports it at module top; 
 
 `seahaven/__init__.py` exports exactly: `World`, `Ctx`, `Db`, `Clock`, `Ids`, `Tool`, `Call`,
 `Instance`, `Fixture`, `Change`, `SeahavenError`, `WorldBug`, `ToolError`, `ArgumentError`,
-`DbError`, `UnknownTool`, `sql_files`, and the `helpers`, `sandbox` and `openenv` subpackages.
-Everything else is internal. `Tool.from_function` is part of that public surface: it is how an
-extension builds a tool. `seahaven.sandbox` is public too — `Authorizer`, `run_statement`,
-`SqlResult` and the refusal names, which are a documented `Literal` and are stable.
+`DbError`, `UnknownTool`, `sql_files`, and the `helpers` and `sandbox` subpackages.
+`seahaven.openenv` is public as well but is **not** among them: it lives in the `serve` extra and
+is imported by name (`from seahaven.openenv import ...`), which is what keeps importing `seahaven`
+from importing `openenv`, as the paragraph above requires.
+
+**What is public is not that list.** A name that the component document section covering a module
+lists as part of that module's interface is public and stable; `seahaven/__init__` re-exports only
+the subset worth a short import, and a name in neither place is internal and may change without
+notice. So `Tool.from_function` (how an extension builds a tool, `components/world_and_dispatch.md`
+§2) and `seahaven.sandbox`'s `Authorizer`, `run_statement`, `SqlResult` and the refusal names — a
+documented `Literal`, stable, because an extension serving another dialect classifies on them,
+`components/runtime_db.md` §4 — are instances of that rule rather than exceptions to it, and so are
+`Handler` and `Middleware` in `seahaven.world` (`components/world_and_dispatch.md` §1) and `load`,
+`load_all`, `verify` and `freeze` in `seahaven.fixtures` (`components/fixtures_instances.md` §1). A
+world author annotating a middleware writes `from seahaven.world import Handler`; that is the
+supported import and not a reach into a private module.
+
+*Corrected 2026-09-13 — this paragraph read "Everything else is internal" with two hand-listed
+exceptions, which the shipped `__all__`s contradict and which misled Phase 5 into declaring a local
+copy of `Handler` in the reference world's `middleware/error_handler.py`; closes `BACKLOG.md` B10.
+The rule is stated over the section that covers a module rather than over "§1", which B10's own
+text said and which would have missed two of the four names above.*
 
 ## 2. Key types
 
@@ -80,7 +98,7 @@ extension builds a tool. `seahaven.sandbox` is public too — `Authorizer`, `run
 | `Db` | `db.py` | Wraps the APSW connection: `one`, `rows`, `execute`, `transaction()`, and `conn` (the raw `apsw.Connection`, public). Rows as `dict[str, Any]` built from `cursor.get_description()`. A convenience layer and one error type, not a barrier. |
 | `Clock` | `clock.py` | An aware UTC instant; `now()`, `iso()`; equality by instant. |
 | `Ids` | `ids.py` | `random: random.Random` seeded from the instance seed; `uuid()` (v4-shaped from the stream). |
-| `Instance` | `instances.py` | Id, fixture id, seed, path, `Db`, `threading.RLock`, `Clock`, `Ids`, APSW `Session`, the open inspection handle, `state`, `closed`. Public surface: `call`, `tools`, `inspect`, `changes`, `freeze`, `bulk`, `destroy`, `clock`, `id`, `fixture`, `seed`; context manager. |
+| `Instance` | `instances.py` | Id, fixture id, seed, path, `Db`, `threading.RLock`, `Clock`, `Ids`, APSW `Session`, two read-only handles opened lazily and closed on destroy — the caller's from `inspect()` and the control tools' from `_control_db()` — `state`, `closed`. Public surface: `call`, `tools`, `inspect`, `changes`, `freeze`, `bulk`, `destroy`, `clock`, `id`, `fixture`, `seed`; context manager. |
 | `Fixture` | `fixtures.py` | The sidecar as a pydantic model plus `dir`; `state_path`. |
 | `Change` | `changes.py` | `table`, `op` (`"insert" \| "update" \| "delete"`), `key: dict`, `before: dict \| None`, `after: dict \| None`. |
 
@@ -204,9 +222,9 @@ pydantic models, dataclasses and `datetime` (rendered ISO 8601; a tool that want
 
 ### 5.1 Locks and threads in-process
 
-- **One `threading.RLock` per instance.** Every operation that touches the instance (call, the open
-  inside `inspect`, changes, freeze, bulk, destroy) takes it; reads through the inspection handle
-  after the open do not. The lock discipline is stated once, in
+- **One `threading.RLock` per instance.** Every operation that touches the instance (call, the opens
+  inside `inspect` and `_control_db`, changes, freeze, bulk, destroy) takes it; reads through the
+  `inspect()` handle after the open do not. The lock discipline is stated once, in
   `components/fixtures_instances.md` §2. Destroy takes the lock before closing, so a call in flight
   completes first (functional spec §10). Idle instances hold no thread.
 - **In-process calls run on the caller's thread.** There is no framework-owned pool in the
@@ -236,11 +254,24 @@ and `0` means no gate. `reset` (instance creation), `ListToolsAction` and contro
 The gate is not reentrant; tools do not call tools through the dispatcher, so no call ever waits on
 itself.
 
-The default is a starting point, not a measurement: a thread inside SQLite on a warm page cache is
-CPU-bound (SQLite is about 7% of a call), so `n` near the core count is the measured throughput
-optimum, and the cap of 16 keeps a very large host from over-subscribing. A later phase sweeps the
-value over ProjectTracker `agency` under a cold and a warm cache and tunes it; the override is the
-operator's lever meanwhile.
+The default is not a throughput optimum, and the cap of 16 keeps a very large host from
+over-subscribing. A thread inside SQLite on a warm page cache is CPU-bound (SQLite is about 7% of a
+call), and on a build with the GIL that tells against the gate rather than for it: throughput is
+highest at `n = 1` in every row of Phase 11's sweep — both workloads, both cache states, both
+offered loads — and the cpu-count default runs at 73–82% of it, so `n = 1` serves 22–37% more calls
+a second than the value the framework computes. The default stands anyway, for the reasons
+`bench/results/latest.md` records: no value the sweep tried was better than this one on every axis
+at once (`n = 1` waits far worse at four sessions, and beside one slow call it starves a reader, as
+every binding gate size including this default does — `latest.md` §4), and following CPU affinity
+is the shape that keeps the free-threaded door open, on which this measurement says nothing. That
+sweep — over ProjectTracker `agency` under a cold and a warm cache — is done;
+`instances.default_concurrency`'s docstring carries the corrected reasons, unfairness included, and
+the override is the operator's lever.
+
+*Corrected 2026-09-13 — this paragraph called the core count "the measured throughput optimum" and
+promised a sweep as future work; both measured in Phase 11 (`bench/results/latest.md`, §3 and §6);
+closes `BACKLOG.md` B21. The "SQLite is about 7% of a call" estimate was measured too and stands:
+the same run bounds it above at 11%.*
 
 ## 6. Errors
 
@@ -389,10 +420,17 @@ flag.
   `pragma_foreign_key_list`, from `ctx.db`, for the listed tables only; ordered by table then column
   position.
 - Control tools (`control.py`): `controller_run_sql(sql: str, params: list[SqlValue] | None = None)`
-  and `controller_changes()`, thin wrappers over `Instance.inspect()` and `Instance.changes()`.
-  Registered on every `World` with `control=True`; `Instance.tools()` never lists them and
-  `Instance.call` always reaches them. `step` refuses them as `UnknownTool` unless `serve` was given
-  `--include-control-tools`.
+  and `controller_changes()`, thin wrappers over `Instance.changes()` and over a **second**
+  read-only handle of the instance's own (`Instance._control_db()`) — never over
+  `Instance.inspect()`, whose whole promise is that a caller reads through it without the instance
+  lock, and whose authorizer a control read would therefore be changing under another thread's
+  cursor (`components/helpers_and_control.md` §3). Registered on every `World` with `control=True`;
+  `Instance.tools()` never lists them and `Instance.call` always reaches them. `step` refuses them
+  as `UnknownTool` unless `serve` was given `--include-control-tools`.
+
+  *Corrected 2026-09-13 — this bullet named `Instance.inspect()` as the control tools' handle,
+  which Phase 4 replaced after its round-1 review found the deadlock; closes `BACKLOG.md` B8, whose
+  own list of affected artifacts did not reach this one.*
 - FTS5 awareness lives in one function, `db.shadow_tables(conn)`: for every `CREATE VIRTUAL TABLE
   ... USING fts5`, every `sqlite_master` table whose name begins with the FTS5 table's name and an
   underscore. Used by the session, conformance, the lint and the authorizer's default deny list.

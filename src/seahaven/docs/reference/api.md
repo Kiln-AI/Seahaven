@@ -1,23 +1,24 @@
 # API reference
 
-The public API is the names exported from `seahaven`, the `seahaven.helpers` and `seahaven.sandbox`
-modules, `seahaven.openenv` (in the `serve` extra), and the pytest plugin's two fixtures. A name that
-is not below is internal and may change without notice.
+The public API is the names exported from `seahaven`, the `seahaven.helpers`, `seahaven.sandbox` and
+`seahaven.fixtures` modules, the type aliases in `seahaven.world`, `seahaven.openenv` (in the `serve`
+extra), and the pytest plugin's two fixtures. A name that is not below is internal and may change
+without notice.
 
-Six names on this page live outside `seahaven/__init__.py` and are documented anyway, in two groups:
+Ten names on this page live outside `seahaven/__init__.py`, in two groups:
 
 - `seahaven.world.Handler`, `Middleware` and `StartupHook` — the type aliases the scaffolded error
-  handler imports, and part of that module's stated interface in the repository's
-  `components/world_and_dispatch.md` §1.
+  handler imports — and `seahaven.fixtures.load`, `load_all`, `verify` and `freeze`. Both sets are
+  part of their module's stated interface in the repository's `components/world_and_dispatch.md` §1
+  and `components/fixtures_instances.md` §1, and `architecture.md` §1 makes that the rule: a name
+  the component document section covering a module lists as part of that module's interface is
+  public, and `seahaven/__init__.py` re-exports only the subset worth a short import.
 - `seahaven.instances.default_concurrency`, `concurrency` and `set_concurrency` — the concurrency
   gate, which no component document lists. **This page declares them public on its own authority**,
   because the gate is on in every process and `serve --concurrency` is otherwise the only documented
-  way to touch it, which leaves an in-process harness with a real knob and no name for it.
-
-Seahaven's own `architecture.md` says every name outside `seahaven/__init__.py` is internal, which
-all six contradict; that disagreement is `BACKLOG.md` B10 in the repository, and the second group is
-a wider claim than B10's own proposed replacement rule would sanction. This page describes what the
-code does and says where it is going further than the specification.
+  way to touch it, which leaves an in-process harness with a real knob and no name for it. It is
+  going further than the specification, and says so here rather than implying the rule above
+  covers it.
 
 ```py
 import seahaven
@@ -224,6 +225,36 @@ fixture.id, fixture.now, fixture.parent_id, fixture.description, fixture.state_p
 ```
 
 What `world.fixtures()` and `inst.freeze(...)` return.
+
+## `seahaven.fixtures`
+
+```py
+from seahaven import fixtures
+
+
+def load(fixture_dir: Path) -> Fixture: ...
+def load_all(fixtures_dir: Path) -> dict[str, Fixture]: ...
+def verify(fixture: Fixture) -> None: ...
+def freeze(
+    instance: Instance, fixture_id: str, description: str, *, fixtures_dir: Path
+) -> Fixture: ...
+```
+
+The fixture directory read directly, for tooling that works on fixtures rather than on a world:
+`load` reads one sidecar without opening the state file, `load_all` returns every fixture in a
+directory by id (an empty directory is not an error and dot-directories are skipped, a `.pending-*`
+freeze in flight among them; two fixtures claiming one id is an error), `verify` raises unless the
+state file is the one its sidecar's `file_sha256` describes, and `freeze` is what `Instance.freeze`
+delegates to.
+
+A world does not need these — `world.fixtures()`, `world.instance(id)` and `inst.freeze(...)` are
+the ordinary path, and `world.instance(id)` verifies for you. Listing deliberately does not:
+`world.fixtures()` is `load_all`, and `load` never opens the state file, so a fixture whose
+`state.sqlite` was modified is listed without complaint and is refused when an instance is made
+from it. Reach for the module when you are checking a fixture
+directory in a test or a script, as the reference world's own `tests/test_fixtures.py` does. A
+malformed sidecar, an unknown `format_version`, a duplicate id and a modified state file are each a
+`WorldBug` naming the file.
 
 ## Errors
 

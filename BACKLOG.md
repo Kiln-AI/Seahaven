@@ -42,19 +42,6 @@ equivalent mutants in the style the phase plans use: `db.py:245` `conn.set_busy_
 The hardening is believed correct — it is unproven, not broken. If any of it turns out to be
 actually broken, that is a finding to report, not to quietly fix.
 
-### B2. `components/runtime_db.md` §1.2 states something false about APSW
-
-**Found:** Phase 1 implementation. **Owner:** unassigned. **Risk:** low now, rises with each phase.
-
-§1.2 claims APSW returns a bare value for single-column rows. That is false on the pinned
-`apsw>=3.53` floor: the bare value comes from `Cursor.get`, which `Db` never uses. The code is
-right and the deviation is recorded in `phase_plans/phase_1.md` with a tripwire test.
-
-The artifact is marked `status: complete` and still carries the claim, where a later-phase
-implementer will read it as the spec. Left unedited because editing a completed artifact cascades
-its dependents to `draft`; the fix needs a maintainer's call on whether to take that cascade or to
-annotate the section in place.
-
 ### B3. Working directories from the bare-`<pid>` layout are never swept
 
 **Found:** Phase 3 code review, round 5. **Owner:** unassigned. **Risk:** low — a disk leak, no
@@ -143,137 +130,6 @@ monkeypatch style `test_the_sweep_removes_through_the_descriptor_it_judged_throu
 the instance is not made through the link; or soften the docstring to claim only what is tested.
 Pinning it is the better answer if the anchoring is meant to survive later edits.
 
-### B7. The FTS5 recipe does not work as written, in both artifacts that state it
-
-**Found:** Phase 4 implementation. **Owner:** unassigned. **Risk:** low — the code is right and the
-phase plan records it; a later reader of the artifact would follow the recipe and be stuck.
-
-The table in §4 tells a world that wants `MATCH` through `run_sql` to list the FTS5 table's shadow
-tables and "add `bm25`, `snippet`, `highlight` to the function allowlist". A world that does exactly
-that gets `not allowed: function 'match'`: SQLite asks the authorizer about the `MATCH` *operator*
-under the function name `match`, which the sentence omits. With `match` added it then gets
-`action PRAGMA 'data_version'`, because FTS5 reads that pragma while preparing the statement —
-which §4 does not mention at all, and which no spelling of the allowlists in the published API could
-have allowed.
-
-Phase 4 closed both in code: `sandbox.ALLOWED_FUNCTIONS`'s comment names `match` as the fourth
-function to pass, and `sandbox._PRAGMAS` allows the `PRAGMA data_version` question (never its
-assignment form) with the reasoning in place; `tests/test_fts5.py` drives the whole recipe through a
-real world and pins both refusals a world that lists too little gets. What is left is the artifact:
-§4 is `status: complete` and still carries the three-function sentence, and says nothing about the
-pragma. Same shape as B2, and the same call to make — editing a complete artifact cascades its
-dependents to `draft`, so whether to take that cascade or annotate in place is a maintainer's.
-
-**Two artifacts, not one.** `components/runtime_db.md` §4 carries the same three-function sentence
-("FTS5 auxiliary functions (`bm25`, `snippet`, `highlight`) are not in the default list"), so the
-`match` omission is in both places and a fix to one leaves the other. `runtime_db.md` is also where
-the pragma claim lives, and that side of it is B8.
-
-### B8. Three `complete` artifacts describe the control path the Phase 4 Critical replaced
-
-**Found:** Phase 4 code review, round 2. **Owner:** unassigned. **Risk:** the
-`helpers_and_control.md` entry is the highest in this register: a later-phase implementer who
-follows it as written reintroduces an interpreter-wide deadlock.
-
-Phase 4's round-1 review raised a Critical: `controller_run_sql` ran `sandbox.run_statement` on the
-`inspect()` handle, which the spec documents as readable *without* the instance lock. Two threads on
-one connection, one setting the authorizer while the other steps a cursor, wedge inside SQLite — and
-take the interpreter with them, because the thread waiting on the connection holds the GIL. The fix
-gave the control tools a second read-only handle of their own (`Instance._control_db()`), opened once
-and closed with the instance. Three committed artifacts still describe the connection that was
-replaced, or facts that followed from it:
-
-- `components/helpers_and_control.md` §3: "thin wrappers over `Instance.inspect()` and
-  `Instance.changes()`", and "`controller_run_sql` runs on the instance's inspection `Db`
-  (`Instance.inspect()`, opened on first use)". Both false now, and false in the direction that
-  reintroduces the deadlock. A **third** sentence in the same section, at `:98-100`, states the
-  `RLock`'s reason exactly as `fixtures_instances.md` §2.4 does: "the reads it then makes through
-  the `inspect()` handle do not take it, which is why the lock is a `threading.RLock` and why the
-  first control call does not deadlock." It is listed here because the next bullet attributes that
-  sentence to the other file alone, and an amendment worked from this list would fix two sentences
-  here and leave the third — which is this register's own recurring finding, that a fix closes the
-  demonstrated case and leaves the adjacent one.
-- `components/fixtures_instances.md` §2.4: the control-dispatch bullet repeats the same claim; the
-  `RLock`'s stated reason ("the reads it then makes through the `inspect()` handle do not [take the
-  lock]") has changed — the conclusion still holds, but the reason is now same-thread re-entry, a
-  control tool asking the instance for its changeset and its control handle with the lock already
-  held; and the `destroy()` bullet's list of what is closed ("close inspection, session, db") is
-  missing the fourth handle.
-- `components/runtime_db.md` §4: an `Authorizer` "carries per-statement mutable state (`refusals`)"
-  is now incomplete — it also carries `_wrote_a_row`, whose scope is the call, not the statement.
-  §5's test plan says "`ATTACH`/`PRAGMA` refused", which is contradicted for `PRAGMA data_version`
-  (see B7) and needs a sentence for the changeset session's `table_xinfo` allowance.
-
-Everything else in those sections holds word for word — one statement, positional params, no
-authorizer beyond the connection's permanent write denial, no caps, `run_sql`'s result shape,
-SQLite's message, and the lock-free `inspect()` reads, which are now true where they were not. All
-three are `status: complete`, so this is the same call B2 and B7 leave open: editing a completed
-artifact cascades its dependents to `draft`, and whether to take that cascade or annotate in place
-is a maintainer's. The reasoning behind each change is recorded in
-`specs/projects/seahaven_framework/phase_plans/phase_4.md`.
-
-### B9. SH405 as specified fires on every fresh clone of a world that commits a fixture
-
-**Found:** Phase 5, freezing the reference world's `empty` fixture. **Owner:** unassigned.
-**Risk:** `seahaven check` (Phase 7) reports an error on a correct world; a world author's first
-`check` after cloning their own repository fails.
-
-`components/cli_and_check.md` §3 defines SH405 as "state file not read-only or has `-wal`/`-shm`
-companions", and `components/fixtures_instances.md` §1 has `freeze` `chmod 0o444` the state file.
-Both are right about the file `freeze` writes. Neither survives version control: git records only
-the executable bit, so `fixtures/<id>/state.sqlite` comes out of a clone with whatever the umask
-gave it — `0o644` under the usual `umask 022` — and the read-only half of SH405 reports an error on
-a fixture that is byte-for-byte the one that was frozen.
-
-The information SH405 wants is not lost, it is just not in the mode: the sidecar's `file_sha256`
-(SH402) and `schema_hash` (SH403) already prove the bytes are the frozen ones, and the journal-file
-half of SH405 is genuine and unaffected. Options, for whoever owns the lint: drop the mode check;
-keep it as a warning rather than an error; or keep it as an error but only for a file the *running*
-process froze, which in practice means dropping it. Nothing about `freeze` should change — a live
-instance must not be able to write a fixture in place.
-
-This affects Phase 7 (the lint) and Phase 10 (three fixtures instead of one).
-`worlds/projecttracker/tests/test_empty_fixture.py::test_the_state_file_carries_no_journal_or_lock_file_beside_it`
-asserts the half that survives a clone and says in its docstring why it does not assert the mode.
-
-### B10. `architecture.md` says every name outside `__init__` is internal, and the code does not
-
-**Found:** Phase 5, writing the reference world's `middleware/error_handler.py` — the first
-middleware written outside the framework's own tests. **Owner:** unassigned. **Risk:** ergonomic,
-and a stated rule that contradicts the shipped code; it already misled this phase.
-
-This is a conflict inside a `complete` artifact, not a blank to fill in. `architecture.md:68` says,
-of the list of names `seahaven/__init__.py` re-exports:
-
-> Everything else is internal. `Tool.from_function` is part of that public surface: it is how an
-> extension builds a tool. `seahaven.sandbox` is public too — `Authorizer`, `run_statement`,
-> `SqlResult` and the refusal names, which are a documented `Literal` and are stable.
-
-Read as written, the first sentence is the rule and the two that follow are its complete set of
-exceptions: `Tool.from_function`, and `Authorizer`, `run_statement`, `SqlResult` and the refusal
-names in `seahaven.sandbox`. Anything else a world imports from a `seahaven.*` module — the sentence
-says — is internal.
-
-The component documents then list wider interfaces, and the code implements them. `world_and_dispatch.md`
-§1 gives `Handler` and `Middleware` beside the `World` they describe, and `seahaven/world.py` duly
-re-exports both from `call.py` in its `__all__`, with a comment naming exactly the world-author case;
-`fixtures_instances.md` §1 gives `load`, `load_all`, `verify` and `freeze` in `seahaven.fixtures`.
-None of those are in `__init__`, and none are named as exceptions at `architecture.md:68`. So a world
-author who reads §1 and believes it concludes that `from seahaven.world import Handler` reaches into
-a private module, and declares a local copy of the type instead. That is what this phase's first
-draft did, and the copy is exactly the drift a world should not carry.
-
-Closing it means **amending `architecture.md` §1**, which is `complete`; a phase should not widen it
-on its own judgement, and adding a sentence elsewhere would leave line 68 still saying the opposite.
-The amendment is to replace the blanket "Everything else is internal" plus its two hand-listed
-exceptions with the rule the codebase actually follows — *a name a component document's §1 lists as
-part of a module's interface is public; `seahaven/__init__` re-exports only the subset worth a short
-import* — under which `Tool.from_function` and the `sandbox` names stop being exceptions and become
-instances. Separately, `Handler` and `Middleware` are strong candidates for that convenience subset:
-a typed middleware is the ordinary case, not an advanced one, and `seahaven new`'s `middleware/`
-template is where every world author meets it. Phase 5's world imports them from `seahaven.world`
-under the rule above, and its `middleware/error_handler.py` docstring says why.
-
 ### B11. A built world wheel ships no fixtures, so `instance(id)` fails from an install
 
 **Found:** Phase 5, building `worlds/projecttracker` and installing the wheel into a clean
@@ -343,55 +199,6 @@ world that is an install rather than a checkout answers every fixture-backed `re
 
 ---
 
-### B12. `components/openenv.md` contradicts itself on tool listing, and its two code sketches are wrong
-
-**Found:** Phase 6 implementation. **Owner:** unassigned. **Risk:** the §5 sketch is the higher of
-the two — it is copied verbatim into the per-world client that the same section schedules for a
-later release, and it is broken in exactly the mode a training harness runs in.
-
-Three statements in an artifact that is otherwise accurate line by line. Each is recorded with what
-the code does instead and why, in
-`specs/projects/seahaven_framework/phase_plans/phase_6.md`; none of them was worked around silently.
-
-- **§2 `:61` and `:71` cannot both hold.** `:61` says `ListToolsAction` → `ListToolsObservation(tools=instance.tools())`
-  is "checked first", which needs an instance; `:71` says "A `step` before `reset` raises
-  `WorldBug("reset first")`". OpenEnv's own `/mcp` `tools/list` handler steps a `ListToolsAction` on
-  a session that has never been reset, and MCP's contract is that discovery does not require one, so
-  a literal reading makes every standard MCP client fail against every Seahaven world. The code
-  answers the listing before the guard and derives it from `world.tools` when there is no instance,
-  with a test pinning that the two derivations agree. Whichever way a maintainer settles it, one of
-  the two sentences has to go.
-- **§2 `:67` writes the generic internal error with two keys**, `{"code": "internal", "message": "internal error"}`,
-  where `architecture.md` §6 defines the wire shape of every error as `{"code", "message", "details"}`.
-  Architecture wins on a cross-component shape, and a client that reads `error["details"]` should not
-  have to special-case the one error a world did not write. The code builds it through
-  `ToolError.to_dict()` so that it cannot drift from the others.
-- **§5 `:146` sketches `call` as `self.step(CallToolAction(...)).observation`.** `EnvClient.step` is
-  dual-mode: in asynchronous code it answers an awaitable, and `.observation` on an awaitable is not
-  an observation. The sketch is right about the signature and wrong about the mechanism; `call` and
-  `list_tools` go through `EnvClient._dispatch`, which is how the base client produces a value in
-  synchronous code and an awaitable in asynchronous code from one method. This is not a theoretical
-  reading: Phase 6 ran the sketch as a hand mutation, and it passes the synchronous end-to-end test
-  and fails only the asynchronous one. §5 is also silent on `__enter__`/`__aenter__`, which
-  `EnvClient` annotates as returning `EnvClient`, so `with SeahavenClient(...) as env` type-checks
-  as a value with neither `call` nor `list_tools` until the subclass narrows them — worth a sentence
-  wherever the first is fixed.
-- **§5 `:146` also writes the tool name as an ordinary parameter, `def call(self, tool, **arguments)`.**
-  `Instance.call` is `def call(self, name: str, /, **arguments)` — positional-only, deliberately, so
-  that `**arguments` can carry an argument the world happened to call `name`. A world may equally
-  call one `tool`, or `self`; without the `/` such a tool lists, works through
-  `step(CallToolAction(...))` and raises `TypeError: got multiple values for argument 'tool'` through
-  the documented convenience, which is a tool no harness can call. Found in Phase 6's code review,
-  round 1, and fixed in the code there with a test; the sketch should grow the `/` wherever §5 is
-  next touched, since a per-world generated client written from it would reintroduce the same hole
-  for every world.
-
-`components/openenv.md` is `status: complete`, so this is the same call B2, B7 and B8 leave open:
-editing a completed artifact cascades its dependents to `draft`, and whether to take that cascade or
-annotate in place is a maintainer's.
-
----
-
 ### B13. Three OpenEnv behaviours a Seahaven world cannot fix from its own side
 
 **Found:** Phase 6 code review, rounds 1 and 3. **Owner:** unassigned — upstream, or a Seahaven
@@ -433,49 +240,6 @@ OpenEnv uses the base `State` type where the environment's own subclass was mean
   that tells an operator the port, and contradicts §4), or an upstream `try/except` around that one
   `close`. Recorded rather than chosen, because filtering another library's error logs from inside
   `serve` is a decision with a blast radius, not a tidy-up.
-
----
-
-### B14. "First paragraph of README" is four rules, and `components/openenv.md` states it as a phrase
-
-**Found:** Phase 6 code review, rounds 1, 2 and 3. **Owner:** unassigned. **Risk:** low as a
-defect, high as a time sink — the phrase cost three review rounds and is the only line of the
-component document that a reader would not know was under-specified.
-
-`components/openenv.md` §2 `:79` says the metadata's `description` is the "first paragraph of README
-or `f"Seahaven world {name}"`". §6 `:180` then says that same `README.md` is the Space card. A Space
-card does not begin with a paragraph: it begins with YAML front matter between `---` fences, usually
-followed by a heading. So the phrase has to be read as four rules, and Phase 6 wrote all four:
-
-- front matter is skipped as a block — closing fence searched for across the whole file *first*, and
-  only if there is none does the block end at the first blank line or at the end of the file;
-- a line that is furniture rather than prose is not the description, and "furniture" is two rules
-  and not one: a thematic break is three or more `-`, `_` or `*` with spaces allowed between them,
-  and a setext underline is a run of `=` or of `-` with no interior space. A rule is the whole line
-  or nothing, so `- a bullet` and `--- not a rule ---` stay prose, and `**` and `* *` stay prose
-  because two characters are not a break;
-- a line with furniture under it is a heading, skipped as `# Title` is, scoped to the line that
-  would start the paragraph;
-- a UTF-8 byte-order mark is decoded away, because `str.strip()` does not remove it.
-
-A sentence in §2 should also say what a heading is, because Seahaven's rule and CommonMark's differ
-by a space: any line starting with `#` is furniture here, while CommonMark's ATX heading needs a
-space (or the end of the line) after the run of `#`, so `#1 priority is shipping.` is a paragraph
-there and skipped here. The effect is a fallback description (`f"Seahaven world {name}"`) and never
-a wrong one, which is why Phase 6 recorded and pinned it rather than widening the rule — see that
-phase's plan. A reader of §2 should know it, since the deviation is conservative by luck rather than
-by design.
-
-Each rule exists because the naive reading published something worse than no description: the card's
-own YAML, a `---`, a `***`, or the world's title. Three review rounds were spent on two of the
-rules — round 1 on a block with no end, round 2 on a well-formed block with a blank line in it, and
-round 3 on `*`, the one thematic-break character the rule test did not name. The implementation and
-the reasoning are in `specs/projects/seahaven_framework/phase_plans/phase_6.md`; fifty-five
-parametrized cases and just under a million generated documents pin them.
-
-Worth a sentence in the component document wherever §2 is next touched, because the next world
-server written from that phrase will start from the naive reading. `components/openenv.md` is
-`status: complete`, so this is the same maintainer's call as B2, B7, B8 and B12.
 
 ---
 
@@ -526,16 +290,19 @@ Four review rounds found four defects, and all four were in this block: an unbou
 (round 3), and two miscounted kill rows for its own mutants (round 4). Round 5 found no defect in
 the code and two more faults in its record: a kill count read off a mutant narrower than the row
 describing it, and the block's one accidental deviation from CommonMark (a heading is any line
-starting with `#`) with neither a case nor a note — see B14. None of them was in `reset`,
-`step`, `state`, `close` or the client. That is not a coincidence about difficulty so much as about
+starting with `#`) with neither a case nor a note; that deviation is now stated in
+`components/openenv.md` §2. None of them was in `reset`, `step`, `state`, `close` or the client.
+That is not a coincidence about difficulty so much as about
 *locality*: the rules are the only part of this module that is a parser, and a parser wants its own
 file, its own suite and its own name.
 
 The move is small and mechanical — `seahaven/openenv/readme.py`, `_first_paragraph` re-exported or
 imported by `env.py`, and `tests/test_readme.py` taking the fifty-five parametrized cases with it.
 It is filed rather than done because `components/openenv.md` §1 names the subpackage's module list,
-so adding a module changes the surface a `status: complete` artifact describes. Same maintainer's
-call as B2, B7, B8 and B12, and worth pairing with whichever of those is answered first.
+so adding a module changes the surface a `status: complete` artifact describes. That is a different
+call from the one made on 2026-09-13, which corrected wrong sentences in completed artifacts
+(B2, B7, B8, B10, B12, B14, B21) without touching what they design: this one would change the
+design, so it still needs the maintainer.
 
 ---
 
@@ -667,34 +434,6 @@ something else. That observation is not in `latest.md` and was not made by the c
 take it as a hint about where to look, not as a measurement. It does suggest this is a saturation
 defect rather than a defect of every serving process, which is worth establishing before deciding
 how much to spend on it.
-
-### B21. `architecture.md` §5.2 states a throughput optimum the benchmark does not find
-
-**Found:** Phase 11. **Owner:** unassigned. **Risk:** low; a wrong rationale in a completed
-artifact, with the corrected one in the code and in `bench/results/latest.md`.
-
-§5.2's closing paragraph justifies the gate's default with two claims. Phase 11 measured both, and
-only one of them is wrong:
-
-- "`n` near the core count is the measured throughput optimum" -- it is not, on a build with the
-  GIL. Throughput is highest at `n = 1` in every row of the sweep and the cpu-count default runs
-  at 73-82% of it, so `n = 1` serves 22-37% more calls a second than the value the framework
-  computes.
-- "SQLite is about 7% of a call" **stands.** An earlier draft of this entry called it too low on
-  the strength of a 21% figure (the same leg reads 20% in the run `latest.md` now carries) that
-  had been measured through `seahaven.db.Db.rows` -- framework code, an error-translating context
-  manager and a dict per row -- and so counted half the data layer as SQLite. Measured on the APSW
-  cursor instead, the two statements are about 11% of the call, which is an upper bound on SQLite
-  proper because the inspection connection's authorizer runs while they are prepared. `latest.md`
-  §2 now reports all three legs separately. Nothing to fix here; it is recorded because the claim
-  was briefly filed as a defect and should not be re-filed.
-
-The same paragraph says "a later phase sweeps the value ... and tunes it", which Phase 11 did: the
-default stands for reasons `latest.md` records, and `instances.default_concurrency`'s docstring now
-carries them. What is left is the artifact. It is `status: complete`, and no phase in this
-repository has edited a completed spec artifact -- B2 is the same situation and made the same call.
-Whether to rewrite the paragraph, and take the cascade to `draft` that comes with it, is a
-maintainer's decision.
 
 ### B23. A world has no way to order rows by when they were written within one episode
 

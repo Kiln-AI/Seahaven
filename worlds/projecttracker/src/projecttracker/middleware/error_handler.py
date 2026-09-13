@@ -25,12 +25,13 @@ correct SQL, and the agent is told `INTERNAL`.
 `Handler` -- what the rest of the chain looks like from inside a middleware -- is
 the framework's own alias, imported from `seahaven.world`, where
 `components/world_and_dispatch.md` §1 lists it beside the `World` it describes. A
-name a component document's §1 gives as part of a module's interface is public;
-`seahaven/__init__.py` re-exports only the subset worth a short import, and
-`Handler` not being in that subset does not make `seahaven.world` private. A
+name that the component document section covering a module gives as part of that
+module's interface is public; `seahaven/__init__.py` re-exports only the subset
+worth a short import, and `Handler` not being in that subset does not make
+`seahaven.world` private. A
 world that declares its own copy of a framework type is a world that will drift
-from it. (That the two lists differ, and that nothing an author reads says which
-is which, is `BACKLOG.md` B10.)
+from it. The rule is stated in `architecture.md` section 1 and published in the
+bundled `docs/reference/api.md`.
 """
 
 import logging

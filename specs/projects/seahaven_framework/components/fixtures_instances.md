@@ -42,7 +42,11 @@ def freeze(instance: Instance, id: str, description: str, *, fixtures_dir: Path)
    rollback-journal, compacted file, reads the WAL correctly, and leaves the live database
    untouched.
 4. Hash the file; write `fixture.yaml` (`yaml.safe_dump(meta.model_dump(), sort_keys=True)`);
-   `chmod 0o444` on the state file.
+   `chmod 0o444` on the state file. The seal is what stops a live instance writing a fixture in
+   place and is not optional; it is also not something `seahaven check` can verify, because git
+   records only the executable bit — SH405 is the journal companions alone
+   (`components/cli_and_check.md` §3). *Second sentence added 2026-09-13 with SH405's correction;
+   closes `BACKLOG.md` B9.*
 5. `os.rename(pending, final)`. A failure at any step removes the pending directory.
 
 The sidecar's `now` is `instance.clock.iso()`; `parent_id` is `instance.fixture` (None for a blank
@@ -71,10 +75,17 @@ class InstanceManager:                      # one per World, created lazily; int
 ```
 
 **Locking.** One `threading.RLock` per instance. `call`, `changes`, `freeze`, `bulk`, `destroy` and
-the open inside `inspect()` take it; reads through the inspection `Db` after that open do not, so a
-control read never deadlocks behind the call that issued it. Framework code never blocks on the
-`InstanceManager` lock while holding an instance lock. The caller owns one ordering the framework
-cannot: do not read through the `inspect()` handle concurrently with `destroy()`.
+the opens inside `inspect()` and `_control_db()` take it; reads through the `inspect()` handle after
+that open do not — that handle is the caller's, to read from whatever thread it likes. It is
+re-entrant because a control tool is called with the lock already held and then asks the instance
+for something — its changeset, its control handle — that takes it again on the same thread.
+Framework code never blocks on the `InstanceManager` lock while holding an instance lock. The
+caller owns one ordering the framework cannot: do not read through the `inspect()` handle
+concurrently with `destroy()`.
+
+*Corrected 2026-09-13 — this paragraph gave the `RLock`'s reason as the control tools reading
+through `inspect()`, which Phase 4 replaced with a handle of their own; see §2.4. Closes
+`BACKLOG.md` B8.*
 
 ### 2.1 Creation (`InstanceManager.create`)
 
@@ -145,7 +156,7 @@ it). It is taken **before** the instance lock, so a queued call holds nothing an
 listed, in-process or over OpenEnv; `Instance.call` always reaches them, and it is `step` that
 refuses them when `serve` was started without `--include-control-tools`.
 
-### 2.4 `inspect`, `changes`, `bulk`, `freeze`, `destroy`
+### 2.4 `inspect`, `_control_db`, `changes`, `bulk`, `freeze`, `destroy`
 
 - `inspect()`: opens `open_inspection(path, clock)` once and caches it; returns the `Db`. The
   handle is closed on destroy. Under the lock for the open; reads afterwards are the caller's and
@@ -157,13 +168,27 @@ refuses them when `serve` was started without `--include-control-tools`.
   on exit it commits, or rolls back if the block raised. Nothing is disabled and nothing is wrapped.
   Startup hooks are not re-run.
 - `freeze(id, description)`: under the lock; delegates to `fixtures.freeze`.
-- `destroy()`: `manager.unregister(self)` first, then `with lock: closed = True; close inspection,
-  session, db`, then `rmtree(dir, ignore_errors=True)`. Idempotent.
+- `destroy()`: `manager.unregister(self)` first, then `with lock: closed = True; close both
+  read-only handles (the caller's from `inspect()` and the control tools' from `_control_db()`,
+  either of which may never have been opened), session, db`, then `rmtree(dir,
+  ignore_errors=True)`. Idempotent.
+- `_control_db()`: a **second** read-only handle, opened once under the lock by the same
+  `open_inspection(path, clock)` and closed on destroy, reached only by the control tools. Not the
+  `inspect()` handle: a control read goes through `sandbox.run_statement`, which sets the
+  connection's authorizer and its value limit for the length of one statement, and `inspect()` is
+  the handle a caller reads through *without* the instance lock. Two threads on one connection, one
+  changing its authorizer while the other steps a cursor, wedge inside SQLite and take the
+  interpreter with them, because the thread waiting on the connection holds the GIL.
 - Control dispatch: `control.dispatch(instance, ctx)` validates the arguments like any tool's, runs
   the control function and serialises the result. `controller_run_sql` and `controller_changes` are
-  thin wrappers over `inspect()` and `changes()` and own no SQL or rendering of their own. A control
-  call takes the instance lock like any call; the reads it then makes through the `inspect()` handle
-  do not, which is why the lock is an `RLock` and why nothing deadlocks.
+  thin wrappers over `_control_db()` and `changes()` and own no SQL or rendering of their own. A
+  control call takes the instance lock like any call, and then asks the instance for what it needs —
+  its changeset, its control handle — with that lock already held, which is why the lock is an
+  `RLock`: the re-entry is same-thread, not a claim about lock-free reads.
+
+*Corrected 2026-09-13 — the control tools' connection, the `RLock`'s reason and `destroy()`'s fourth
+handle, measured in Phase 4 (whose round-1 review found the deadlock and whose plan records the
+fix); closes `BACKLOG.md` B8.*
 
 ### 2.5 Sweep
 

@@ -133,12 +133,17 @@ The framework registers two on every world:
 
 | Tool | What it does |
 |---|---|
-| `controller_run_sql(sql, params=None)` | one statement on the read-only inspection connection: every table, the instance clock, no caps, SQLite's own error text. Result shape as `run_sql` |
+| `controller_run_sql(sql, params=None)` | one statement on a read-only connection of the instance's own: every table, the instance clock, no caps, SQLite's own error text. Result shape as `run_sql` |
 | `controller_changes()` | the changeset, as JSON |
 
-They are thin wrappers over `inst.inspect()` and `inst.changes()`. Their arguments are validated like
-any tool's, so a bad `sql` argument is an `ArgumentError`. Nothing else about a normal call applies:
-no middleware, no error handler, no transaction and no gate, because an eval wants the real message.
+They are thin wrappers over the instance: they own no SQL and no rendering. `controller_changes` is
+`inst.changes()`. `controller_run_sql` reads through the instance's own read-only control
+connection and **not** through the `inspect()` handle — same file, same read-only opener, a second
+connection, because a control read borrows connection-level state for the length of a statement
+while `inspect()` is the handle you read through on any thread you like. Their arguments are
+validated like any tool's, so a bad `sql` argument is an `ArgumentError`. Nothing else about a
+normal call applies: no middleware, no error handler, no transaction and no gate, because an eval
+wants the real message.
 
 **Over a server they exist only with `--include-control-tools`.** Without the flag, calling one is
 `UnknownTool` in exactly the words an unregistered name earns, so an agent cannot tell the two apart

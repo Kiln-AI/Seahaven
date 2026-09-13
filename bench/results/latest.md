@@ -373,9 +373,10 @@ not an outcome a tuning sweep can reach. The phase plan says this explicitly rat
 it implied. What the sweep can say, and does, is that on this machine the gate costs throughput and
 costs tail latency, and buys p50 and p95.
 
-`architecture.md` §5.2's throughput-optimum sentence is recorded in `BACKLOG.md` (B21) rather than
-edited: that artifact is `status: complete`, and editing one is a maintainer's call in this
-repository, not a phase's.
+`architecture.md` §5.2's throughput-optimum sentence was recorded in `BACKLOG.md` (B21) rather than
+edited by the phase that measured it, because editing a `status: complete` artifact is a
+maintainer's call in this repository and not a phase's. That call has since been made: §5.2 now
+states what this run found, with a dated note pointing back here, and B21 is closed.
 
 ### The finding the sweep was not looking for
 

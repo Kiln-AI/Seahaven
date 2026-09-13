@@ -229,9 +229,9 @@ not cover what is in them.
 **Not the file mode.** `freeze` does seal `state.sqlite` at `0444`, and this rule does not check it:
 git records only the executable bit, so every committed fixture comes back from a clone at `0644`
 and a mode check would fire on every correct world after every clone. What the seal guards against
-is the file changing, and that is SH402, over a hash version control does preserve. (Recorded as
-`BACKLOG.md` B9 in the Seahaven repository, where the specification still states the rule with the
-mode in it.)
+is the file changing, and that is SH402, over a hash version control does preserve. Sealing the file
+is still what stops a live instance writing a fixture in place, so `freeze` still does it; it is
+only the *check* that cannot ask.
 
 ## SH501 — the package does not export a `World` named `world`
 

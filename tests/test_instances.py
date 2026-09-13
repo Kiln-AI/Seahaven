@@ -513,7 +513,16 @@ def test_a_control_tool_may_read_the_instance_it_is_called_on(world: World) -> N
     """The re-entrancy case: the lock is held, and `inspect()` takes it again."""
 
     def peek_rows(live: Instance, ctx: Ctx, sql: str) -> list[dict[str, Any]]:
-        """A thin wrapper over `Instance.inspect()`, as the real control tools are."""
+        """A thin wrapper over `Instance.inspect()`, whose open takes the lock again.
+
+        Not what the framework's own control tools do -- they read through
+        `Instance._control_db()` and deliberately not through this handle
+        (`test_control.py`'s
+        `test_the_control_handle_is_its_own_connection_opened_once_and_closed_with_the_instance`).
+        What is being probed here is the re-entrancy any control tool needs: a
+        world may write one that asks the instance for something, and asking is
+        what takes the lock a second time on the same thread.
+        """
         return live.inspect().rows(sql)
 
     world.tool(control_tool(peek_rows))

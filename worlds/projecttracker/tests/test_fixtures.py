@@ -25,14 +25,14 @@ import seahaven
 from conftest import AGENCY, FIXTURE_NOW, SMALL_STARTUP
 from projecttracker.world import world
 
-# `load_all` and `verify` by their module, not through `seahaven`: a name a
-# component document's §1 lists as part of a module's interface is public, and
-# `components/fixtures_instances.md` §1 lists these. `seahaven/__init__.py`
-# re-exports only the subset worth a short import, which is why the rule is
-# about the component documents and not about that list -- the same rule under
-# which `middleware/error_handler.py` imports `Handler` from `seahaven.world`.
-# That the convenience surface is the narrower of the two, and that nothing
-# states this anywhere an author reads, is `BACKLOG.md` B10.
+# `load_all` and `verify` by their module, not through `seahaven`: a name that
+# the component document section covering a module lists as part of that
+# module's interface is public, and `components/fixtures_instances.md` §1 lists
+# these. `seahaven/__init__.py` re-exports only the subset worth a short import,
+# which is why the rule is about the component documents and not about that
+# list -- the same rule under which `middleware/error_handler.py` imports
+# `Handler` from `seahaven.world`.
+# The rule is `architecture.md` section 1, published in `docs/reference/api.md`.
 from seahaven import fixtures as fixture_files
 
 # Where SQLite stamps the version that wrote a database file: a four-byte big
@@ -283,15 +283,15 @@ def test_every_populated_fixture_has_an_admin_for_the_viewer_to_be(fixture_id: s
 
 
 def test_the_state_file_carries_no_journal_or_lock_file_beside_it() -> None:
-    """Half of what SH405 will check: a fixture is a sealed file, not a live database.
+    """The whole of what SH405 checks: a fixture is a sealed file, not a live database.
 
-    The other half -- the file's mode -- is deliberately not asserted here, and
-    not because it does not matter. `freeze` sets `0o444`, and the framework's
-    own suite tests that it does. But git records only the executable bit, so
-    the mode of a *committed* fixture is whatever the cloning umask gave it, and
-    any assertion about it here would pass in the tree that froze the file and
-    fail in every clone. That is `BACKLOG.md` B9, because SH405 as specified
-    reports the same thing.
+    The file's mode is deliberately not asserted here, and not because it does
+    not matter. `freeze` sets `0o444`, and the framework's own suite tests that
+    it does. But git records only the executable bit, so the mode of a
+    *committed* fixture is whatever the cloning umask gave it, and any assertion
+    about it here would pass in the tree that froze the file and fail in every
+    clone. SH405 is the journal companions alone for that same reason
+    (`components/cli_and_check.md` section 3).
     """
     for fixture in world.fixtures():
         assert not list(fixture.dir.glob("state.sqlite-*")), (

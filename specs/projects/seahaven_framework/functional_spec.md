@@ -560,11 +560,19 @@ as tools, because in OpenEnv an instance is its connection and nothing else can 
 no separate control plane, listener, token or instance id.
 
 - The framework registers two **control tools** on every world: `controller_run_sql(sql, params)`
-  and `controller_changes()`. They are thin wrappers over `inst.inspect()` and `inst.changes()` and
-  own no SQL or rendering of their own. They are called through `CallToolAction` like any tool.
-- `controller_run_sql` runs one statement on the read-only inspection connection (section 10):
-  every table visible, the instance clock, no caps. Result shape as `run_sql` (section 14.1).
+  and `controller_changes()`. They are thin wrappers over the instance — `inst.changes()`, and a
+  read-only connection of the instance's own — and own no SQL or rendering of their own. They are
+  called through `CallToolAction` like any tool.
+- `controller_run_sql` runs one statement on a read-only connection the instance keeps for the
+  control tools alone (section 10's inspection connection is opened the same way, but it is a
+  *different* connection: `inst.inspect()` is the handle an eval reads through without the
+  instance lock, and a control read changes connection-level state for the length of a statement).
+  Every table visible, the instance clock, no caps. Result shape as `run_sql` (section 14.1).
   `controller_changes` returns the changeset of section 10 as JSON.
+
+  *Corrected 2026-09-13 — these two bullets named `inst.inspect()` as the control tools' handle,
+  which Phase 4 replaced after its round-1 review found an interpreter-wide deadlock; closes
+  `BACKLOG.md` B8, whose own list of affected artifacts did not reach this one.*
 - Their arguments are validated exactly as any tool's, so a bad `sql` argument is an
   `ArgumentError`. Nothing else about a normal call applies: no middleware, no error handler, no
   transaction and no gate. An eval wants the real message.

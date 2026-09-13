@@ -10,16 +10,18 @@ The sidecar is checked first and alone: the other four rules read fields a
 sidecar that does not validate does not have, so a fixture that fails SH401 is
 reported once and left.
 
-**SH405 is the journal companions, and not the file mode.**
-`components/cli_and_check.md` §3 gives the rule as "state file not read-only or
-has `-wal`/`-shm` companions", and `freeze` does seal the file at `0444`. But git
+**SH405 is the journal companions, and not the file mode**, which is how
+`components/cli_and_check.md` §3 now gives the rule. It read "state file not
+read-only or has `-wal`/`-shm` companions" when this module was written, and the
+mode half was dropped from the specification rather than implemented here: git
 records only the executable bit, so every committed fixture -- the whole point of
 a fixture -- comes back from a clone at `0644`, and the reference world's own
-`empty` fails the rule on a fresh checkout. A lint that fires on every fixture of
-every world after every clone is one authors learn to ignore, which costs more
+`empty` failed the rule on a fresh checkout. A lint that fires on every fixture
+of every world after every clone is one authors learn to ignore, which costs more
 than the rule is worth. What the seal was guarding against is the file changing,
-and that is SH402, over a hash version control does preserve. The mode is still
-set at freeze; it is simply not something `check` can ask about.
+and that is SH402, over a hash version control does preserve. `freeze` still
+seals the file at `0444`, and that is what stops a live instance writing a
+fixture in place; the mode is simply not something `check` can ask about.
 """
 
 import hashlib
