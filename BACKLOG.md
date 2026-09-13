@@ -696,6 +696,45 @@ repository has edited a completed spec artifact -- B2 is the same situation and 
 Whether to rewrite the paragraph, and take the cascade to `draft` that comes with it, is a
 maintainer's decision.
 
+### B23. A world has no way to order rows by when they were written within one episode
+
+**Found:** Phase 10 implementation (code review, Moderate 3). **Owner:** unassigned. **Risk:** low
+per world, but it is the same problem in every world that has an activity feed.
+
+*Renumbered from a second B18 in Phase 12, which was the first phase to cite it by number alone.
+`phase_plans/phase_10.md` cites it twice and was not edited, being `status: complete`: its `:241`
+quotes this heading beside the number, so that citation still lands here, and its `:288` is a bare
+"`BACKLOG.md` B18", which now lands on the surviving B18 -- the pytest plugin's two-marker guard --
+and means this item. That one dangling citation is the price of leaving a completed artifact alone.*
+
+An instance's clock is frozen (`functional_spec.md` §11, and a progressing clock is a §24 non-goal),
+so every row an episode writes carries one `created_at`. A table whose rows are meant to be read in
+the order they happened therefore has no ordering key for the part of its contents the episode
+itself produced: `ORDER BY created_at` is not an order, and the usual tiebreak on a UUID primary key
+is stable but arbitrary.
+
+For a reader writing raw SQL the answer is `ORDER BY created_at, rowid`, which ProjectTracker's
+`AGENTS.md` gives for `issue_events`. For a *tool* it is not: a keyset cursor has to carry its
+tiebreaker as a value, and `rowid` is not a column a world projects. ProjectTracker's
+`list_comments` therefore documents the behaviour rather than fixing it, and
+`tools/comments.py` records why a per-table sequence column was not taken.
+
+The framework question is whether `Ctx` should offer a monotonic per-instance counter beside
+`ctx.ids` and `ctx.clock` — one that a world can store in a column and page on — or whether the
+right answer is that evals should grade on state and on changesets rather than on the order of an
+activity feed. Either way it is a decision for the framework, not for one world, and it should be
+settled before the docs phase describes activity tables as a pattern.
+
+---
+
+---
+
+## Deferred — publication
+
+**Deferred 2026-09-13: publication is not part of this project** (see Phase 13's plan). These stay
+open as a record rather than as work. Nothing here is wrong with the code; each becomes correct, or
+becomes real, only if the framework is published. Revisit them together if that ever changes.
+
 ### B22. Three places tell a user to install `seahaven` from PyPI, where a placeholder answers
 
 **Found:** Phase 12 (docs), checking what the docs and the scaffold may tell a reader to install.
@@ -731,35 +770,6 @@ publication (name the checkout install, or drop the command and say "install the
 Phase 13 publishes a real release every one of them becomes correct as written, so the cheapest
 resolution may be to close this when that happens -- provided someone checks that it *was* closed by
 the release rather than assumed to be.
-
-### B23. A world has no way to order rows by when they were written within one episode
-
-**Found:** Phase 10 implementation (code review, Moderate 3). **Owner:** unassigned. **Risk:** low
-per world, but it is the same problem in every world that has an activity feed.
-
-*Renumbered from a second B18 in Phase 12, which was the first phase to cite it by number alone.
-`phase_plans/phase_10.md` cites it twice and was not edited, being `status: complete`: its `:241`
-quotes this heading beside the number, so that citation still lands here, and its `:288` is a bare
-"`BACKLOG.md` B18", which now lands on the surviving B18 -- the pytest plugin's two-marker guard --
-and means this item. That one dangling citation is the price of leaving a completed artifact alone.*
-
-An instance's clock is frozen (`functional_spec.md` §11, and a progressing clock is a §24 non-goal),
-so every row an episode writes carries one `created_at`. A table whose rows are meant to be read in
-the order they happened therefore has no ordering key for the part of its contents the episode
-itself produced: `ORDER BY created_at` is not an order, and the usual tiebreak on a UUID primary key
-is stable but arbitrary.
-
-For a reader writing raw SQL the answer is `ORDER BY created_at, rowid`, which ProjectTracker's
-`AGENTS.md` gives for `issue_events`. For a *tool* it is not: a keyset cursor has to carry its
-tiebreaker as a value, and `rowid` is not a column a world projects. ProjectTracker's
-`list_comments` therefore documents the behaviour rather than fixing it, and
-`tools/comments.py` records why a per-table sequence column was not taken.
-
-The framework question is whether `Ctx` should offer a monotonic per-instance counter beside
-`ctx.ids` and `ctx.clock` — one that a world can store in a column and page on — or whether the
-right answer is that evals should grade on state and on changesets rather than on the order of an
-activity feed. Either way it is a decision for the framework, not for one world, and it should be
-settled before the docs phase describes activity tables as a pattern.
 
 ---
 
