@@ -20,8 +20,8 @@ maintainer sign-off, and **the sign-off given covers the contribution guide and 
 plan covers that slice. The other three are untouched and are listed at the bottom with what each
 one still needs.
 
-The phase checkbox in `implementation_plan.md` stays `[ ]`: the phase is a quarter done, and a
-ticked box would say otherwise.
+The phase checkbox in `implementation_plan.md` was left `[ ]` while this slice was built. It is now
+ticked: the maintainer closed the phase here (see the note above).
 
 What the guide has to be is set by the state of the repository rather than by what a contribution
 guide usually contains. Three facts shape it:
@@ -250,14 +250,11 @@ for this page, and says what joining the harness actually buys.
 
 ## What remains unstarted in Phase 13
 
-None of this was touched, and none of it may be until the maintainer signs off on it specifically.
-The sign-off that produced this plan covered the contribution guide only.
-
-**This plan stays `status: draft`, deliberately.** The slice it describes is finished, reviewed and
-committed, but the phase is not, and this is the phase's plan: the three items below will be planned
-into this same file when they are signed off. A `complete` next to an unticked Phase 13 checkbox in
-`implementation_plan.md` would read as a checkbox somebody forgot rather than as a phase somebody
-stopped halfway through on purpose.
+None of this was touched. **The phase was subsequently closed without it**: publication is not part
+of this project, and the licence file remains a maintainer decision gated by `AGENTS.md`. This list
+is therefore the record of what was considered and deliberately not done — not a to-do list, and not
+work that is pending inside this project. It is kept because a reader who finds the phase ticked
+should be able to see exactly what "complete" did and did not cover.
 
 - **The licence file.** No `LICENSE`, no licence text, and no licence field or classifier in
   `pyproject.toml`. `project_overview.md` §3 states the intent (MIT); the decision to grant it has
@@ -273,5 +270,5 @@ stopped halfway through on purpose.
   does not import against the lock, and `BACKLOG.md` B17's two questions are both maintainer calls
   on `uv.lock`.
 
-`implementation_plan.md`'s Phase 13 checkbox is therefore still `[ ]`, and should stay that way
-until these land.
+`implementation_plan.md`'s Phase 13 checkbox is ticked on the strength of the contribution guide
+alone, with the same qualification recorded beside it.
