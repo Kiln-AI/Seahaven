@@ -1,68 +1,70 @@
 # Seahaven
 
 Seahaven is a Python framework for building synthetic worlds: faithful, stateful mocks of a
-company's tool surface, on SQLite, that agents work against in evals. The spec is the source of
-truth and lives in `specs/projects/seahaven_framework/`: read `project_overview.md`, then
-`functional_spec.md`, then `architecture.md` and `components/`. When code and spec disagree, the
-spec wins unless a phase plan records why not.
+company's tool surface, on SQLite, that agents work against in evals.
 
-## How we work
+The spec is the source of truth and lives in `specs/projects/seahaven_framework/`: read
+`project_overview.md`, then `functional_spec.md`, then `architecture.md` and `components/`. When
+code and spec disagree, the spec wins unless a phase plan records why not. A change in behaviour
+updates the spec in the same commit.
 
-We use the `/spec` skill for agentic development: https://github.com/scosman/vibe-crafting. The
-phases are in `specs/projects/seahaven_framework/implementation_plan.md`; each phase is one coding
-round, one code review, one commit.
+We develop with the `/spec` skill (https://github.com/scosman/vibe-crafting); the phases are in
+`specs/projects/seahaven_framework/implementation_plan.md`. The skill owns the process.
 
-`BACKLOG.md` holds real issues in already-committed code or artifacts that are out of scope for the
-phase that found them. Add to it rather than widening the diff under review; do not pick from it
-without asking.
+`BACKLOG.md` holds real issues in already-committed code that are out of scope for the phase that
+found them. Add to it rather than widening the diff under review; do not pick from it without
+asking. Close an item by deleting it in the commit that fixes it.
 
-`CONTRIBUTING.md` is the short guide for outside contributors: setup, the checks, the rules. It
-does not describe the phase process; this file does.
+`CONTRIBUTING.md` is the short guide for outside contributors.
 
 ## Environment
 
-**This project must run on CPython 3.14.0 or newer, and never on a release candidate.** Check the
-interpreter before anything else:
+This project runs on a final release of CPython 3.14 or newer, never a release candidate: two
+locked dependencies break on the 3.14 rcs, and uv will sync onto one without complaint. Check
+before anything else:
 
 ```sh
 uv run python -V        # must print 3.14.0 or higher, with no "rc" in it
 ```
 
-If it is missing, or if it prints a release candidate, install a final release and re-sync:
+If it is missing or prints a release candidate:
 
 ```sh
-uv self update          # or upgrade uv however you installed it: pip, Homebrew, a distro package
+uv self update
 uv python install 3.14
 uv sync --extra serve
 ```
 
-**Nothing enforces this for you.** `requires-python = ">=3.14"` does not keep you off a release
-candidate: uv matches an interpreter against it ignoring the pre-release segment, and syncs this
-project onto `3.14.0rc2` with no warning and exit 0. The check is active -- the same uv refuses
-3.14.0 for a project asking `>=3.15` -- it simply does not read an rc as one. What you get is
-whatever your uv knows how to install: uv 0.8.17's download list has `cpython-3.14.0rc2` and no
-final 3.14 at all, and 0.9.7's has `cpython-3.14.0`. Hence `uv run python -V`, by hand.
+## Automated checks
 
-The check is worth the minute because a release candidate fails in ways that look like library bugs
-and are not. On 3.14.0rc2 the pinned `pydantic` cannot evaluate this project's forward references,
-so `import seahaven` itself raises and every suite gives nothing rather than a few failures -- that
-is the one you meet first, with or without the extra. Under it, `collections.abc.ByteString` was
-removed in rc2 and **restored before 3.14.0 final**, so `import beartype.typing`, which the `serve`
-extra needs, raises `ImportError` there as well. Neither library is at fault and neither has a
-version to move to: CPython moved and moved back. All of it is green on 3.14.0 final with no
-patching.
+These are what CI runs. All of them must be clean before any commit:
 
-Everything else (ruff, ty, pytest) is configured in `pyproject.toml` and runs through `uv run`.
+```sh
+uv run python -c "import seahaven.openenv"
+uv run ruff format --check
+uv run ruff check
+uv run ty check
+uv run pytest                              # the framework
+uv run pytest worlds/projecttracker        # the reference world
+uv run pytest extensions/seahaven-xmlrpc   # the example extension
+uv run python scripts/check_licences.py
+```
+
+The three suites are separate because a world and an extension are separate packages with their
+own pytest rootdir. `ruff format` also formats Python blocks inside Markdown, and
+`tests/test_docs_examples.py` executes every example in the docs, `README.md` and
+`CONTRIBUTING.md`, so an example that is added anywhere it reaches will be run.
 
 ## Rules
 
-- Python 3.14+, fully typed. `ty`, `ruff` and the tests are clean before any commit.
-- No `LICENSE` file, no package publication, no hub publication without explicit maintainer sign-off
-  (implementation plan, Phase 13).
+- Python 3.14+, fully typed, tests included. `ty` is the checker.
+- Tests are written with the code and catch real breakage; a test that still passes when the line
+  under it is deleted is not a test.
+- Comments carry external constraints, not a description of the code beneath them.
+- No `LICENSE` file, no package publication, no version bump, no hub publication of the reference
+  world without explicit maintainer sign-off.
 - No real customer data, ever. The reference world is fictional: no real product's names, schema or
   error text.
-- **No copyleft in anything Seahaven ships.** GPL, AGPL and LGPL are refused in the runtime
-  closure and in every extra, in any version or spelling. Permissive licences are allowed, and
-  so are MPL-2.0 (copyleft per file, not across a link or a process) and CC0-1.0
-  (public-domain equivalent). An unrecognised licence fails too: the gate is an allowlist.
-  `scripts/check_licences.py` is the rule; CI runs it with `--extra serve` installed.
+- No copyleft in anything Seahaven ships. Runtime dependencies and every extra must be permissively
+  licensed; `scripts/check_licences.py` is the rule and CI runs it. The bar for adding a runtime
+  dependency at all is high, because Seahaven is vendored into other people's products.
