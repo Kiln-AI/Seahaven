@@ -1,6 +1,10 @@
+# uv's build backend, the one Seahaven itself is built with. Every file under
+# `src/$package` travels into the wheel, not only the `.py` ones, so `schema/*.sql`
+# reaches `importlib.resources` in an installed world. `fixtures/` is outside the
+# package and deliberately does not travel: a fixture is a checkout's file.
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
 
 [project]
 name = "$name"
@@ -15,8 +19,11 @@ dependencies = ["$seahaven_requirement"]
 [project.optional-dependencies]
 serve = ["seahaven[serve]"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/$package"]
+# Spelled out rather than left to the backend's default, because the module is
+# this world's name normalised the way `seahaven new` normalises it, which is not
+# always the way uv would.
+[tool.uv.build-backend]
+module-name = "$package"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

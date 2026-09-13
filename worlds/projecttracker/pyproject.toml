@@ -1,6 +1,11 @@
+# uv's build backend, the framework's own. `src/projecttracker` is what it packages
+# -- `module-root` defaults to `src`, and the module is the project name -- and
+# every file under it travels, so `schema/*.sql` reaches `importlib.resources` in
+# an installed world. `fixtures/` is outside the package and deliberately does not:
+# a fixture is a checkout's file, not a distribution's (`docs/fixtures.md`).
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
 
 [project]
 name = "projecttracker"
@@ -20,9 +25,6 @@ serve = ["seahaven[serve]"]
 
 [tool.uv.sources]
 seahaven = { workspace = true }
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/projecttracker"]
 
 # The world is its own package with its own suite: `uv run pytest worlds/projecttracker`
 # from the repository root, or `uv run pytest` from here. Having its own section is

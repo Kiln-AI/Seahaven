@@ -102,41 +102,6 @@ settled before the docs phase describes activity tables as a pattern.
 
 ---
 
-### B24. `hatchling` is a leftover from the name squat; this is a uv project
-
-**Found:** 2026-09-13, closing B17 and reviewing the packaging. **Owner:** unassigned.
-**Risk:** none today — the builds work. It is a dependency and a config surface the project does
-not need, in five files.
-
-**Decision (2026-09-13, maintainer): remove `hatchling` and build with uv.** It was a placeholder
-chosen when the package name was reserved, nothing more.
-
-Five `pyproject.toml` files declare `requires = ["hatchling"]` with `build-backend =
-"hatchling.build"` and a `[tool.hatch.build.targets.wheel]` block: the framework, the reference
-world, the example extension, and the scaffold template `new` writes (so every world made from now
-on inherits it).
-
-The move is `uv_build`, and the thing to prove rather than assume is that the package data still
-travels. Hatchling ships every file under `src/seahaven` with no `include` declared, which is what
-carries `docs/*.md`, `docs/reference/*.md` and `cli/templates/**/*.tmpl` into the wheel — Phase 8
-and Phase 12 both verified that by building and inspecting. `uv_build` has its own rules about what
-is included, so:
-
-- build the wheel for each of the four packages and inspect it, not just build it clean;
-- confirm the framework wheel still carries all eleven docs pages and all 21 template files, and
-  that `entry_points.txt` still has the `seahaven` console script and the `pytest11` entry point;
-- confirm the reference world's wheel still carries `schema/*.sql`, which `sql_files` reads through
-  `importlib.resources` (its `fixtures/` is outside the package and deliberately does not travel —
-  that is B11, decided and documented);
-- the scaffold template changes too, so a fresh `seahaven new` must still pass its own tests and
-  `seahaven check`.
-
-`tests/test_docs_examples.py` and `tests/test_cli_new.py` already build or inspect a wheel in
-places; whatever proves the above belongs in the suite rather than in a phase plan, since the
-failure mode is silent — a wheel that builds fine and is missing a file nobody imports until a
-user does.
-
----
 
 ### B25. `_make_instance_dir` anchors the `mkdir` and then returns a composed path
 

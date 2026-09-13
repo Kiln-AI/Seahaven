@@ -67,8 +67,16 @@ seahaven/docs/
 
 Every page is hand-written; nothing is generated and there is no drift test. One test asserts that
 every registered lint code appears in `reference/lints.md`, which is the only part that goes stale
-silently. Docs are shipped as package data (`[tool.hatch.build] include`), read with
-`importlib.resources`, and `seahaven docs` prints the directory.
+silently. Docs are shipped as package data -- the build backend packages every file under
+`src/seahaven`, not only the `.py` ones -- read with `importlib.resources`, and `seahaven docs`
+prints the directory.
+
+*Corrected 2026-09-13 — this paragraph named hatchling's `[tool.hatch.build] include` as what
+ships the docs. The backend is `uv_build` now (`BACKLOG.md` B24), and neither backend needed an
+`include`: both package every file under the module directory. What carries the docs is therefore
+where they live, `src/seahaven/docs/`, and not a declaration -- which is why
+`tests/test_packaging.py` builds the wheel and reads the pages out of it rather than trusting a
+backend's defaults.*
 
 ## 3. The scaffolded `AGENTS.md`
 

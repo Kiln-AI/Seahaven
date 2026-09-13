@@ -63,9 +63,11 @@ def test_the_scaffold_has_no_fixture_on_disk(scaffold: Path) -> None:
 def test_the_package_name_is_the_world_name_normalised(scaffold: Path) -> None:
     assert (scaffold / "src" / "my_world" / "world.py").is_file()
     assert 'name = "my-world"' in (scaffold / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'packages = ["src/my_world"]' in (scaffold / "pyproject.toml").read_text(
-        encoding="utf-8"
-    )
+    # Spelled out in the rendered file rather than left to the build backend's
+    # default, because `package_name` and uv's own normalisation of a
+    # distribution name are not the same function: they part company on a run of
+    # underscores, and the backend would then refuse to find the module.
+    assert 'module-name = "my_world"' in (scaffold / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def test_the_scaffold_pins_the_installed_minor_version(scaffold: Path) -> None:

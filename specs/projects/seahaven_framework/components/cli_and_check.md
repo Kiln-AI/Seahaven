@@ -37,7 +37,8 @@ is `re.sub(r"[-.]+", "_", name).lower()`, and stops. Files:
 
 ```
 pyproject.toml           # [project] name, requires-python >=3.14, dependencies = ["seahaven~=<major.minor>"],
-                         #   [project.optional-dependencies] serve = ["seahaven[serve]"]; [build-system] hatchling
+                         #   [project.optional-dependencies] serve = ["seahaven[serve]"];
+                         #   [build-system] uv_build, with [tool.uv.build-backend] module-name = <pkg>
 README.md                # "# <Name>\n\nA Seahaven world.\n" plus the section headings the docs ask for
 AGENTS.md                # the evergreen text plus a "## About this world" stub
 src/<pkg>/__init__.py    # from .world import world; from . import tools, middleware  (explicit imports of each module)
@@ -77,6 +78,14 @@ is the only thing that sets the OpenEnv one-line description, replacing the deri
 from the README that `components/openenv.md` §2 specified and no longer does. A scaffold that said
 nothing would publish the fallback `Seahaven world <name>`, so the template ships a placeholder
 sentence with a comment telling its author to replace it. No file is added or removed by this.*
+
+*Corrected 2026-09-13 — the `pyproject.toml` line named hatchling as the scaffold's build backend.
+It is `uv_build` now, in the scaffold and in all three of this repository's own packages: hatchling
+was a placeholder from the name reservation and this is a uv project (`BACKLOG.md` B24). The
+scaffold also carries `[tool.uv.build-backend] module-name`, because the package this section
+derives as `re.sub(r"[-.]+", "_", name).lower()` is not always the module uv derives from the
+distribution name -- a name with a run of underscores diverges, and the backend would then refuse to
+find the module. Nothing about the rendered file list changes.*
 
 ## 3. `seahaven check`
 

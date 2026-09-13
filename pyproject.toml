@@ -1,6 +1,10 @@
+# uv's own build backend, because this is a uv project. `src/seahaven` is what it
+# packages -- `module-root` defaults to `src`, and the module is the project name
+# normalised -- and every file under that directory travels, not only the `.py`
+# ones, which is what carries `docs/` and `cli/templates/` into the wheel.
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
 
 [project]
 name = "seahaven"
@@ -61,9 +65,6 @@ members = ["worlds/*", "extensions/*"]
 [tool.uv.sources]
 projecttracker = { workspace = true }
 seahaven-xmlrpc = { workspace = true }
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/seahaven"]
 
 [tool.ruff]
 line-length = 100

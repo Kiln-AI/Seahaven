@@ -130,12 +130,12 @@ Those command lines, in a checkout synced as above, are what produced these:
 
 | Suite | Result |
 |---|---|
-| framework | `1103 passed` in ~42 s |
-| reference world | `260 passed` in ~16 s |
+| framework | `1093 passed` in ~45 s |
+| reference world | `261 passed` in ~16 s |
 | example extension | `75 passed` in ~1 s |
 
 One test carries the `slow` marker (the 500-session smoke test in `tests/test_server.py`);
-`uv run pytest -m "not slow"` deselects it and gives `1102 passed, 1 deselected`. The saving varies
+`uv run pytest -m "not slow"` deselects it and gives `1092 passed, 1 deselected`. The saving varies
 enough between runs to not be worth quoting.
 
 ## Why the interpreter check is worth the minute
