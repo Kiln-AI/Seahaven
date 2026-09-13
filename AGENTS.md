@@ -16,6 +16,9 @@ round, one code review, one commit.
 phase that found them. Add to it rather than widening the diff under review; do not pick from it
 without asking.
 
+`CONTRIBUTING.md` is the same ground written for someone who has not seen the repository before,
+plus the state of it: nothing published, no licence file, and the `serve` extra broken on 3.14.
+
 ## Environment
 
 If you are running in a VM or a fresh container, check the interpreter before anything else:

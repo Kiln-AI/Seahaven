@@ -159,6 +159,13 @@ waits until something imports the package, which the scaffold's tests never do.
 The alternative, if you want the world in an environment of its own, is to put the framework there
 from this checkout with `uv pip install -e /path/to/Seahaven`.
 
+## Contributing
+
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. It has how this repository is developed (spec
+first, phase by phase), the checks that have to be clean, and the two things a contributor needs
+told before starting: there is no licence file yet, so ask before investing in a change, and the
+`serve` extra does not import on Python 3.14 as locked.
+
 ## Documentation
 
 The framework's docs ship **inside the installed package**, so they always match the version

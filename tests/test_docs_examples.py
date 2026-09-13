@@ -55,10 +55,13 @@ from seahaven.cli.docs import docs_path
 
 DOCS = Path(docs_path())
 
-# The repository's own README is checked with the same harness: its examples are
-# copied as readily as a docs page's. It is absent when these tests run against an
-# installed wheel rather than a checkout, which is not a failure.
-REPO_README = Path(__file__).resolve().parents[1] / "README.md"
+# The repository's own Markdown is checked with the same harness: a command line
+# in the README or in the contribution guide is copied as readily as a docs
+# page's example, and the guide's whole claim is that its commands are the real
+# ones. These are absent when these tests run against an installed wheel rather
+# than a checkout, which is not a failure.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_PAGES = (REPO_ROOT / "README.md", REPO_ROOT / "CONTRIBUTING.md")
 
 # The fence, with its language, and everything up to the closing fence of the
 # same length. Indented fences are not used on these pages and are not matched:
@@ -92,7 +95,7 @@ class Block:
 @functools.cache
 def pages() -> tuple[Path, ...]:
     found = sorted(DOCS.rglob("*.md"))
-    return (*found, REPO_README) if REPO_README.is_file() else tuple(found)
+    return (*found, *(page for page in REPO_PAGES if page.is_file()))
 
 
 @functools.cache
