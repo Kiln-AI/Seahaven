@@ -11,8 +11,13 @@ large and a world used in process should not pay for it.
 PyPI currently holds a placeholder release that contains none of this and has no `serve` extra, so
 that command succeeds and installs nothing useful, which is worse than failing. Until publication,
 install the framework and its extra from a checkout of the Seahaven repository — for example
-`uv pip install -e "/path/to/Seahaven[serve]"` into the environment your world runs in. (On Python
-3.14 the extra has an import problem of its own; the last section of this page says what it is.)
+`uv pip install -e "/path/to/Seahaven[serve]"` into the environment your world runs in. That
+environment has to be a **final** CPython 3.14 or newer and not a release candidate. On 3.14.0rc2
+Seahaven does not import at all, before any of this: `pydantic` cannot evaluate its forward
+references there. Under that there is a second breakage the extra would meet on its own, since
+3.14.0rc2 has no `collections.abc.ByteString` and `beartype` — which `from fastmcp import Client`
+reaches, and OpenEnv's MCP environment imports — asks for that name unguarded. Both are gone on
+3.14.0 final, where the extra installs and works unpatched.
 
 A world's whole server is one file, which `seahaven new` writes:
 
@@ -248,8 +253,3 @@ in the WebSocket path an eval and `SeahavenClient` use.
 - **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
   OpenEnv closes a socket the client has already closed. The sessions are fine; the log is noisy.
   (B13.)
-- **On Python 3.14, the locked `serve` closure may not import at all.** `beartype`, reached through
-  `fastmcp`, imports `collections.abc.ByteString`, which 3.14 removed, and `fastmcp` reports it as
-  "FastMCP client support is not installed", which names the wrong cause. Seahaven's own repository
-  works around it by hand in its virtual environment rather than in its lockfile. If
-  `import seahaven.openenv` fails with an `ImportError` about `ByteString`, that is this. (B17.)

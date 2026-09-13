@@ -12,7 +12,7 @@ opens with what its figures can and cannot be used for, and every table in it
 carries the spread of its own repeats so a reader can refuse to believe a
 difference smaller than the noise.
 
-    uv run --no-sync python -m bench all --out bench/results/latest.md
+    uv run python -m bench all --out bench/results/latest.md
 
 `bench/README.md` has the rest of the commands and what they cost in wall time.
 """

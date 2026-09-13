@@ -18,12 +18,14 @@ import pytest
 from seahaven.cli.serve import MISSING_EXTRA
 from tests.conftest import WORLDS, run_cli
 
-# `seahaven.openenv` and not `openenv`: what this module needs is the subpackage,
-# and on Python 3.14 `openenv` imports while `seahaven.openenv` does not
-# (BACKLOG B17). Guarding on the one that has to work makes this a skip rather
-# than a collection error while that lockfile question is open.
+# The subpackage and not `openenv`: what this module imports is
+# `seahaven.openenv`, so that is what has to import for the tests below to mean
+# anything. Only an `ImportError` skips -- an extra that is absent, or installed
+# and unimportable. Anything else raises, and CI asserts this import separately,
+# because an installed extra that skips quietly is a green run that tested none
+# of this.
 pytest.importorskip(
-    "seahaven.openenv", exc_type=ImportError, reason="the serve extra is not installed"
+    "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
 from seahaven.openenv import DEFAULT_MAX_CONCURRENT_ENVS, DEFAULT_SESSION_TIMEOUT

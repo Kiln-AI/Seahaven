@@ -12,10 +12,10 @@ before reading any number in it.
 From the repository root:
 
 ```sh
-uv run --no-sync python -m bench all --out bench/results/latest.md    # everything, ~10 min
-uv run --no-sync python -m bench baseline                             # one thread, ~1 min
-uv run --no-sync python -m bench sweep --progress                     # the gate sweep, ~9 min
-uv run --no-sync python -m bench isolation                            # the slow-call probe, ~1 min
+uv run python -m bench all --out bench/results/latest.md    # everything, ~10 min
+uv run python -m bench baseline                             # one thread, ~1 min
+uv run python -m bench sweep --progress                     # the gate sweep, ~9 min
+uv run python -m bench isolation                            # the slow-call probe, ~1 min
 ```
 
 With no `--out` the report goes to stdout. `--progress` prints a line per point on stderr, which

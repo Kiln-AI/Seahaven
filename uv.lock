@@ -1799,10 +1799,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apsw", specifier = ">=3.53" },
+    { name = "apsw", specifier = ">=3.53.4" },
     { name = "openenv", marker = "extra == 'serve'", specifier = ">=0.4.2,<0.5" },
-    { name = "pydantic", specifier = ">=2.12,<3" },
-    { name = "pyyaml", specifier = ">=6" },
+    { name = "pydantic", specifier = ">=2.13.5,<3" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 provides-extras = ["serve"]
 

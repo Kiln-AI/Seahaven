@@ -29,8 +29,8 @@ hallucinates. And every signature written as a stub (`def one(self, sql: str,
 order included, against the real callable.
 
 An executed example must not import `seahaven.openenv`: the `serve` extra is
-optional, its import costs seconds, and on this interpreter it is `BACKLOG.md`
-B17. Server-side examples are fragments, or shell.
+optional, and its import costs seconds. Server-side examples are fragments, or
+shell.
 """
 
 import annotationlib
@@ -363,9 +363,9 @@ _STUB_PAGE = "reference/api.md"
 # The two names on that page that live in the `serve` extra. They are resolved
 # like any other -- against `seahaven.openenv`, imported here and nowhere else in
 # this file -- and skipped only when that import fails, which is what an optional
-# extra and `BACKLOG.md` B17 make possible. Naming them is not a licence to be
-# wrong about them: `test_the_serve_extra_allowlist_is_exactly_what_the_page_uses`
-# keeps the set honest in both directions.
+# extra makes possible. Naming them is not a licence to be wrong about them:
+# `test_the_serve_extra_allowlist_is_exactly_what_the_page_uses` keeps the set
+# honest in both directions.
 _SERVE_EXTRA_NAMES = frozenset({"SeahavenClient", "app"})
 
 

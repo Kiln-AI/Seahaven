@@ -23,6 +23,13 @@ jobs:
       - name: Install the project
         run: uv sync --locked --extra serve
 
+      # The suites guard the OpenEnv modules with `pytest.importorskip`, so an
+      # extra that is installed but does not import would skip them and leave
+      # CI green having tested none of `seahaven serve`, the environment or the
+      # client. This is the one step that fails instead.
+      - name: The serve extra imports
+        run: uv run python -c "import seahaven.openenv"
+
       - name: Format
         run: uv run ruff format --check
 

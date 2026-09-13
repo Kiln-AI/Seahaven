@@ -86,12 +86,15 @@ otherwise walk into.
 
 ## Running it from a checkout
 
-Python 3.14+ and [uv](https://docs.astral.sh/uv/).
+Python 3.14+ and [uv](https://docs.astral.sh/uv/). It has to be a **final** 3.14, not a release
+candidate — see the note below the examples.
 
 ```sh
+uv self update                             # or however you installed uv: pip, Homebrew, a distro
+uv python install 3.14
 git clone https://github.com/Kiln-AI/Seahaven
 cd Seahaven
-uv sync
+uv sync --extra serve
 uv run pytest                              # the framework's own suite
 uv run pytest worlds/projecttracker        # the reference world
 uv run pytest extensions/seahaven-xmlrpc   # the example extension
@@ -112,9 +115,20 @@ with projecttracker.world.instance("small_startup") as tracker:
 PY
 ```
 
-One known environment wrinkle: on Python 3.14 the locked `serve` extra does not import — `beartype`,
-reached through `fastmcp`, imports `collections.abc.ByteString`, which 3.14 removed. It is an
-environment and lockfile problem rather than a defect in Seahaven, and it is `BACKLOG.md` B17.
+One environment note, and it is the only one: **the interpreter has to be a final 3.14, not a
+release candidate.** `uv run python -V` should print `3.14.0` or higher with no `rc` in it. On
+3.14.0rc2 the locked `pydantic` cannot evaluate this project's forward references, so `import
+seahaven` itself raises `AssertionError` inside `eval_type_backport` and every suite gives nothing
+before a test runs; `collections.abc.ByteString` is absent there too, so `import beartype.typing`,
+which the `serve` extra needs, raises `ImportError` there as well. Neither needed a change here:
+`ByteString` is back in 3.14.0 final, and the locked closure imports and runs green on it with no
+patching.
+
+Nothing enforces the interpreter for you, which is why the check is by hand: uv matches an
+interpreter against `requires-python` ignoring the pre-release segment, and syncs this project onto
+`3.14.0rc2` with no warning. What you get is whatever your uv knows how to install — uv 0.8.17's
+download list has `cpython-3.14.0rc2` and no final 3.14 at all, 0.9.7's has `cpython-3.14.0` —
+which is why `uv self update` comes first above.
 
 ## Building a world
 
@@ -164,7 +178,7 @@ from this checkout with `uv pip install -e /path/to/Seahaven`.
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. It has how this repository is developed (spec
 first, phase by phase), the checks that have to be clean, and the two things a contributor needs
 told before starting: there is no licence file yet, so ask before investing in a change, and the
-`serve` extra does not import on Python 3.14 as locked.
+interpreter has to be a final 3.14 rather than a release candidate.
 
 ## Documentation
 

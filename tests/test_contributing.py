@@ -12,8 +12,8 @@ pytest worlds/projecttracker`, so a guide that had stopped telling anyone to run
 the framework suite would still have passed a containment check.
 
 Its prose is not checked, and cannot be. What the guide says about the state of
-the project was verified by running it, and the runs are in
-`specs/projects/seahaven_framework/phase_plans/phase_13.md`.
+the project -- its interpreter requirement and its suite counts included -- was
+verified by running it on CPython 3.14.0 against the committed lock.
 
 Nothing here fails when the suite runs against an installed wheel rather than a
 checkout, which is where neither file exists: the readers return nothing and the
@@ -50,8 +50,8 @@ def ci_commands() -> tuple[str, ...]:
     """Every `uv run` line CI executes, in the order the workflow runs them.
 
     Only `uv run`: `uv sync` is how CI builds its environment rather than a check
-    a contributor performs, and the guide discusses it separately -- with the
-    extra, which is what B17 is about.
+    a contributor performs, and the guide discusses it separately, in the section
+    on getting a checkout that runs.
 
     Empty when the workflow is not there, and empty rather than raising when it is
     there and shaped differently -- a renamed job, say. The readers return nothing

@@ -1,6 +1,6 @@
 """`python -m bench`: run the measurements and write the report.
 
-    uv run --no-sync python -m bench all --out bench/results/latest.md
+    uv run python -m bench all --out bench/results/latest.md
 
 Four subcommands -- `baseline`, `sweep`, `isolation`, `all` -- because a sweep
 takes minutes and someone changing the harness wants one measurement back in
@@ -207,7 +207,7 @@ def _may_write(out: Path, *, force: bool) -> bool:
 def _command(argv: list[str] | None) -> str:
     """The command as the report should print it, so a reader can re-run it."""
     arguments = sys.argv[1:] if argv is None else argv
-    return "uv run --no-sync python -m bench " + " ".join(arguments)
+    return "uv run python -m bench " + " ".join(arguments)
 
 
 if __name__ == "__main__":

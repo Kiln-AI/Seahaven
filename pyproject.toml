@@ -16,10 +16,15 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# Lower bounds are the versions this project is known to work on, not the
+# oldest that might: each is the release `uv.lock` resolves, verified green on
+# CPython 3.14.0 -- spelled as the lock spells it, except `apsw`, which the lock
+# holds as the equal `3.53.4.0`. Raise one when a newer version is verified; do
+# not lower one without running the suites against it.
 dependencies = [
-    "apsw>=3.53",
-    "pydantic>=2.12,<3",
-    "pyyaml>=6",
+    "apsw>=3.53.4",
+    "pydantic>=2.13.5,<3",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]

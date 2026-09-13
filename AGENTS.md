@@ -17,14 +17,43 @@ phase that found them. Add to it rather than widening the diff under review; do 
 without asking.
 
 `CONTRIBUTING.md` is the same ground written for someone who has not seen the repository before,
-plus the state of it: nothing published, no licence file, and the `serve` extra broken on 3.14.
+plus the state of it: nothing published, no licence file, and the interpreter check below spelled
+out for a first checkout.
 
 ## Environment
 
-If you are running in a VM or a fresh container, check the interpreter before anything else:
-`python3.14 --version`. If it is missing or a pre-release, run `uv python install 3.14`, then
-`uv sync`. Everything else (ruff, ty, pytest) is configured in `pyproject.toml` and runs through
-`uv run`.
+**This project must run on CPython 3.14.0 or newer, and never on a release candidate.** Check the
+interpreter before anything else:
+
+```sh
+uv run python -V        # must print 3.14.0 or higher, with no "rc" in it
+```
+
+If it is missing, or if it prints a release candidate, install a final release and re-sync:
+
+```sh
+uv self update          # or upgrade uv however you installed it: pip, Homebrew, a distro package
+uv python install 3.14
+uv sync --extra serve
+```
+
+**Nothing enforces this for you.** `requires-python = ">=3.14"` does not keep you off a release
+candidate: uv matches an interpreter against it ignoring the pre-release segment, and syncs this
+project onto `3.14.0rc2` with no warning and exit 0. The check is active -- the same uv refuses
+3.14.0 for a project asking `>=3.15` -- it simply does not read an rc as one. What you get is
+whatever your uv knows how to install: uv 0.8.17's download list has `cpython-3.14.0rc2` and no
+final 3.14 at all, and 0.9.7's has `cpython-3.14.0`. Hence `uv run python -V`, by hand.
+
+The check is worth the minute because a release candidate fails in ways that look like library bugs
+and are not. On 3.14.0rc2 the pinned `pydantic` cannot evaluate this project's forward references,
+so `import seahaven` itself raises and every suite gives nothing rather than a few failures -- that
+is the one you meet first, with or without the extra. Under it, `collections.abc.ByteString` was
+removed in rc2 and **restored before 3.14.0 final**, so `import beartype.typing`, which the `serve`
+extra needs, raises `ImportError` there as well. Neither library is at fault and neither has a
+version to move to: CPython moved and moved back. All of it is green on 3.14.0 final with no
+patching.
+
+Everything else (ruff, ty, pytest) is configured in `pyproject.toml` and runs through `uv run`.
 
 ## Rules
 
