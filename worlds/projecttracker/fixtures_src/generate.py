@@ -1,11 +1,25 @@
-"""How every fixture in `fixtures/` is made. Committed, because it is the recipe.
+r"""How every fixture in `fixtures/` is made. Committed, because it is the recipe.
 
 A fixture is a binary artifact, and a binary artifact with no source is one
 nobody can change. This module is that source: one function per fixture, each
-taking a live instance and filling it, which is exactly the shape
-`seahaven fixture freeze <id> --run fixtures_src.generate:<id>` calls
-once the CLI exists (Phase 7 of the implementation plan). Until then, running
-this module does the same thing itself:
+taking a live instance and filling it, which is exactly the shape the CLI calls:
+
+    uv run seahaven fixture freeze empty \
+        --now 2026-06-01T09:00:00.000Z \
+        --run fixtures_src.generate:empty \
+        --description "..."
+
+**`--now` is not optional here, whatever the CLI's default says.** `freeze`
+starts from a blank instance, and a blank instance with no `--now` takes the wall
+clock -- so the command without the flag mints a fixture dated today and quietly
+breaks the invariant two paragraphs below. It has to be `NOW`, spelled out,
+because the CLI imports one function from this module and cannot see the
+constant. `fork` needs no `--now`: a fork inherits its parent's clock, which is
+the point of forking.
+
+Running this module does the same thing itself, from the repository root, passes
+`NOW` for you and carries the descriptions with it, which is why it is the way to
+rebuild a fixture here:
 
     uv run python worlds/projecttracker/fixtures_src/generate.py empty
 

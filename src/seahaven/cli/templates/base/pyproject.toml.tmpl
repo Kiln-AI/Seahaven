@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "$name"
+version = "0.1.0"
+description = "$name: a Seahaven world."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["$seahaven_requirement"]
+
+# The server and its client. Left out of the default install because openenv's
+# own dependency tree is large, and a world used in process never needs it.
+[project.optional-dependencies]
+serve = ["seahaven[serve]"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/$package"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

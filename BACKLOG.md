@@ -539,6 +539,45 @@ call as B2, B7, B8 and B12, and worth pairing with whichever of those is answere
 
 ---
 
+### B17. `beartype` breaks the `serve` extra on Python 3.14
+
+**Found:** Phase 7 implementation. **Owner:** unassigned. **Risk:** high for anyone running the
+OpenEnv tests; it is an environment and lockfile problem, not a defect in Seahaven's code.
+
+`import seahaven.openenv` fails on a clean `uv sync --locked --extra serve` under Python 3.14:
+
+```
+openenv.core.env_server.mcp_environment -> from fastmcp import Client
+  -> fastmcp.client -> ... -> beartype.typing
+  -> ImportError: cannot import name 'ByteString' from 'collections.abc'
+```
+
+`collections.abc.ByteString` was removed in Python 3.14. The `beartype` the lock resolves believes
+the removal was deferred to 3.17 (`_IS_PYTHON_AT_MOST_3_16`) and imports it unconditionally, and
+`fastmcp` turns the resulting `ImportError` into "FastMCP client support is not installed", which
+names the wrong cause. The effect is that `tests/test_client.py`, `tests/test_env.py`,
+`tests/test_serve.py`, `tests/test_server.py` and `tests/test_cli_serve.py` all fail to *collect*:
+they guard with `pytest.importorskip("openenv")`, which succeeds, and then import
+`seahaven.openenv`, which does not.
+
+Two things to decide, and both are a maintainer's call because both touch `uv.lock`:
+
+- **Which version of the closure works on 3.14.** A `beartype` release that knows about 3.14, or an
+  `openenv`/`fastmcp` that does not reach `beartype.typing` on the import path, or a lower bound on
+  one of them. None was reachable from the sandbox this was found in, which only had 3.14.0rc2 and a
+  fixed index.
+- **Whether the guard should be `seahaven.openenv` rather than `openenv`.** `importorskip("openenv")`
+  asks whether the extra is installed; what these modules need is whether it *works*. Changing the
+  guard would turn five collection errors into five skips, which is honest about an optional extra
+  but would also hide exactly this breakage.
+
+Related, and found the same way: the same lock's `pydantic` (2.13.5) fails on Python **3.14.0rc2**
+with `AssertionError` inside `eval_type_backport`, so `import seahaven` itself does not work on that
+interpreter; 2.12.3 does. That one is rc-only and should disappear against a final 3.14, which is
+what CI installs, so it is recorded here as context rather than as work.
+
+---
+
 ## Method notes
 
 Standing practice discovered the hard way; kept here because it changes how findings above are

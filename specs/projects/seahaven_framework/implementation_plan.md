@@ -31,7 +31,7 @@ specs; nothing here restates them.
       `components/openenv.md`: environment class, `SeahavenClient`, end-to-end tests with the stock
       and typed clients against the placeholder, the 500-session smoke test. The placeholder needs
       only its `openenv_app.py`; the hub files are Phase 7's, as template output.
-- [ ] **Phase 7: CLI and `seahaven check`.** `cli/` and `lint/` per `components/cli_and_check.md`:
+- [x] **Phase 7: CLI and `seahaven check`.** `cli/` and `lint/` per `components/cli_and_check.md`:
       `new` with templates, `--hub` and the hub files it writes, `check` with every lint code,
       `docs`, `fixture`, `serve`, world discovery. A scaffolded world passes `check` and its own
       tests.

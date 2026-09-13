@@ -25,6 +25,9 @@ dependencies = [
 [project.optional-dependencies]
 serve = ["openenv>=0.4.2,<0.5"]
 
+[project.scripts]
+seahaven = "seahaven.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/Kiln-AI/Seahaven"
 

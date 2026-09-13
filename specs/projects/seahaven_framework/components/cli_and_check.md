@@ -84,7 +84,7 @@ Rules (each with a test fixture pair):
 | SH402 | error | `file_sha256` mismatch | fixtures |
 | SH403 | error | `schema_hash` does not match the world | fixtures; fix: "regenerate with `seahaven fixture ...`" |
 | SH404 | error | `now` missing or not canonical | fixtures |
-| SH405 | error | state file not read-only or has `-wal`/`-shm` companions | fixtures |
+| SH405 | error | state file not read-only[^sh405] or has `-wal`/`-shm` companions | fixtures |
 | SH501 | error | package does not export a `World` named `world` | `cli.find_world` |
 
 SH103's hazard is the output format, not the clock: an instance's overrides already make a DDL
@@ -92,6 +92,14 @@ default read the frozen instant, but a timestamp the engine writes is not the ca
 other door uses, and one format across every door is the rule. The fix names `ctx.clock.iso()`.
 
 The gaps in the numbering are deliberate: retired codes are not reused.
+
+[^sh405]: **The read-only half of SH405 is not implemented, deliberately.** `freeze` seals the state
+file at `0444` and still does, but git records only the executable bit, so every committed fixture --
+which is every fixture -- comes back from a clone at `0644`, and the rule as written fires on
+ProjectTracker's own untouched `empty`. What the seal guards against is the file changing, which is
+SH402 over a hash version control does preserve. `phase_plans/phase_7.md` (departure 2) has the
+reasoning and the reproduction; `seahaven/lint/fixtures.py` carries it in the code. The companion
+half is implemented as stated.
 
 `check` imports the world package to run SH205, SH301 and SH501; an import error is reported as
 SH501 with the traceback's last line. A `SeahavenError` raised while the `World` is constructed is

@@ -1,0 +1,41 @@
+r"""How every fixture in `fixtures/` is made. Commit it, because it is the recipe.
+
+A fixture is a binary artifact, and a binary artifact with no source is one
+nobody can change. This module is that source: one function per fixture, each
+taking a live instance and filling it, which is exactly the shape the CLI calls:
+
+    uv run seahaven fixture freeze empty \
+        --now 2026-01-01T00:00:00.000Z \
+        --run fixtures_src.generate:empty \
+        --description "The schema with no rows. Start here to write a history."
+
+    uv run seahaven fixture fork empty small \
+        --run fixtures_src.generate:small \
+        --description "..."
+
+**Pass `--now` on every `freeze`, and the same one every time.** `freeze` starts
+from a blank instance, and a blank instance with no `--now` takes the wall clock,
+so leaving the flag off dates each fixture from the day it was built: a scenario
+written against one would then read differently from a scenario written against
+another, and `seahaven check` cannot tell you, because a wall-clock instant is a
+perfectly canonical timestamp. Choose the instant once, write it down here, and
+never move it — it is baked into every sidecar. `fork` needs no `--now`: a fork
+inherits its parent's clock, which is the point of forking.
+
+Fill through the world's own tools, or through `inst.bulk()` for thousands of
+rows at a time. Nothing here reads the wall clock, and nothing here is random
+outside `ctx.ids`.
+"""
+
+import seahaven
+
+__all__ = ["empty"]
+
+
+def empty(inst: seahaven.Instance) -> None:
+    """`empty`: the schema and nothing else.
+
+    Deliberately does no work. It exists so that the first fixture is made the
+    same way every later one is, and so the fixture others are forked from has a
+    source like the rest.
+    """

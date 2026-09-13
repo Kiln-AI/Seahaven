@@ -1,23 +1,32 @@
 """Shared fixtures: a frozen instant, a hardened database on it, and a small world."""
 
+import sys
+import tempfile
 import threading
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 
 from seahaven import instances
+from seahaven.cli import main
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, open_instance
 from seahaven.errors import ToolError
 from seahaven.ids import Ids, instance_seed
 from seahaven.instances import Instance
+from seahaven.lint import Target
 from seahaven.world import World
 
 WAIT = 5.0  # every thread test's patience, in seconds
+
+# The small worlds the lints and the CLI are run against (`tests/worlds/README.md`).
+WORLDS = Path(__file__).resolve().parent / "worlds"
 
 # Milliseconds on purpose: a clock whose instant is a whole second hides the
 # rounding mistakes that a world's canonical timestamps would trip over.
@@ -185,3 +194,81 @@ def instance(world: World) -> Iterator[Instance]:
     """A blank instance of that world, destroyed when the test ends."""
     with world.instance(None, now=INSTANT_ISO) as live:
         yield live
+
+
+@pytest.fixture
+def isolated_imports() -> Iterator[None]:
+    """Undo what a test's imports of a *world* did to the process.
+
+    The CLI and the lints import worlds, and discovery puts their project roots
+    on `sys.path` to do it. Both outlive the test that caused them, and a world
+    left in `sys.modules` would make the next test's import of it a no-op -- which
+    is exactly the thing SH301 is asking about. Declared with
+    `pytestmark = pytest.mark.usefixtures("isolated_imports")` by every module
+    that imports a world.
+
+    Only worlds are purged. A blanket sweep of everything imported during the
+    test would also evict a standard-library or third-party module that happened
+    to be imported lazily inside it, and a module re-imported behind objects that
+    still hold its old classes fails in a way nobody enjoys debugging. A world
+    lives under `tests/worlds/` or in a temporary directory; nothing else does.
+    """
+    path = list(sys.path)
+    modules = set(sys.modules)
+    try:
+        yield
+    finally:
+        sys.path[:] = path
+        for name in set(sys.modules) - modules:
+            if _is_a_test_world(sys.modules[name]):
+                del sys.modules[name]
+
+
+def _is_a_test_world(module: object) -> bool:
+    """Whether a module was loaded from somewhere a test put it.
+
+    A namespace package (`fixtures_src`, in a scaffold) has no `__file__` and
+    only a `__path__`, so both are asked.
+    """
+    roots = (str(WORLDS), tempfile.gettempdir())
+    places = [getattr(module, "__file__", None), *getattr(module, "__path__", [])]
+    return any(place is not None and str(place).startswith(roots) for place in places)
+
+
+def stub_target(world: World, package_dir: Path, imported: frozenset[str] = frozenset()) -> Target:
+    """A lint target over a directory of source files, with no package to import.
+
+    `lint.ddl` and `lint.code` read a world, its files and (for SH205) its tool
+    registry, and nothing else: a `Target` over a directory of `*.sql` and `*.py`
+    written by the test is the whole of what they need, and is what keeps a
+    committed world per malformed table out of `tests/worlds/`.
+    """
+    module = ModuleType("stub")
+    module.__path__ = [str(package_dir)]
+    return Target(world=world, package=module, imported=imported)
+
+
+@dataclass(frozen=True)
+class CliResult:
+    """What `seahaven` left behind: its exit code and its two streams."""
+
+    code: int
+    out: str
+    err: str
+
+    @property
+    def lines(self) -> list[str]:
+        return self.out.splitlines()
+
+
+def run_cli(capsys: pytest.CaptureFixture[str], *argv: str) -> CliResult:
+    """Run the CLI in process, the way its entry point does.
+
+    In process rather than as a subprocess: `main` is the entry point, its return
+    value is the exit code, and a subprocess would test the console script the
+    installer writes instead of anything here. The one test that does use a
+    subprocess is the scaffold's own `pytest` run, which has to be one.
+    """
+    code = main(list(argv))
+    captured = capsys.readouterr()
+    return CliResult(code=code, out=captured.out, err=captured.err)

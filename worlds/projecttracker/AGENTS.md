@@ -4,12 +4,12 @@ A Seahaven world. The framework's own documents are the place to start — `arch
 `components/projecttracker.md` under `specs/projects/seahaven_framework/` — and this file holds only
 what is particular to this world.
 
-The commands a finished Seahaven world's `AGENTS.md` points at (`seahaven docs`, which prints the
-directory the bundled authoring documentation is installed in, and `seahaven check`, which runs the
-lints before a commit) do not exist yet: the CLI is Phase 7 of the implementation plan and the
-bundled docs are Phase 8. They are not named above because a file that tells an agent to run a
-command that is not there costs more than the pointer is worth; the pointer goes in when the
-commands do.
+Commands: `uv run seahaven check` runs every lint over this world and is what to run before a
+commit; `uv run seahaven fixture list` lists its fixtures and `uv run seahaven fixture freeze` mints
+one; `uv run seahaven docs` prints the directory the bundled authoring documentation is installed
+in. That directory holds one stub page today: the `docs/` layout and its stubs are Phase 8 of the
+implementation plan and the prose is Phase 12, so the specifications under
+`specs/projects/seahaven_framework/` remain the place to read until then.
 
 This world lives inside the Seahaven repository rather than beside it, so the repository's own
 `AGENTS.md` — Python 3.14, fully typed, `ty` and `ruff` and the tests clean before any commit —

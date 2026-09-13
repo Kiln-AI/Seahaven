@@ -42,6 +42,7 @@ from seahaven.tool import Tool
 
 __all__ = [
     "CONTROL_TOOL_NAMES",
+    "DDL_DOES_NOT_EXECUTE",
     "RESERVED_TOOL_NAMES",
     "Handler",
     "Middleware",
@@ -71,6 +72,13 @@ RESET_ARGUMENTS = frozenset({"fixture", "now", "seed"})
 
 FIXTURES_DIRNAME = "fixtures"
 SQL_SUFFIX = ".sql"
+
+# What `_prove_the_ddl_executes` says when SQLite refuses a world's schema. Named
+# here because `seahaven check` has to tell that failure from every other
+# `SeahavenError` an import can raise -- the first is SH104, the rest are SH501 --
+# and it should read the framework's own constant rather than match a sentence it
+# does not own.
+DDL_DOES_NOT_EXECUTE = "has DDL that does not execute"
 
 _POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 _WHITESPACE = re.compile(r"\s+")
@@ -573,7 +581,7 @@ def _prove_the_ddl_executes(name: str, schema: str) -> None:
     try:
         build_blank(":memory:", schema).close()
     except apsw.Error as error:
-        raise WorldBug(f"world {name!r} has DDL that does not execute: {error}") from error
+        raise WorldBug(f"world {name!r} {DDL_DOES_NOT_EXECUTE}: {error}") from error
 
 
 def _derive_fixtures_dir(caller_file: str | None) -> Path:
