@@ -175,10 +175,8 @@ from this checkout with `uv pip install -e /path/to/Seahaven`.
 
 ## Contributing
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first. It has how this repository is developed (spec
-first, phase by phase), the checks that have to be clean, and the two things a contributor needs
-told before starting: there is no licence file yet, so ask before investing in a change, and the
-interpreter has to be a final 3.14 rather than a release candidate.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first: setup, the checks that have to pass, and the
+guidelines.
 
 ## Documentation
 
