@@ -226,9 +226,14 @@ resolves to the placeholder release described at the top of this page. The image
 container cannot start: there is no `seahaven.openenv` in it. Until publication, an image has to get
 the framework from a checkout or a private index, which means editing that `RUN` line.
 
-Remember that fixtures live outside the package (see [fixtures.md](fixtures.md)): an image has to
-carry `fixtures/`, or the world has to name where they are with `World(fixtures_dir=...)`. A server
-whose fixtures are missing can only serve blank instances.
+**The image is a checkout, and has to stay one.** A world is deployed by checking it out, never by
+installing it: that `Dockerfile` does `COPY . /app` and then `uv sync`, so the container holds the
+world's whole directory — `pyproject.toml`, `src/`, `fixtures/` — with the framework installed into
+its environment. Replace those two lines with a plain install of the world (`pip install .`,
+`pip install <world>`, a wheel built elsewhere) and the image builds, the server starts, every
+`reset()` with no fixture works, and every `reset(fixture=...)` fails: `fixtures/` is outside the
+package and is not in a wheel. [fixtures.md](fixtures.md) has why, the exact error, and
+`World(fixtures_dir=...)` for a deployment that has to put the directory somewhere else.
 
 One catch if you take the `fixtures_dir=` route: the README the environment publishes is looked for
 *beside the fixtures directory*, because that is the same project root `World` derives when it is

@@ -200,10 +200,14 @@ Notes on four of them:
   check. Line length is 100, and the lint rule set is `E, F, I, UP, B, SIM, RUF`.
 - **`ty check` covers `src`, `tests`, `scripts`, `worlds`, `extensions` and `bench`.** Everything is
   typed, tests included.
-- **`scripts/check_licences.py` checks the runtime closure only** — what `pip install seahaven`
-  pulls in, extras excluded — against a permissive allowlist, and prints `every runtime dependency
-  is permissively licensed` when it passes. Development tools are not checked because they are not
-  distributed. The extra is not checked either, which is `BACKLOG.md` B15.
+- **`scripts/check_licences.py` checks everything Seahaven ships** — what `pip install seahaven`
+  pulls in, plus every extra the project declares, because `serve` is a runtime extra — against an
+  allowlist, and prints `every shipped dependency is allowed (base closure plus: serve)` when it
+  passes. The rule is no copyleft: GPL, AGPL and LGPL are refused in any spelling, permissive
+  licences pass, and so do MPL-2.0 and CC0-1.0. An unrecognised identifier fails; so does a declared
+  extra that is not installed, because a licence that cannot be read cannot be cleared — run it in
+  an environment synced with `--extra serve`. Development tools are a dependency group rather than
+  an extra and are not checked, because they are distributed with nothing.
 
 One check is not in CI and is worth running anyway if you touched the lints or the reference world:
 

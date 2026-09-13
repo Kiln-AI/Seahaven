@@ -62,4 +62,8 @@ Everything else (ruff, ty, pytest) is configured in `pyproject.toml` and runs th
   (implementation plan, Phase 13).
 - No real customer data, ever. The reference world is fictional: no real product's names, schema or
   error text.
-- Runtime dependencies are permissive only (MIT, Apache-2.0, BSD-class); CI checks.
+- **No copyleft in anything Seahaven ships.** GPL, AGPL and LGPL are refused in the runtime
+  closure and in every extra, in any version or spelling. Permissive licences are allowed, and
+  so are MPL-2.0 (copyleft per file, not across a link or a process) and CC0-1.0
+  (public-domain equivalent). An unrecognised licence fails too: the gate is an allowlist.
+  `scripts/check_licences.py` is the rule; CI runs it with `--extra serve` installed.

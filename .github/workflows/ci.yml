@@ -54,7 +54,9 @@ jobs:
       - name: Example extension tests
         run: uv run pytest extensions/seahaven-xmlrpc
 
-      # Seahaven is vendored into other people's products: what it installs at
-      # runtime stays MIT, Apache-2.0 or BSD-class.
+      # Seahaven is vendored into other people's products: nothing it installs
+      # at runtime is copyleft. The gate covers every extra the project declares,
+      # so it has to run in the environment the `--extra serve` sync above built
+      # -- an extra whose licences cannot be read is not cleared, it fails.
       - name: Dependency licences
         run: uv run python scripts/check_licences.py

@@ -18,115 +18,6 @@ it. Close an item by deleting it in the commit that fixes it.
 
 ## Open
 
-### B11. A built world wheel ships no fixtures, so `instance(id)` fails from an install
-
-**Decision (2026-09-13, maintainer): a world is checked out, not installed. Document it and change
-no code.** No build-time error and no lint: a world that builds a wheel is off the supported path
-rather than wrong, and a lint would fire on every correct world that has fixtures. The runtime
-error already names the cause and the `fixtures_dir=` escape hatch at the moment it matters.
-
-**Found:** Phase 5, building `worlds/projecttracker` and installing the wheel into a clean
-environment. **Owner:** Phase 6 (`serve`) and Phase 7 (the `--hub` image). **Risk:** a world
-installed rather than checked out can only be run blank; every fixture-backed eval fails at startup.
-
-A world's `fixtures/` directory sits at the project root, beside `src/`, which is where `freeze`
-writes it and where `World`'s `fixtures_dir` default finds it by walking up to the `pyproject.toml`.
-A wheel has no project root. `uv build --project worlds/projecttracker` produces a wheel holding
-`projecttracker/` and nothing else — the schema travels because `schema/*.sql` is *inside* the
-package and `sql_files` reads it through `importlib.resources`, but `fixtures/` is outside it and is
-simply absent. Installed into a clean venv, `projecttracker.world.fixtures()` is `[]` and
-
-```
-world.instance("empty")
-WorldBug: world 'projecttracker' has no fixture 'empty' in .../site-packages/fixtures;
-freeze one, or name the directory with World(fixtures_dir=...)
-```
-
-while `world.instance()` — blank, from the schema — works. The error message is good and the
-`fixtures_dir=` escape hatch exists, so nothing here is broken as specified. What is missing is a
-statement of which way a world is meant to be deployed — and `functional_spec.md` §2.2 half-makes
-one already: `fixtures_dir` falls back "to `fixtures/` beside the package where there is none, as in
-an installed wheel", which says the installed case was thought about and leaves open how the
-directory gets there.
-
-Three ways to close it have been looked at, and **none of the three is a one-line change**; this
-entry records what each actually costs rather than proposing a fix.
-
-*Move `fixtures/` inside the package* (`src/projecttracker/fixtures/`) and read it through
-`importlib.resources` as the schema already is. This is the only shape that also survives a zipped
-wheel, but it is **framework work, not a world's directory move**: `fixtures_dir` is not a
-`Traversable` anywhere in the framework. `World.__init__` coerces whatever it is given with
-`Path(fixtures_dir)` (in `World.__init__`, `src/seahaven/world.py:117` as this phase leaves it),
-and `seahaven.fixtures` is `Path`-typed
-throughout — `Fixture.dir` and `Fixture.state_path`, `load`, `load_all`, `verify`, `freeze` and the
-copy that makes an instance all take or return `Path`, and `verify` hashes files off the filesystem.
-`importlib.resources.files()` hands back a `Traversable`, which `Path(...)` rejects for a zip member.
-Closing it this way means deciding whether fixtures are read through `Traversable` (and how `freeze`,
-which writes, fits a read-only abstraction), which is a fixtures-component change.
-
-*Keep the layout and have the build carry the directory* — hatchling's `force-include`, one line in
-the world's `pyproject.toml`, which `seahaven new` would then render. This does build and install,
-but it lands `fixtures/` **at the top of `site-packages`**, not under the package: the directory has
-no package to be inside, so there is nowhere namespaced to put it. Two installed worlds that each
-scaffolded an `empty` fixture then write to the same `site-packages/fixtures/empty/`, and the second
-install silently overwrites the first — breaking *both* worlds, since each then loads the other's
-state. That makes it unusable as the default a template renders, whatever it is worth for a single
-world pinned in its own venv.
-
-*Say plainly that a served world is a checkout and never a wheel.* This is defensible — `architecture.md`
-§6's `serve` runs from a world directory — and it is the only one of the three that costs nothing to
-state. But it needs saying explicitly, because Phase 7's `--hub` `Dockerfile` does `pip install .[serve]`
-and would otherwise decide the question by accident, in the direction the first two paragraphs show
-does not work.
-
-Phase 5 changed nothing: the layout is what `functional_spec.md` §2.1 specifies, and the choice is
-not a placeholder slice's to make.
-
-**Phase 6 did not close it either, and can be struck off the owner line.** `components/openenv.md`
-gives neither `app(world, ...)` nor `serve(world, ...)` a fixtures argument, so there is nothing in
-this component's spec for `serve` to pass: a world reaches the server already built, and where its
-fixtures live was decided before `serve` saw it. What Phase 6 adds is the consequence — a served
-world that is an install rather than a checkout answers every fixture-backed `reset` with the
-`WorldBug` above, over the wire, to an agent that cannot do anything about it. The choice is Phase
-7's, where the `--hub` `Dockerfile` makes it whether or not anyone writes it down.
-
----
-
-### B15. CI installs the `serve` extra, and the licence gate does not cover it
-
-**Decision (2026-09-13, maintainer): the rule is no copyleft, and the current closure meets it.**
-Widen `check_licences.py` to cover extras under that rule rather than the permissive-only allowlist:
-GPL, AGPL and LGPL are refused anywhere; permissive, file-level copyleft (MPL-2.0) and
-public-domain-equivalent (CC0-1.0) are allowed. MPL-2.0 is copyleft at file scope only and is not
-viral for linking a server process, which is why the `serve` closure passes as it stands.
-
-**Found:** Phase 6 code review, round 3. **Owner:** unassigned. **Risk:** low today, and the
-decision is a policy one rather than a code one.
-
-`scripts/check_licences.py` evaluates dependency markers with `{"extra": ""}` and says so in its own
-docstring: it gates "what `pip install seahaven` pulls in, extras excluded". That was the right
-scope while every extra was a development tool. Phase 6 made `serve` a *runtime* extra — CI now runs
-`uv sync --locked --extra serve` because the OpenEnv server tests need it — so there is now an
-installed, shipped-to-users closure that no gate looks at. Its licences are not all in the
-MIT/Apache-2.0/BSD set `AGENTS.md` names: MPL-2.0 (certifi, orjson, tqdm), CC0-1.0 inside numpy's
-licence expression, and MIT-CMU (pillow). None of those is copyleft-viral for linking a server
-process, which is why this is recorded rather than fixed.
-
-Two things have to be decided together, and both are a maintainer's call:
-
-- **Does an extra's closure need a licence policy at all?** An extra is opt-in and not part of
-  `pip install seahaven`, so a defensible answer is "no, and the docstring already says so".
-- **If it does, which policy?** Widening `check_licences.py` to every extra would fail the gate
-  today on the four licences above, so the change is not a one-line marker edit: it needs an
-  allowed-set decision (permissive plus MPL-2.0 and CC0-1.0, say) or a per-extra scope.
-
-Not fixed in Phase 6 on purpose: the phase's diff is the OpenEnv subpackage, and quietly widening a
-project-wide gate — or quietly loosening its allowed set to keep it green — is the kind of change
-that should be its own review. What Phase 6 does owe is that the gap is not invisible, which is this
-entry.
-
----
-
 ### B16. The README rules are a quarter of `seahaven/openenv/env.py` and belong in their own module
 
 **Found:** Phase 6 code review, round 4. **Owner:** unassigned. **Risk:** low as a defect, real as a
@@ -242,8 +133,6 @@ The framework question is whether `Ctx` should offer a monotonic per-instance co
 right answer is that evals should grade on state and on changesets rather than on the order of an
 activity feed. Either way it is a decision for the framework, not for one world, and it should be
 settled before the docs phase describes activity tables as a pattern.
-
----
 
 ---
 
@@ -400,8 +289,6 @@ OpenEnv uses the base `State` type where the environment's own subclass was mean
   that tells an operator the port, and contradicts §4), or an upstream `try/except` around that one
   `close`. Recorded rather than chosen, because filtering another library's error logs from inside
   `serve` is a decision with a blast radius, not a tidy-up.
-
----
 
 ---
 

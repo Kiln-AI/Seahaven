@@ -41,9 +41,12 @@ ships no console script. Install the framework from a checkout instead
 (`uv pip install -e /path/to/Seahaven`, with `[serve]` if the world will be served), or work in an
 environment that already has it. This paragraph disappears when Seahaven is published.
 
-Two structural rules. **A world is a package**, never a directory loaded by path: the tooling finds
+Three structural rules. **A world is a package**, never a directory loaded by path: the tooling finds
 it by importing it. **Grouping is by resource**, not one directory per tool — `tools/issues.py` with
-seven tools in it, not `tools/get_issue/`.
+seven tools in it, not `tools/get_issue/`. And **a world is checked out, not installed**: the unit
+you deploy is this whole directory, because `fixtures/` sits outside the package and does not travel
+in a wheel. See ["Where fixtures live" in fixtures.md](fixtures.md) — it is the one thing about the
+layout that bites later rather than at import.
 
 `src/notes/__init__.py` imports `world`, then the tool and middleware modules for their side
 effects, then registers any imported factories. A module under `tools/` or `middleware/` that

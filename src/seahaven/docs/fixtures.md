@@ -153,20 +153,49 @@ which is the reason the generator is committed.
 An extension that brings a DDL fragment (see [extensions.md](extensions.md)) changes the schema hash
 too. That is the cost of the fourth seam, and it is stated plainly there.
 
-## Where fixtures live
+## Where fixtures live, and how a world is deployed
 
 `fixtures/` at the project root, beside `src/`, found by walking up from the module that constructed
 the `World` to the directory holding `pyproject.toml`. `World(fixtures_dir=...)` names another
 directory outright.
 
-This matters for deployment. A built wheel carries the schema — `schema/*.sql` is inside the package
-and is read through `importlib.resources` — but `fixtures/` is outside the package and is not in the
-wheel. A world installed from a wheel with nothing else therefore has no fixtures:
-`world.fixtures()` is empty and `world.instance("empty")` raises a `WorldBug` naming the directory it
-looked in. Blank instances still work. Ship a world as a checkout or an image that carries
-`fixtures/`, or point `World(fixtures_dir=...)` at wherever the deployment puts them. (This is
-`BACKLOG.md` B11 in the Seahaven repository: the escape hatch works and the message is good, but the
-framework does not yet state one deployment shape.)
+**A world is checked out, not installed.** That is the supported deployment shape, and the only one:
+a world's directory — `pyproject.toml`, `src/`, `fixtures/` — is what you clone, mount into a
+container, or `COPY` into an image, and the framework is installed *into* that checkout's
+environment. `pip install <world>` is not a way to deploy a world, and the framework has no path
+that makes it one.
+
+The reason is that `fixtures/` sits **outside** the package on purpose. It is data the world ships
+rather than code it imports: the generator writes it, `freeze` adds to it, `seahaven check` hashes
+it off the filesystem, and a `git diff` on a frozen fixture should be a directory of bytes and not a
+package resource. A wheel holds the package and nothing above it, so a built wheel carries the
+schema — `schema/*.sql` is inside the package and is read through `importlib.resources` — and
+carries no fixtures at all.
+
+The consequence is sharp, and it is quiet until an eval runs:
+
+- `world.instance()` — **blank**, built from the DDL — works from an install. Nothing about a blank
+  instance touches the fixtures directory.
+- `world.instance("empty")`, and every other **fixture-backed** instance, raises a `WorldBug` naming
+  the directory it looked in and the two ways out. `world.fixtures()` is `[]`, and
+  `seahaven fixture list` prints nothing.
+
+  ```
+  WorldBug: world 'projecttracker' has no fixture 'empty' in .../site-packages/fixtures;
+  freeze one, or name the directory with World(fixtures_dir=...)
+  ```
+
+So a world that is installed rather than checked out serves blank instances and fails every eval
+that starts from data — over a server, that is a `reset(fixture=...)` failing for an agent that can
+do nothing about it.
+
+**If you really do have to install one**, `World(fixtures_dir=...)` is the escape hatch: put
+`fixtures/` wherever the deployment puts it and name that path. It is a supported argument and it
+works. What it does not do is travel in the wheel with everything else, so the deployment owns
+getting the directory there — a mounted volume, an image layer, a download at startup — and owns
+keeping it in step with the package's schema hash. Read
+["Publishing to a hub" in serving.md](serving.md) before taking this route; there is a second thing
+`fixtures_dir=` moves with it.
 
 ## Verifying them
 

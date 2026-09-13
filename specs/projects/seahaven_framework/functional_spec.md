@@ -87,6 +87,18 @@ the package where there is none, as in an installed wheel; a fixture that cannot
 `World(fixtures_dir=...)`). A missing or mistyped declaration is a constructor error at import, which
 is the best conformance message there is.
 
+**A world is deployed as a checkout, not as an install.** `fixtures/` is outside the package
+deliberately and is therefore absent from a built wheel, so the fallback above is what keeps the
+default from failing rather than a second supported shape: a world installed from a wheel serves
+blank instances and raises `WorldBug` on every fixture-backed one. A deployment that must install a
+world names the directory with `World(fixtures_dir=...)` and owns putting it there.
+
+*Corrected 2026-09-13 — the parenthesis named the installed-wheel fallback without saying that a
+wheel carries no fixtures, which reads as a deployment this project supports; measured in Phase 5 by
+building and installing `worlds/projecttracker`. The mechanism it describes is unchanged and
+correct. Closes `BACKLOG.md` B11, whose decision is that a world is checked out rather than
+installed, documented rather than enforced in code.*
+
 The tooling finds the world by convention: the project's package (from `[project] name` in
 `pyproject.toml`, normalised) exports a module attribute `world` that is a `seahaven.World`.
 `seahaven new` creates it that way. If the attribute is missing or is not a `World`, the CLI and the

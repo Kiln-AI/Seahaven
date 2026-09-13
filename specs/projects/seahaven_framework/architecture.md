@@ -559,4 +559,16 @@ handler, the three fixtures and the generator script, the tests.
 | `pyyaml` | `>=6` | sidecar |
 | `openenv` | `>=0.4.2,<0.5` | server, models, client; pre-1.0 so the upper bound is deliberate |
 
-Python `>=3.14`. All permissive; a CI step fails on any non-permissive runtime dependency.
+Python `>=3.14`. **No copyleft anywhere Seahaven ships.** `scripts/check_licences.py` walks the
+runtime closure *and* every extra the project declares, and fails on GPL, AGPL or LGPL in any
+version or spelling, on an unrecognised identifier, and on an extra that is declared but not
+installed. Permissive licences pass; so do MPL-2.0, whose copyleft is per file and does not cross a
+link or a process boundary, and CC0-1.0, which is public-domain equivalent. CI runs the gate in the
+environment it built with `uv sync --locked --extra serve`, which is the only environment in which
+the extras half of the rule means anything.
+
+*Corrected 2026-09-13 — this line read "All permissive; a CI step fails on any non-permissive
+runtime dependency", and the gate it described evaluated markers with no extra, so `serve` — a
+runtime extra since Phase 6 — was shipped and unchecked. The rule is now no copyleft rather than
+permissive-only, by the maintainer's decision; the closure it covers grew rather than the bar
+falling. Closes `BACKLOG.md` B15.*
