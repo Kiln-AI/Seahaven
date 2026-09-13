@@ -45,7 +45,7 @@ specs; nothing here restates them.
       the 25 world tools and the two helpers, the fixture generator and the three fixtures, tests on
       the plugin. The first real consumer of everything before it; API friction found here is fixed
       in the framework, not worked around in the world.
-- [ ] **Phase 11: benchmark and tuning.** `bench/` with the two workloads over `agency`; a tuning
+- [x] **Phase 11: benchmark and tuning.** `bench/` with the two workloads over `agency`; a tuning
       sweep over the concurrency gate's default (cold and warm cache) which confirms or adjusts it;
       results committed as `bench/results/latest.md`.
 - [ ] **Phase 12: docs.** The prose and reference pages, hand-written, including the ProjectTracker

@@ -702,3 +702,74 @@ world=...)`, defaulting to the package's), which is a template change and a docs
 `Instance.freeze` should take a destination directory, which is a framework change. It was not taken
 in Phase 10 because it is the scaffold's shape as much as the framework's and belongs with the
 template work rather than inside one world's diff.
+
+### B20. The concurrency gate starves a caller whenever it binds
+
+**Found:** Phase 11, the gate sweep (`bench/results/latest.md` §4). **Owner:** unassigned.
+**Risk:** real under load; no call is lost, but a session can wait seconds for a slot while
+others are served thousands of times.
+
+`instances.gate` is a `threading.BoundedSemaphore`, and a semaphore is not a queue. A thread that
+releases a slot and immediately asks for another usually wins the race against the waiter that was
+just woken: the waiter needs the GIL to make progress and the barging thread is already holding it.
+So the gate has no fairness at all, and the effect is not subtle. With five threads calling and the
+gate at 1, 2 or 4, one three-second window of the benchmark served its worst-served session **once**
+while another session, in that same window, was served 12,874 times. (The probe reports the counts
+per window rather than pooled across its repeats, so that range is two sessions running side by
+side and not two different windows.) At a gate of 8 -- above the five threads offered, so the gate
+never binds -- every session got 2,659 to 2,816 calls, and the same evenness holds at 16 and with
+no gate. The sweep's `worst` column says the same thing at 32 sessions: 1.2-5.0 s for the worst
+call at every gate that binds, against 148-244 ms with no gate at all.
+
+**The shipped default is not exempt.** On the four-cpu machine the benchmark ran on, the default is
+4, and gate 4 is one of the three sizes above that starved a reader to a single call. Any default
+that is smaller than the number of sessions calling at once binds, and every gate that binds does
+this; a server with 500 sessions and a gate of 16 is the ordinary case, not an edge one.
+
+No value of `n` fixes this, which is why Phase 11 left the default alone and recorded the finding
+here instead. `functional_spec.md` §13.1's promise -- "calls queue and nothing is rejected" -- is
+kept to the letter, but a call that queues for seconds behind a thread that keeps barging in front
+of it is not the service that sentence implies, and an eval whose episode times out because its
+session was the unlucky one will read it as a dropped request.
+
+The shape of a fix is a gate that hands slots out in arrival order -- a ticket lock, or a condition
+variable with an explicit FIFO of waiters -- replacing the semaphore in `gate()` and
+`set_concurrency`. It needs a test that drives more threads than slots and asserts that every
+thread is served, which is a test the suite does not have today: the existing gate tests check that
+`n` calls run at once and that the size is published, not that the `n + 1`th caller is ever let in.
+
+Worth knowing before acting: the benchmark measures a closed loop with no think time, which is the
+worst case for barging. A scouting run before the harness existed, with a millisecond of think time
+per session, did not reproduce it -- nobody is barging when everybody has just gone away to do
+something else. That observation is not in `latest.md` and was not made by the committed harness;
+take it as a hint about where to look, not as a measurement. It does suggest this is a saturation
+defect rather than a defect of every serving process, which is worth establishing before deciding
+how much to spend on it.
+
+### B21. `architecture.md` §5.2 states a throughput optimum the benchmark does not find
+
+**Found:** Phase 11. **Owner:** unassigned. **Risk:** low; a wrong rationale in a completed
+artifact, with the corrected one in the code and in `bench/results/latest.md`.
+
+§5.2's closing paragraph justifies the gate's default with two claims. Phase 11 measured both, and
+only one of them is wrong:
+
+- "`n` near the core count is the measured throughput optimum" -- it is not, on a build with the
+  GIL. Throughput is highest at `n = 1` in every row of the sweep and the cpu-count default runs
+  at 73-82% of it, so `n = 1` serves 22-37% more calls a second than the value the framework
+  computes.
+- "SQLite is about 7% of a call" **stands.** An earlier draft of this entry called it too low on
+  the strength of a 21% figure (the same leg reads 20% in the run `latest.md` now carries) that
+  had been measured through `seahaven.db.Db.rows` -- framework code, an error-translating context
+  manager and a dict per row -- and so counted half the data layer as SQLite. Measured on the APSW
+  cursor instead, the two statements are about 11% of the call, which is an upper bound on SQLite
+  proper because the inspection connection's authorizer runs while they are prepared. `latest.md`
+  §2 now reports all three legs separately. Nothing to fix here; it is recorded because the claim
+  was briefly filed as a defect and should not be re-filed.
+
+The same paragraph says "a later phase sweeps the value ... and tunes it", which Phase 11 did: the
+default stands for reasons `latest.md` records, and `instances.default_concurrency`'s docstring now
+carries them. What is left is the artifact. It is `status: complete`, and no phase in this
+repository has edited a completed spec artifact -- B2 is the same situation and made the same call.
+Whether to rewrite the paragraph, and take the cascade to `draft` that comes with it, is a
+maintainer's decision.

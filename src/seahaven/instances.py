@@ -90,9 +90,27 @@ def default_concurrency() -> int:
     """How many tool calls run at once unless an operator says otherwise.
 
     `process_cpu_count` follows a container's CPU affinity rather than the host's
-    core count, and is `None` on a platform that cannot say. A call is mostly
-    Python and SQLite on a warm page cache, so the core count is where throughput
-    tops out; the cap keeps a very large host from over-subscribing.
+    core count, and is `None` on a platform that cannot say. The cap keeps a very
+    large host from over-subscribing.
+
+    **This is not the throughput optimum, and it was never measured to be.** The
+    sweep in `bench/results/latest.md` found no optimum above 1 on a build with
+    the GIL: most of a call is Python, so a second runnable thread buys contention
+    rather than parallelism, and `n = 1` ran 22% to 37% more calls a second than
+    this default on every workload, cache state and offered load measured.
+
+    **Nor is it fair.** The same sweep found that a gate starves a waiting caller
+    whenever it binds -- at this size exactly as at any other, because the cause is
+    the semaphore and not the number (`BACKLOG.md` B20).
+
+    One measured reason is left: no value the sweep tried was better than this one
+    on every axis at once, everywhere it was measured. (`n = 1` is better on every
+    axis at 32 sessions; at four, and with one slow call in the process, it is the
+    value that waits worst.) Following cpu affinity is *not* a measured advantage --
+    this build has the GIL, and the sweep says nothing about what a free-threaded
+    one would do -- it is the shape that keeps that door open, which is a design
+    intent and is recorded here as one. An operator with a measurement of their own
+    world should reach for `serve --concurrency`.
     """
     return min(os.process_cpu_count() or 4, 16)
 

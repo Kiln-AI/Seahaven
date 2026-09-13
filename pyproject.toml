@@ -66,6 +66,7 @@ src = [
     "src",
     "tests",
     "scripts",
+    "bench",
     "worlds/projecttracker/src",
     "worlds/projecttracker/tests",
     "extensions/seahaven-xmlrpc/src",
@@ -78,7 +79,7 @@ extend-exclude = ["specs"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ty.src]
-include = ["src", "tests", "scripts", "worlds", "extensions"]
+include = ["src", "tests", "scripts", "worlds", "extensions", "bench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
