@@ -1,10 +1,18 @@
 ---
-status: draft
+status: complete
 ---
 
 # Phase 13: OSS readiness — the contribution guide only
 
 ## Overview
+
+> **How this phase closed.** The maintainer closed Phase 13 with the contribution guide alone.
+> Publication is not part of this project — neither the package nor the hub is published from this
+> repository, and the `seahaven` name on PyPI keeps the placeholder it already holds. The licence
+> file was not written and remains gated by `AGENTS.md`; it is a maintainer decision rather than a
+> deliverable, and nothing in the repository waits on it. The "still gated and unstarted" section at
+> the bottom is kept as the record of what was considered and deliberately not done, not as a
+> to-do list.
 
 Phase 13 in `implementation_plan.md` is four things: a contribution guide, a licence file, package
 publication, and hub publication of ProjectTracker. `AGENTS.md` gates the whole phase on explicit

@@ -51,9 +51,13 @@ specs; nothing here restates them.
 - [x] **Phase 12: docs.** The prose and reference pages, hand-written, including the ProjectTracker
       walkthrough and every lint code, plus the README. The authoring-experience phase
       (`functional_spec.md` §20).
-- [ ] **Phase 13: OSS readiness (sign-off gated).** Contribution guide, licence file, package
+- [x] **Phase 13: OSS readiness (sign-off gated).** Contribution guide, licence file, package
       publication, hub publication of ProjectTracker. Nothing in this phase starts without explicit
-      maintainer sign-off.
+      maintainer sign-off. **Closed with the contribution guide only.** Publication is not part of
+      this project: neither the package nor the hub is published here, and the `seahaven` name on
+      PyPI keeps the placeholder it already holds (`BACKLOG.md` B22 records what that costs a
+      reader). The licence file was not written and is still gated by `AGENTS.md`; it is a
+      maintainer decision, not a phase deliverable, and nothing downstream waits on it.
 
 ## Order and dependencies
 
