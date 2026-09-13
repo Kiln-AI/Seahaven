@@ -72,6 +72,45 @@ def test_a_world_is_its_name_its_version_and_its_schema(tmp_path: Path) -> None:
     assert (world.name, world.version, world.schema) == ("projecttracker", "1.2.0", SCHEMA)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        ".",
+        "..",
+        "../..",
+        "../escaped",
+        "a/b",
+        "a/",
+        "/abs",
+        "a\\b",
+        ".hidden",
+        "a/../b",
+        "a\x00b",
+    ],
+)
+def test_a_world_name_that_is_not_a_directory_name_is_refused(tmp_path: Path, bad: str) -> None:
+    """The name becomes a path component, and `_open_child`'s `O_NOFOLLOW` does not stop a `..`.
+
+    `World("..")` used to put an instance in the working root beside the
+    per-process directories, and `World("../..")` a live `state.sqlite` outside
+    the root entirely, where the sweep never looks.
+    """
+    with pytest.raises(WorldBug, match="not a world name"):
+        World(bad, "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+
+
+def test_a_world_name_is_refused_before_anything_is_built(tmp_path: Path) -> None:
+    """The name is checked first, so a bad name reads as a bad name and not as bad DDL."""
+    with pytest.raises(WorldBug, match="not a world name"):
+        World("..", "1.0.0", "CREATE TALBE notes (id TEXT PRIMARY KEY);", fixtures_dir=tmp_path)
+
+
+def test_a_dot_inside_a_world_name_is_fine(tmp_path: Path) -> None:
+    """Only a *leading* dot is refused: `..` is the traversal, `a.b` is a name."""
+    assert World("a.b", "1.0.0", SCHEMA, fixtures_dir=tmp_path).name == "a.b"
+
+
 def test_the_schema_hash_ignores_layout_and_nothing_else(tmp_path: Path) -> None:
     spaced = "CREATE   TABLE notes\n\t(id TEXT PRIMARY KEY,\n    body TEXT NOT NULL)\n STRICT;\n"
     renamed = SCHEMA.replace("body", "text")

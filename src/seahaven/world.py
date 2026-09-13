@@ -117,6 +117,7 @@ class World:
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
     ) -> None:
+        _check_name(name)
         self.name = name
         self.version = version
         self.schema = schema
@@ -558,6 +559,40 @@ def _read_sql(path: Traversable, package: str, directory: str, name: str) -> str
             f"schema file {name!r} in directory {directory!r} of package {package!r} "
             f"could not be read as UTF-8 text: {error}"
         ) from error
+
+
+def _check_name(name: str) -> None:
+    """A world's name becomes a directory name, so it has to be one.
+
+    The default working directory is `<root>/<pid namespace>-<pid>/<world name>/`
+    and `instances._open_child` hardens the *lookup* of every component of it --
+    `O_NOFOLLOW`, an owner check, a `dir_fd` -- on the understanding that what it
+    is given is one component. `O_NOFOLLOW` says nothing about `..`, which is not
+    a symlink, so nothing below this refuses a name that walks upwards:
+    `World("..")` put an instance in the working root beside the per-process
+    directories, and `World("../..")` put a live database outside the working root
+    entirely, where the sweep never looks and the files stay for ever.
+
+    The rule is `fixtures.check_id`'s -- one path segment, no leading dot, no NUL
+    -- with both separators refused rather than the platform's, because a world is
+    spelled once and read on every platform. (That is the one place the two rules
+    differ, and deliberately: `check_id`'s is `components/fixtures_instances.md`
+    §1's, which names the platform's own separator.) A name is also headed for
+    more than a path -- a log line, a sidecar, a URL -- which is the other reason
+    it is checked here, where the name is accepted, rather than where a directory
+    is made from it.
+    """
+    if (
+        not name
+        or "\x00" in name
+        or _SEPARATOR.search(name)
+        or name.startswith(".")
+        or name != Path(name).name
+    ):
+        raise WorldBug(
+            f"not a world name: {name!r}; World(name=...) is one directory name, with no "
+            f"separator and no leading dot"
+        )
 
 
 def _schema_hash(schema: str) -> str:

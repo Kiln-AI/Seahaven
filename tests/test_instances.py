@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -1141,6 +1142,40 @@ def test_without_a_procfs_the_working_directory_is_the_bare_pid(
         assert not dead.exists(), "the sweep did not run on the degraded layout"
 
 
+def test_the_working_root_is_never_wider_than_0o700_even_for_a_moment(
+    tmp_path: Path, temp_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mkdir` makes the root and `fchmod` settles it, and between them there is a window.
+
+    The mode `mkdir` is given is a ceiling masked by the umask, which is why the
+    `fchmod` follows it -- and is also why the ceiling has to be asked for: with
+    `mkdir`'s default of `0o777`, a permissive umask leaves the root
+    world-writable until the `fchmod` lands. The window exists at exactly one
+    observable moment, so it is read from inside the `fchmod` itself, under the
+    umask that makes the difference visible.
+    """
+    real_fchmod = instances.os.fchmod
+    seen: list[int] = []
+
+    def watch(fd: int, mode: int) -> None:
+        seen.append(stat_module.S_IMODE(os.fstat(fd).st_mode))
+        real_fchmod(fd, mode)
+
+    monkeypatch.setattr(instances.os, "fchmod", watch)
+    # Last, and with nothing between it and the `try`: anything that raises in
+    # between would leave `umask 000` behind for the rest of the session.
+    previous = os.umask(0o000)
+    try:
+        world = build_world(tmp_path, work_dir=None)
+        with world.instance(None):
+            pass
+    finally:
+        os.umask(previous)
+
+    assert seen == [0o700]
+    assert stat_module.S_IMODE(temp_root.stat().st_mode) == 0o700
+
+
 def test_a_working_root_left_behind_with_the_wrong_mode_is_repaired(
     tmp_path: Path, temp_root: Path
 ) -> None:
@@ -1326,6 +1361,43 @@ def test_the_sweep_removes_through_the_descriptor_it_judged_through(
     assert sorted(contents(victim)) == sorted(names), "the sweep removed through the root's name"
     assert contents(moved) == [], "the entries that were judged were not the ones removed"
     assert swept == 2
+
+
+def test_the_instance_directory_is_made_through_the_descriptor_that_was_checked(
+    tmp_path: Path, temp_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last `mkdir` is anchored to the checked `<world>` descriptor, not composed as a path.
+
+    Every component above it has just been checked, so on today's code a composed
+    path lands in the same place and the anchoring is a structural property with
+    no output to observe. It is staged the way the sweep's is: once the `<world>`
+    directory has been opened and checked, it is renamed away and a symlink to a
+    victim is left standing at its name. Through the descriptor the instance is
+    made in the directory that was judged; through the name it would be made in
+    the victim's.
+    """
+    world = build_world(tmp_path, work_dir=None, name="notesworld")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    process_dir = pid_dir(temp_root, os.getpid())
+    world_dir = process_dir / "notesworld"
+    moved = process_dir / "moved"
+    real_open_child = instances._open_child
+
+    @contextmanager
+    def swapping(parent: int, name: str) -> Iterator[int]:
+        with real_open_child(parent, name) as fd:
+            if name == "notesworld":
+                world_dir.rename(moved)
+                world_dir.symlink_to(victim)
+            yield fd
+
+    monkeypatch.setattr(instances, "_open_child", swapping)
+
+    world._instances()._make_instance_dir("an-instance")
+
+    assert contents(moved) == ["an-instance"], "the instance was not made through the descriptor"
+    assert contents(victim) == [], "the instance was made through the world directory's name"
 
 
 def test_a_platform_that_cannot_harden_the_root_has_no_default_working_directory(

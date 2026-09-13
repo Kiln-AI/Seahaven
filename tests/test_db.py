@@ -2,6 +2,7 @@
 
 import time
 from pathlib import Path
+from typing import Any
 
 import apsw
 import pytest
@@ -202,9 +203,108 @@ def test_world_code_keeps_sqlites_own_limits(db: Db) -> None:
         plain.close()
 
 
+def test_closing_the_database_closes_the_clock_helper(db_path: Path, clock: Clock) -> None:
+    """The clock overrides evaluate on a private connection, and closing the `Db` closes it.
+
+    Not hygiene that the collector would do anyway: every override in
+    `_FUNCTIONS` that `register_clock_functions` puts on the world connection is
+    a closure over the helper -- the three in `_CONSTANTS` hold a string read at
+    registration and are not -- so the helper outlives the `Db` for as long as
+    the world connection does. Left unclosed it is a live SQLite connection per instance, and an eval
+    run makes thousands of instances.
+    """
+    database = open_instance(db_path, clock)
+    helper = database._helper
+    assert helper is not None
+
+    database.close()
+
+    with pytest.raises(apsw.ConnectionClosedError):
+        helper.execute("SELECT 1")
+
+
+def test_an_inspection_connection_is_hardened_too(notes: Db, db_path: Path, clock: Clock) -> None:
+    """Read-only is not hardened: `_harden` runs on this connection as well.
+
+    Asked through `config`, which is a C-API call rather than a pragma, because
+    this connection's authorizer refuses every pragma that is not on its
+    allowlist -- `PRAGMA foreign_keys` included. Each answer is checked against a
+    connection SQLite opened for itself, so a default that ever comes to agree
+    with the hardened value fails here instead of quietly making the test vacuous.
+    """
+    inspection = open_inspection(db_path, clock)
+    plain = apsw.Connection(":memory:")
+    try:
+        for setting, hardened in (
+            (apsw.SQLITE_DBCONFIG_ENABLE_FKEY, 1),
+            (apsw.SQLITE_DBCONFIG_DEFENSIVE, 1),
+            (apsw.SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0),
+        ):
+            assert inspection.conn.config(setting, -1) == hardened
+            assert plain.config(setting, -1) != hardened, "SQLite's own default; nothing is proved"
+    finally:
+        plain.close()
+        inspection.close()
+
+
+def test_an_inspection_connection_refuses_a_pragma_that_is_not_on_the_list(
+    notes: Db, db_path: Path, clock: Clock
+) -> None:
+    """A pragma is judged by name, and nothing underneath the authorizer refuses these.
+
+    The read-only open refuses a pragma that writes the *database*; it does not
+    refuse one that only changes the *connection*, and `PRAGMA cache_size` takes
+    effect on a read-only connection like any other. Nor does anything refuse a
+    pragma that merely reports and is not on the allowlist. Both are denied by the
+    `SQLITE_PRAGMA` clause and by nothing else, which is what separates this from
+    the writes `test_inspection_reads_but_does_not_write` covers.
+    """
+    inspection = open_inspection(db_path, clock)
+    try:
+        for refused in ("PRAGMA cache_size = 100", "PRAGMA secure_delete = ON", "PRAGMA page_size"):
+            with pytest.raises(DbError) as raised:
+                inspection.execute(refused)
+            assert "not authorized" in raised.value.sqlite_message
+        # The allowlist is what lets anything through at all.
+        assert inspection.rows("PRAGMA table_info('notes')")
+    finally:
+        inspection.close()
+
+
 def test_extensions_cannot_be_loaded(db: Db) -> None:
     with pytest.raises(DbError):
         db.rows("SELECT load_extension('anything')")
+
+
+def test_hardening_turns_extension_loading_off_where_it_was_on(
+    db_path: Path, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every door this module opens refuses an extension, on purpose and not by default.
+
+    SQLite's own default is off as well, so `enable_load_extension(False)` has
+    nothing to show on a connection that arrives in the default state: the test
+    above passes whether or not `_harden` calls it. Here the connections are
+    handed to `_harden` with extension loading already on, which is the one state
+    that tells the call from the default -- without it SQLite gets as far as
+    looking for the file, and says so in place of refusing the call.
+    """
+    build_blank(db_path, NOTES).close()
+    real_connection = apsw.Connection
+
+    def already_loading(*args: Any, **kwargs: Any) -> apsw.Connection:
+        conn = real_connection(*args, **kwargs)
+        conn.enable_load_extension(True)
+        return conn
+
+    monkeypatch.setattr(apsw, "Connection", already_loading)
+
+    for database in (open_instance(db_path, clock), open_inspection(db_path, clock)):
+        try:
+            with pytest.raises(DbError) as raised:
+                database.rows("SELECT load_extension('anything')")
+            assert "not authorized" in raised.value.sqlite_message
+        finally:
+            database.close()
 
 
 def test_a_second_writer_fails_instead_of_waiting(notes: Db, db_path: Path) -> None:

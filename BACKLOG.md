@@ -18,100 +18,6 @@ it. Close an item by deleting it in the commit that fixes it.
 
 ## Open
 
-### B1. `db.py` connection hardening is untested
-
-**Found:** Phase 3 code review, round 4 — a clean-bytecode mutation sweep of 912 statements across
-phases 1–3. **Owner:** unassigned. **Risk:** security-relevant; not a known regression.
-
-`src/seahaven/db.py` was written in Phase 1 and never mutation-tested. Each of these can be deleted
-with the entire suite still green:
-
-- `db.py:257` — `_harden(conn)` in `open_inspection()`. Nothing proves the inspection connection
-  gets `foreign_keys`, `DEFENSIVE`, `TRUSTED_SCHEMA=0` or extension loading off.
-- `db.py:342` — `conn.enable_load_extension(False)` inside `_harden()`. No test proves extension
-  loading is refused on any connection.
-- `db.py:360-363` — the `SQLITE_PRAGMA` clause and its `return apsw.SQLITE_DENY` in
-  `_deny_writes()`. The read-only-pragma denial on the *inspection* authorizer has no test.
-  `tests/test_sandbox.py` exercises `sandbox.py`'s authorizer, a different code path — it does not
-  cover this one.
-
-Two further survivors need judgement rather than tests, and should be either pinned or recorded as
-equivalent mutants in the style the phase plans use: `db.py:245` `conn.set_busy_timeout(0)`, and
-`db.py:172, 233-234` `cursor.close(force=True)` and the helper close.
-
-The hardening is believed correct — it is unproven, not broken. If any of it turns out to be
-actually broken, that is a finding to report, not to quietly fix.
-
-### B4. `world.name` is an unvalidated path component
-
-**Decision (2026-09-13, maintainer): fix.** `World.__init__` must refuse a name that is not a
-single path segment.
-
-**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — not attacker
-reachable; a world's name is written by the world's author and never arrives off the wire.
-
-The default working directory is `<tempdir>/seahaven-<uid>/<namespace>-<pid>/<world name>/`.
-`instances.py:_open_child` hardens the *lookup* of each component — `O_NOFOLLOW`, an owner check,
-`dir_fd` — and assumes the component it is given is a single path segment. `World.__init__` in
-`world.py` never checks that. `O_NOFOLLOW` is no help here: `..` is not a symlink.
-
-Verified by making a real instance of each:
-
-- `World("..")` puts the instance directly in the working root, beside the per-process directories.
-- `World("../..")` puts a live `state.sqlite` **outside the working root entirely**, where the sweep
-  will never see it — a permanent leak of the world's data into `<tempdir>`.
-- `World("../escaped")` lands inside the root but outside any per-process directory, likewise
-  never swept.
-- `World("a/b")` and `World("")` are refused, but only incidentally, as `ENOENT` wrapped in the
-  working-directory `WorldBug`.
-
-The fix is validation shaped like `fixtures.check_id` — one path segment, no leading dot, not `.`
-or `..` — in `World.__init__`, refusing with a `WorldBug` that names `World(name=...)`. It is
-recorded here rather than fixed in Phase 3 because the *use* is Phase 3's but the *validation*
-belongs in `world.py`, which is Phase 2's and already committed. A world name is also likely to end
-up in more than a path (a log line, a sidecar, a URL in Phase 6/7), so the rule belongs where the
-name is accepted.
-
-### B5. The default working root is created `0o777` and only then tightened
-
-**Decision (2026-09-13, maintainer): fix.** Pass `mode=0o700` to the `mkdir` so the ceiling is
-`0o700` for the window, keeping the `fchmod` and extending its docstring to say both are used.
-
-**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — hardening, not a
-hole; every consequence of winning the window is refused by something else.
-
-`instances.py:_make_instance_dir` does `root.mkdir(parents=True, exist_ok=True)` and then
-`os.fchmod(root_fd, 0o700)` on a checked descriptor. `mkdir`'s default mode is `0o777`, masked by
-the umask, so under `umask 000` the root exists world-writable between the two calls (confirmed:
-mode at creation `0o777`, mode after the `fchmod` `0o700`). Anything planted in that window is
-refused when it is used — `_open_child` checks owner and `O_NOFOLLOW` at every level, which is what
-round 5 and round 6 verified with a second uid — so this is depth, not a live defect.
-
-`root.mkdir(mode=0o700, parents=True, exist_ok=True)` costs nothing and makes the ceiling `0o700`
-instead of `0o777` for the window. Note that the docstring's "`mkdir`'s mode is masked by the umask,
-so it is a ceiling and not a setting" argument is the reason the `fchmod` exists, not a reason to
-leave the ceiling at `0o777`; whoever makes this change should extend that paragraph to say both are
-used and why.
-
-### B6. The descriptor-anchored final `mkdir` is claimed by a docstring and pinned by no test
-
-**Found:** Phase 3 code review, round 6. **Owner:** unassigned. **Risk:** low — harmless on today's
-code; a test gap around a structural property.
-
-`instances.py:_make_instance_dir` ends with `os.mkdir(instance_id, 0o700, dir_fd=world_fd)`, and its
-docstring says the instance directory is created relative to the checked `<world>` descriptor rather
-than composed as a string and resolved again. Replacing that line with a composed-path
-`(root / process / world / instance_id).mkdir(0o700)` survives the entire suite under both umasks.
-It is harmless today because every component above it has just been checked and is `0o700` and ours,
-so there is nothing to redirect the composed path — the same position the `S_ISDIR` guard in the
-sweep is in, where the structural property was pinned rather than the line dropped.
-
-Two ways to close it, and the choice is the point: stage the swap (rename the checked `<world>`
-directory away and leave a symlink at its name between the `_open_child` and the `mkdir`, in the
-monkeypatch style `test_the_sweep_removes_through_the_descriptor_it_judged_through` uses) and assert
-the instance is not made through the link; or soften the docstring to claim only what is tested.
-Pinning it is the better answer if the anchoring is meant to survive later edits.
-
 ### B11. A built world wheel ships no fixtures, so `instance(id)` fails from an install
 
 **Decision (2026-09-13, maintainer): a world is checked out, not installed. Document it and change
@@ -386,6 +292,91 @@ activity feed. Either way it is a decision for the framework, not for one world,
 settled before the docs phase describes activity tables as a pattern.
 
 ---
+
+---
+
+### B24. `hatchling` is a leftover from the name squat; this is a uv project
+
+**Found:** 2026-09-13, closing B17 and reviewing the packaging. **Owner:** unassigned.
+**Risk:** none today — the builds work. It is a dependency and a config surface the project does
+not need, in five files.
+
+**Decision (2026-09-13, maintainer): remove `hatchling` and build with uv.** It was a placeholder
+chosen when the package name was reserved, nothing more.
+
+Five `pyproject.toml` files declare `requires = ["hatchling"]` with `build-backend =
+"hatchling.build"` and a `[tool.hatch.build.targets.wheel]` block: the framework, the reference
+world, the example extension, and the scaffold template `new` writes (so every world made from now
+on inherits it).
+
+The move is `uv_build`, and the thing to prove rather than assume is that the package data still
+travels. Hatchling ships every file under `src/seahaven` with no `include` declared, which is what
+carries `docs/*.md`, `docs/reference/*.md` and `cli/templates/**/*.tmpl` into the wheel — Phase 8
+and Phase 12 both verified that by building and inspecting. `uv_build` has its own rules about what
+is included, so:
+
+- build the wheel for each of the four packages and inspect it, not just build it clean;
+- confirm the framework wheel still carries all eleven docs pages and all 21 template files, and
+  that `entry_points.txt` still has the `seahaven` console script and the `pytest11` entry point;
+- confirm the reference world's wheel still carries `schema/*.sql`, which `sql_files` reads through
+  `importlib.resources` (its `fixtures/` is outside the package and deliberately does not travel —
+  that is B11, decided and documented);
+- the scaffold template changes too, so a fresh `seahaven new` must still pass its own tests and
+  `seahaven check`.
+
+`tests/test_docs_examples.py` and `tests/test_cli_new.py` already build or inspect a wheel in
+places; whatever proves the above belongs in the suite rather than in a phase plan, since the
+failure mode is silent — a wheel that builds fine and is missing a file nobody imports until a
+user does.
+
+---
+
+### B25. `_make_instance_dir` anchors the `mkdir` and then returns a composed path
+
+**Found:** 2026-09-13, closing B6 — the test written for it is what made this visible. **Owner:**
+unassigned. **Risk:** low and of the same shape as B6's: not reachable on today's code, because
+every component above the instance directory has just been checked. It is the half of the anchoring
+that stops at the `mkdir`.
+
+`instances.py:_make_instance_dir` creates the instance directory relative to the checked `<world>`
+descriptor — `os.mkdir(instance_id, 0o700, dir_fd=world_fd)`, which B6 now pins — and then answers
+`root / process / self._world.name / instance_id`, a string composed from the same names all over
+again. Every caller after it works on that path: `state = directory / STATE_NAME`, the
+`build_blank` or `copyfile` that fills it, and every later open. So the inode the framework created
+and the file it then writes are resolved twice, by two different routes, and only the first route
+is the checked one.
+
+Staged with B6's own swap — the `<world>` directory renamed away and a symlink to a victim left at
+its name between the `_open_child` and the `mkdir`, plus a fixed instance id so the attacker's
+directory can be named — a real `world.instance(None)` puts the empty directory where it belongs
+and the database where it does not:
+
+```
+returned dir                        : <root>/<ns>-<pid>/notesworld/1111...5555
+inode made through the descriptor   : ['1111...5555']          # under the renamed-away directory
+what the attacker's directory holds : ['state.sqlite', 'state.sqlite-shm', 'state.sqlite-wal']
+state.sqlite in the checked dir     : False
+```
+
+Without the pre-created `victim/<instance id>` the same staging fails at `build_blank` with a bare
+`apsw.CantOpenError: unable to open database file`, which is what makes this hard to see: the
+obvious staging of it looks like a crash rather than a redirection.
+
+The docstring is already honest about what comes back — "What comes back is a path, because that is
+what SQLite and the rest of this module take; by then every component of it is an inode this user
+made or owns" — and that sentence is exactly the assumption above. It could say so in one clause:
+the path is composed, and it is only as good as the components having been checked a moment
+earlier.
+
+Two ways to close it, and neither is a line: hand the caller the `<world>` descriptor (or an
+`os.open` of the new directory) so that the state file is created with `dir_fd` as well, which
+means `build_blank`, `shutil.copyfile` and `apsw.Connection` all taking a descriptor — APSW takes a
+path, so this bottoms out at `/proc/self/fd/<n>` on Linux and at nothing portable; or `os.fstat`
+the new directory through the descriptor and again through the composed path and refuse if they are
+not the same inode, which closes the window without widening any signature. The second is the
+cheaper and is not free of races either. Filed rather than taken because the choice belongs with
+whoever decides how far down the descriptor discipline goes, and because B6's decision was about
+the `mkdir` specifically.
 
 ---
 

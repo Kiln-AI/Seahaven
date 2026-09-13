@@ -130,7 +130,7 @@ def test_freeze_refuses_an_id_that_already_exists(world: World) -> None:
     assert contents(world.fixtures_dir) == ["start"]
 
 
-@pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "/abs", ".hidden", "a/../b"])
+@pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "/abs", ".hidden", "a/../b", "a\x00b"])
 def test_freeze_refuses_an_id_that_is_not_a_directory_name(world: World, bad: str) -> None:
     with world.instance(None) as instance, pytest.raises(WorldBug, match="not a fixture id"):
         instance.freeze(bad, "Empty.")

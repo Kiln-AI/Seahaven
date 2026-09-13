@@ -548,7 +548,8 @@ class InstanceManager:
 
         A directory from the layout before this one -- a bare `<pid>`, with no
         namespace prefix -- is not swept, and nothing else will remove it either.
-        `BACKLOG.md` B3 records the leak.
+        Deliberately: the condition that would make it safe to sweep is the
+        cross-namespace hazard the pid prefix was added to remove.
         """
         if self._world.work_dir is not None or not _POSIX_WORK_ROOT:
             return 0
@@ -643,12 +644,20 @@ class InstanceManager:
         rather than relying on the root's mode, because the root's mode protects
         what is under it only as far as the root itself is trustworthy, and
         `_open_root` exists precisely because a root found already in place is
-        not. `fchmod` on a descriptor, and not `mkdir(mode=...)` on a path, for
-        three reasons: `mkdir`'s mode is masked by the process umask, so it is a
-        ceiling and not a setting; `exist_ok` says nothing about the mode of a
-        directory that is already there, so the mode is re-asserted on every
-        call and a root left by an earlier run is repaired; and a path can be
-        redirected between the two calls.
+        not. Both are used, and neither replaces the other. `mkdir(mode=0o700)`
+        is a ceiling and not a setting, because the process umask masks it, so it
+        cannot be relied on to leave `0o700` behind -- which is the whole reason
+        the `fchmod` exists. What it does do is make the ceiling `0o700` rather
+        than `mkdir`'s default `0o777` for the window between the two calls: the
+        argument that the mode is only a ceiling is a reason to follow it with an
+        `fchmod`, not a reason to leave the ceiling wide, and under `umask 000`
+        that is the difference between a root that is briefly world-writable and
+        one that never is. The `fchmod` settles the mode, and it is on a
+        descriptor and not on a path for two further reasons of its own:
+        `exist_ok` says nothing about the mode of a directory that is already
+        there, so the mode is re-asserted on every call and a root left by an
+        earlier run is repaired; and a path can be redirected between the two
+        calls, while an inode cannot.
         """
         configured = self._world.work_dir
         if configured is not None:
@@ -668,7 +677,7 @@ class InstanceManager:
         root = _default_work_root()
         process = _process_dirname(os.getpid())
         try:
-            root.mkdir(parents=True, exist_ok=True)
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
             with _open_root(root) as root_fd:
                 os.fchmod(root_fd, 0o700)
                 # The per-process directory is one per process and not one per

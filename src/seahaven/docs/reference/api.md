@@ -57,7 +57,9 @@ processes' leftovers, and a directory you name is used exactly as given and neve
 `untracked_tables` names tables the changeset session does not attach.
 
 A `World` whose DDL does not execute cannot be constructed: the schema is built in memory to compute
-the schema hash, and SQLite's own message is reported.
+the schema hash, and SQLite's own message is reported. Nor is one whose `name` is not a single
+directory name — the name is a path component of the default working directory, so an empty name,
+a separator, a leading dot or a NUL is refused with `not a world name`.
 
 | Member | What it is |
 |---|---|

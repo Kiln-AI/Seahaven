@@ -115,8 +115,22 @@ def check_id(fixture_id: str) -> None:
     Ids arrive over the wire (`reset(fixture=...)`), and an id that is a path is
     a path traversal. The rule is the same one `freeze` applies when it mints
     one: a single path segment, no leading dot.
+
+    The NUL is part of the segment rule rather than an addition to it -- no
+    filename can hold one -- and it is named because `Path` does not refuse it:
+    `"a\\x00b" == Path("a\\x00b").name`, so without this clause the id reached
+    `freeze`'s `rmtree` -- whose `ignore_errors=True` suppresses `OSError` and a
+    `ValueError` is not one -- and came back as a bare `ValueError` about an
+    embedded null character instead of the refusal above. `world._check_name` applies the same
+    rule to a world's name, and refuses both separators rather than the
+    platform's; keep the two in step.
     """
-    if not fixture_id or fixture_id != Path(fixture_id).name or fixture_id.startswith("."):
+    if (
+        not fixture_id
+        or "\x00" in fixture_id
+        or fixture_id != Path(fixture_id).name
+        or fixture_id.startswith(".")
+    ):
         raise WorldBug(
             f"not a fixture id: {fixture_id!r}; a fixture id is one directory name, with no "
             f"separator and no leading dot"
