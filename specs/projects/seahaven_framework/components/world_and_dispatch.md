@@ -66,10 +66,23 @@ is what a world's fixture test builds through, so that rebuilding the committed 
 temporary directory does not move the imported world's directory for every other caller in the
 process (`fixtures_src/generate.py`'s `build(fixture_id, *, world=...)`).
 
-The registries are copied and not shared, so registering on a copy does not reach back. The
-instance manager is **not** carried over: a manager hands the world it was made for to every
-instance it creates, and that world is the one an instance freezes into — a copy that inherited one
-would freeze back into the directory it was copied from, silently.
+The three registries are copied and not shared: a copy is a **snapshot of them taken at copy
+time**, severed in both directions. Nothing registered on the copy reaches back into the original,
+and nothing registered on the original afterwards reaches the copy — whose `chain` stays as it was
+at the copy. It is the one place a world stops being open for registration for the life of the
+process (§1.3), so a copy is taken after import-time registration is complete. The instance manager
+is **not** carried over: a manager hands the world it was made for to every instance it creates,
+and that world is the one an instance freezes into — a copy that inherited one would freeze back
+into the directory it was copied from, silently.
+
+`copy.deepcopy(world)` is not supported and is not made to be: a world holds a lock and, once it
+has made instances, live SQLite connections, and the copy that a caller pointing a world somewhere
+else wants is the shallow one — `copy.copy` is that seam.
+
+*Added 2026-09-13 — `World.__copy__` and, with it, the scaffold's and the reference world's
+`build(fixture_id, *, world=...)`: a plain shallow copy inherits the instance manager, which hands
+the *original* world to every instance it makes and so freezes back into the original's fixtures
+directory. Closes `BACKLOG.md` B19.*
 
 ### 1.2 Registration
 

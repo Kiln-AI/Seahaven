@@ -241,15 +241,20 @@ class World:
         other caller too, for the rest of the run. A copy is how that is said
         locally.
 
-        The registrations are copied rather than shared, so registering a tool on
-        a copy does not reach back into the world it came from. The instance
-        manager is deliberately *not* carried over: a manager hands the world it
-        was made for to every instance it makes, and that world is the one an
-        instance freezes into -- so a copy that inherited one would quietly
-        freeze back into the directory the copy was taken from, which is the one
-        thing a copy exists to avoid.
+        A copy is a *snapshot of the three registries*, taken at copy time and
+        severed in both directions: the copy does not see a tool, a middleware or
+        a startup hook registered on the original afterwards, its `chain` stays
+        as it was, and nothing registered on the copy reaches back. That is the
+        one place a world stops being open for registration for the life of the
+        process, so take the copy after import-time registration is done.
+
+        The instance manager is deliberately *not* carried over: a manager hands
+        the world it was made for to every instance it makes, and that world is
+        the one an instance freezes into -- so a copy that inherited one would
+        quietly freeze back into the directory the copy was taken from, which is
+        the one thing a copy exists to avoid.
         """
-        twin = object.__new__(World)
+        twin = object.__new__(type(self))
         twin.__dict__.update(self.__dict__)
         twin._tools = dict(self._tools)
         twin._middlewares = list(self._middlewares)

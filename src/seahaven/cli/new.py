@@ -110,7 +110,7 @@ def render(name: str, target: Path, *, hub: bool = False) -> Path:
             _render_group(group, target, package, substitutions)
     except BaseException:
         # Either a whole world or nothing: a directory holding three of its
-        # fifteen files is worse than no directory at all.
+        # seventeen files is worse than no directory at all.
         shutil.rmtree(target, ignore_errors=True)
         raise
     return target

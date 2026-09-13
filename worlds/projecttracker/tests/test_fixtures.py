@@ -453,11 +453,13 @@ def test_the_generator_run_as_a_script_refuses_to_overwrite_a_committed_fixture(
 def test_the_generators_functions_say_in_their_types_what_a_builder_is() -> None:
     """`--run module:function` has to find a real signature at the end of it.
 
-    The recipe's contract is its two signatures: a builder takes a live instance
-    and returns nothing, and `build` hands back the frozen fixture. They are
-    annotations, so nothing at runtime evaluates them on its own -- this asks
-    them to resolve, which is what a reader, `ty`, and Phase 7's CLI all assume
-    they do.
+    The recipe's contract is its three signatures: a builder takes a live
+    instance and returns nothing, `build` hands back the frozen fixture, and
+    `main` is the command line over `build` -- `world=` is part of that seam now,
+    so a caller rebuilding the whole set somewhere else has it at both doors.
+    They are annotations, so nothing at runtime evaluates them on its own -- this
+    asks them to resolve, which is what a reader, `ty`, and Phase 7's CLI all
+    assume they do.
     """
     module = generate()
 
@@ -469,6 +471,11 @@ def test_the_generators_functions_say_in_their_types_what_a_builder_is() -> None
         "fixture_id": str,
         "world": seahaven.World | None,
         "return": seahaven.Fixture,
+    }
+    assert inspect.get_annotations(module.main, eval_str=True) == {
+        "argv": list[str],
+        "world": seahaven.World | None,
+        "return": int,
     }
 
 

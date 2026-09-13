@@ -194,16 +194,59 @@ def test_a_copy_keeps_the_registrations_and_freezes_where_it_is_pointed(tmp_path
 
 
 def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
-    """The registries are copied, not shared: a tool added to a copy does not reach back."""
+    """All three registries are copied, not shared: nothing added to a copy reaches back."""
+
+    def passthrough(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        return next_(ctx, call)
+
+    def startup(ctx: Ctx) -> None:
+        pass
+
     world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
     world.tool(echo)
 
     elsewhere = copy.copy(world)
     elsewhere.tool(echo, name="echo_twice")
+    elsewhere.middleware(passthrough)
+    elsewhere.instance_startup(startup)
 
     assert "echo_twice" in elsewhere.tools
     assert "echo_twice" not in world.tools
     assert "echo" in elsewhere.tools
+    assert elsewhere.middlewares == (passthrough,)
+    assert world.middlewares == ()
+    assert [hook.fn for hook in elsewhere.startup_hooks] == [startup]
+    assert world.startup_hooks == ()
+
+
+def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -> None:
+    """The other direction, which the docstring and the spec both promise.
+
+    `world.py`'s module docstring says registration is open for the life of the
+    world and that the registry and the chain are read at call time. A copy is
+    the one place that stops: it holds the three registries as they were, so a
+    world is copied once import-time registration is done and not before.
+    """
+
+    def passthrough(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        return next_(ctx, call)
+
+    def startup(ctx: Ctx) -> None:
+        pass
+
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world.tool(echo)
+    elsewhere = copy.copy(world)
+    frozen_chain = elsewhere.chain
+
+    world.tool(echo, name="echo_twice")
+    world.middleware(passthrough)
+    world.instance_startup(startup)
+
+    assert "echo_twice" not in elsewhere.tools
+    assert elsewhere.middlewares == ()
+    assert elsewhere.startup_hooks == ()
+    assert elsewhere.chain is frozen_chain
 
 
 def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) -> None:

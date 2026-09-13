@@ -314,6 +314,36 @@ def test_two_markers_in_a_modules_pytestmark_are_refused(pytester: pytest.Pytest
     result.stdout.fnmatch_lines(["*2 @pytest.mark.seahaven markers*"])
 
 
+def test_a_subclass_pytestmark_beside_its_bases_is_refused(pytester: pytest.Pytester) -> None:
+    """A base class and a subclass each carrying `pytestmark`: still one node.
+
+    `get_unpacked_marks` consolidates a class's marks over `reversed(__mro__)`,
+    so the subclass's `Class` node owns *both* -- the base's first -- and
+    `get_closest_marker` takes the first. The override a reader writes is read
+    backwards and nothing says so, which is the same defect one level down from
+    two decorators on a test.
+    """
+    write_world(pytester)
+    freeze_fixture(pytester)
+    pytester.makepyfile(
+        """
+        import pytest
+
+        class Base:
+            pytestmark = [pytest.mark.seahaven(fixture=None)]
+
+        class TestIt(Base):
+            pytestmark = [pytest.mark.seahaven(fixture="empty")]
+
+            def test_it(self, instance):
+                assert instance is not None
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*2 @pytest.mark.seahaven markers*"])
+
+
 def test_a_marker_on_a_test_overrides_the_modules(pytester: pytest.Pytester) -> None:
     """The legitimate override, which the refusal above must not touch.
 

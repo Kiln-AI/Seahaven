@@ -28,6 +28,7 @@ notes/
   fixtures_src/generate.py     # the script every fixture is built by; committed
   fixtures/                    # empty until you freeze one
   tests/test_items.py
+  tests/test_fixtures.py       # the fixture recipe above, run into a temporary directory
 ```
 
 **Before you run the `uv sync` that `seahaven new` prints as its next step:** while Seahaven is

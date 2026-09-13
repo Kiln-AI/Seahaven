@@ -47,9 +47,12 @@ _REGISTERED = re.compile(r'code="(SH\d+)"')
 # exactly the staleness these tests exist to catch.
 _DOCUMENTED = re.compile(r"^\|\s*(SH\d+)\s*\|", re.MULTILINE)
 
-# A markdown link target that is meant to name a page of the layout. An `http`
-# target is a link *out* of the docs, and the test below is about which pages
-# exist -- matching one would fail the layout test over a working link.
+# Every markdown link target except an `http`/`https` URL, which is a link *out*
+# of the docs: the test below is about which pages exist, and matching one would
+# fail the layout test over a working link. Nothing else is excluded -- a
+# `mailto:`, a protocol-relative `//host/x` or an in-page `#anchor` would be read
+# as a page and fail. None exists in the docs, and this is a layout test rather
+# than a link checker, so the pattern is left as narrow as what it is asked.
 _PAGE_LINK = re.compile(r"\]\((?!https?://)([^)]+)\)")
 
 DOCS = Path(docs_path())

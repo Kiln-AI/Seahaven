@@ -331,6 +331,27 @@ whoever decides how far down the descriptor discipline goes, and because B6's de
 the `mkdir` specifically.
 
 ---
+### B26. ProjectTracker's two rebuild tests are marked `@slow` and are no longer slow
+
+**Found:** 2026-09-13, instrumenting the suites with `--durations` to answer "are the tests slow?".
+**Owner:** unassigned. **Risk:** none to correctness. The cost is that the marker stops meaning
+anything, which is how a real slow test later gets marked and ignored.
+
+`pyproject.toml:95` defines `slow` for tests that take tens of seconds, and
+`worlds/projecttracker/tests/test_fixtures.py`'s two rebuild tests --
+`test_the_generator_still_makes_the_fixtures_that_are_committed` and
+`test_the_generator_still_makes_the_committed_fixtures_byte_for_byte` -- carry it. Measured on
+CPython 3.14.0 they are **0.26s and 0.23s of setup and 0.06s of call**, not tens of seconds. The
+rebuild got cheap at some point and nobody re-measured; the whole ProjectTracker suite with both of
+them running is 15.6s, and the pair is under 3% of it.
+
+Two ways to close it, and the choice is a maintainer's: drop the marker from these two (they cost
+nothing, so the default `-m "not slow"` run may as well cover them, which also removes the only
+tests in the repo that a plain CI run skips), or keep it and re-state what `slow` means in
+`pyproject.toml` so the definition matches the only tests that use it. Not taken here because the
+measurement came out of a task that was told not to change tests for speed.
+
+---
 
 ## Deferred — upstream
 

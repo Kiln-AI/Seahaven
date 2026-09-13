@@ -36,6 +36,7 @@ EXPECTED = {
     "src/my_world/tools/__init__.py",
     "src/my_world/tools/items.py",
     "src/my_world/world.py",
+    "tests/test_fixtures.py",
     "tests/test_items.py",
 }
 
