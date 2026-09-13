@@ -40,6 +40,13 @@ jobs:
       - name: Reference world tests
         run: uv run pytest worlds/projecttracker
 
+      # The example extension is its own package with its own suite too, and its
+      # world is a copy of ProjectTracker under its `tests/`. What it proves is
+      # the extension contract: that a protocol the framework knows nothing about
+      # rides on the published seams.
+      - name: Example extension tests
+        run: uv run pytest extensions/seahaven-xmlrpc
+
       # Seahaven is vendored into other people's products: what it installs at
       # runtime stays MIT, Apache-2.0 or BSD-class.
       - name: Dependency licences

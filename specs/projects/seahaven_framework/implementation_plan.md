@@ -38,7 +38,7 @@ specs; nothing here restates them.
 - [x] **Phase 8: pytest plugin and the docs skeleton.** `pytest_plugin.py` and the `docs/` layout
       with stub pages, per `components/pytest_and_docs.md`. ProjectTracker's tests move to the
       plugin.
-- [ ] **Phase 9: the XML-RPC example extension.** A separate package in the repository proving the
+- [x] **Phase 9: the XML-RPC example extension.** A separate package in the repository proving the
       extension contract (`functional_spec.md` §21): tool factory, fault-mapping middleware, tests
       on a copy of ProjectTracker.
 - [ ] **Phase 10: ProjectTracker, in full.** `components/projecttracker.md`: the schema, errors,

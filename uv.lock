@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "projecttracker",
     "seahaven",
+    "seahaven-xmlrpc",
 ]
 
 [[package]]
@@ -1792,6 +1793,7 @@ dev = [
     { name = "projecttracker" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "seahaven-xmlrpc" },
     { name = "ty" },
 ]
 
@@ -1810,8 +1812,20 @@ dev = [
     { name = "projecttracker", editable = "worlds/projecttracker" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.14" },
+    { name = "seahaven-xmlrpc", editable = "extensions/seahaven-xmlrpc" },
     { name = "ty", specifier = ">=0.0.1a21" },
 ]
+
+[[package]]
+name = "seahaven-xmlrpc"
+version = "1.0.0"
+source = { editable = "extensions/seahaven-xmlrpc" }
+dependencies = [
+    { name = "seahaven" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "seahaven", editable = "." }]
 
 [[package]]
 name = "secretstorage"

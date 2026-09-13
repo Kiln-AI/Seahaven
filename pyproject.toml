@@ -37,23 +37,40 @@ seahaven = "seahaven.pytest_plugin"
 Homepage = "https://github.com/Kiln-AI/Seahaven"
 
 [dependency-groups]
-# `projecttracker` is the reference world, in this repository and developed with
-# the framework. It is a dev dependency of `seahaven` and never a runtime one:
-# the dependency runs the other way.
-dev = ["packaging>=24", "projecttracker", "pytest>=8", "ruff>=0.14", "ty>=0.0.1a21"]
+# `projecttracker` is the reference world and `seahaven-xmlrpc` the example
+# extension, both in this repository and developed with the framework. They are
+# dev dependencies of `seahaven` and never runtime ones: the dependency runs the
+# other way, and Seahaven imports neither.
+dev = [
+    "packaging>=24",
+    "projecttracker",
+    "pytest>=8",
+    "ruff>=0.14",
+    "seahaven-xmlrpc",
+    "ty>=0.0.1a21",
+]
 
 [tool.uv.workspace]
-members = ["worlds/*"]
+members = ["worlds/*", "extensions/*"]
 
 [tool.uv.sources]
 projecttracker = { workspace = true }
+seahaven-xmlrpc = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/seahaven"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests", "scripts", "worlds/projecttracker/src", "worlds/projecttracker/tests"]
+src = [
+    "src",
+    "tests",
+    "scripts",
+    "worlds/projecttracker/src",
+    "worlds/projecttracker/tests",
+    "extensions/seahaven-xmlrpc/src",
+    "extensions/seahaven-xmlrpc/tests",
+]
 # The specs are documents. Their code blocks are sketches, not code that runs.
 extend-exclude = ["specs"]
 
@@ -61,7 +78,7 @@ extend-exclude = ["specs"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ty.src]
-include = ["src", "tests", "scripts", "worlds"]
+include = ["src", "tests", "scripts", "worlds", "extensions"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
