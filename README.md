@@ -76,19 +76,6 @@ def move_contact(ctx: seahaven.Ctx, contact_id: str, stage: str) -> dict[str, st
 
 Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
 
-Run it in process. An instance is a private copy of the world with a frozen clock and seeded ids,
-and its changeset is what an eval grades:
-
-```py
-from crm import world
-
-with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
-    lead = inst.call("create_contact", email="ada@example.com")
-    won = inst.call("move_contact", contact_id=lead["id"], stage="won")
-    assert won["updated_at"] == "2026-06-01T09:00:00.000Z"  # the frozen clock
-    assert [c.op for c in inst.changes()] == ["insert"]  # the net diff: one new row, now "won"
-```
-
 Serve it. Every session gets its own instance, and any OpenEnv client can drive it:
 
 ```sh
