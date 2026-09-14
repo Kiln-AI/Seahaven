@@ -13,9 +13,11 @@ and the claim that it is is worth a test rather than a paragraph.
 
 import asyncio
 import json
+import logging
 import time
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Iterator, MutableMapping
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +39,14 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
+from fastapi import WebSocketDisconnect
 from openenv import GenericEnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from openenv.core.utils import convert_to_ws_url
+from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import connect as ws_connect
 
-from seahaven.openenv import SeahavenClient
+from seahaven.openenv import SeahavenClient, _SwallowWebSocketDisconnect
 from seahaven.openenv.env import SeahavenObservation
 from tests.serving import serving
 
@@ -457,6 +461,117 @@ def test_five_hundred_sessions_reset_and_call_with_no_errors(trivial_world: Worl
     with serving(trivial_world) as url:
         answers = asyncio.run(drive(url))
     assert answers == [{"message": str(number)} for number in range(SESSIONS)]
+
+
+# --- disconnects -----------------------------------------------------------
+
+
+class _Kept(logging.Handler):
+    """A handler that keeps every record it is handed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextmanager
+def _watched(world: World, **options: Any) -> Iterator[tuple[str, list[logging.LogRecord]]]:
+    """Serve a world, and collect what uvicorn logs on its own error channel.
+
+    `caplog` cannot see this: uvicorn's loggers set `propagate=False`, so nothing
+    uvicorn logs ever reaches the handler pytest puts on the root logger. The
+    handler has to go on *after* the server starts, because uvicorn configures
+    logging with `dictConfig` as it boots and that drops every handler already on
+    `uvicorn.error`, and it has to come off *after* the server stops, or a
+    traceback logged while the last connection is torn down would be missed.
+    `ExitStack` unwinds in reverse, so registering the removal first buys that
+    order.
+    """
+    logger = logging.getLogger("uvicorn.error")
+    kept = _Kept()
+    with ExitStack() as stack:
+        stack.callback(logger.removeHandler, kept)
+        url = stack.enter_context(serving(world, **options))
+        logger.addHandler(kept)
+        yield url, kept.records
+
+
+def _errors(records: list[logging.LogRecord]) -> list[str]:
+    return [record.getMessage() for record in records if record.levelno >= logging.ERROR]
+
+
+def test_a_session_that_ends_normally_leaves_nothing_in_the_error_log(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A clean disconnect is silent, and both halves of that are asserted.
+
+    Nothing on `uvicorn.error` is the operator's half: a session that ended
+    normally must not look like a failure in the log they grep when something
+    real goes wrong. Nothing from `seahaven.openenv` is the client's half: the
+    middleware absorbs a disconnect that escapes OpenEnv's handler and says so at
+    debug level, so silence there means the client waited for the server rather
+    than that something quietly cleaned up after it.
+    """
+    caplog.set_level(logging.DEBUG, logger="seahaven.openenv")
+    with _watched(world) as (url, records), SeahavenClient(base_url=url) as env:
+        env.reset()
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+    assert _errors(records) == []
+    absorbed = [record for record in caplog.records if record.name == "seahaven.openenv"]
+    assert [record.getMessage() for record in absorbed] == []
+
+
+def test_a_peer_that_vanishes_is_not_logged_as_a_server_error(world: World) -> None:
+    """The half no client-side fix can reach: a socket that simply stops.
+
+    A harness that dies mid-session, a stock client, anything that hangs up
+    without waiting -- OpenEnv is then closing a connection that is already gone.
+    That is the peer's business and never the server's, and it must not reach the
+    error log either.
+    """
+
+    async def connect_and_vanish(url: str) -> None:
+        async with ws_connect(convert_to_ws_url(url) + "/ws", proxy=None):
+            pass
+
+    with _watched(world) as (url, records):
+        asyncio.run(connect_and_vanish(url))
+    assert _errors(records) == []
+
+
+def test_the_middleware_absorbs_only_a_disconnected_websocket() -> None:
+    """Narrow on purpose: this scope, this exception, nothing else.
+
+    A `WebSocketDisconnect` reaching the top of a websocket connection means the
+    peer went away, which no server can act on. Anything else out of a handler is
+    a real failure and has to stay loud, and an HTTP request is not this
+    middleware's business at all.
+    """
+
+    async def raise_through(error: Exception, scope_type: str) -> None:
+        async def failing(scope: Scope, receive: Receive, send: Send) -> None:
+            raise error
+
+        await _SwallowWebSocketDisconnect(failing)(
+            {"type": scope_type, "path": "/ws"}, _unused_receive, _unused_send
+        )
+
+    asyncio.run(raise_through(WebSocketDisconnect(code=1006), "websocket"))
+    with pytest.raises(WebSocketDisconnect):
+        asyncio.run(raise_through(WebSocketDisconnect(code=1006), "http"))
+    with pytest.raises(RuntimeError, match="the world is on fire"):
+        asyncio.run(raise_through(RuntimeError("the world is on fire"), "websocket"))
+
+
+async def _unused_receive() -> MutableMapping[str, Any]:
+    raise AssertionError("the stub app never reads the connection")
+
+
+async def _unused_send(message: MutableMapping[str, Any]) -> None:
+    raise AssertionError("the stub app never writes to the connection")
 
 
 def _freeze(world: World, fixture_id: str = "start") -> str:

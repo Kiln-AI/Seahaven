@@ -186,6 +186,18 @@ process, `inst.call("controller_changes")` always reaches them, and `inst.tools(
 memory, and a client that drops without closing holds one for ever. An hour is long enough that no
 live eval is reaped and short enough that a crashed harness does not accumulate instances.
 
+**A disconnect is not an error in the log.** OpenEnv's WebSocket handler closes the connection from
+its own side after the peer has usually already gone, and lets the `WebSocketDisconnect` that raises
+escape into uvicorn's ASGI error path — an `ERROR: Exception in ASGI application` and a full
+traceback for a session that ended perfectly normally. Seahaven closes both halves of that.
+`SeahavenClient` asks the server to close and waits for it to, so the handshake finishes and nothing
+is raised at all; and the app carries ASGI middleware that absorbs a `WebSocketDisconnect` escaping a
+WebSocket route, which covers every client Seahaven does not ship — a stock `GenericEnvClient`, a raw
+socket, a harness that dies mid-session. An absorbed disconnect is one `DEBUG` line on the
+`seahaven.openenv` logger, so it can still be found; the error log is left for errors. The price is
+that a `WebSocketDisconnect` reaching the top of a WebSocket connection is never reported as a server
+error, which is the right trade: it only ever means the peer went away.
+
 ### The concurrency gate, and what is wrong with it
 
 The gate bounds how many tool calls execute at once. It never bounds admission: calls queue, and
@@ -271,6 +283,3 @@ in the WebSocket path an eval and `SeahavenClient` use.
   (B13.)
 - **`GET /schema` publishes the base state model** for the same reason, so a client never sees the
   state shape it is driving. (B13.)
-- **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
-  OpenEnv closes a socket the client has already closed. The sessions are fine; the log is noisy.
-  (B13.)

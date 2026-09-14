@@ -196,18 +196,19 @@ taken here because it is neither the clock's phase nor the randomness change's s
 
 ## Deferred — upstream
 
-**Deferred 2026-09-13: not part of this project.** All three are OpenEnv's, reproduced against a
-real server, each a small fix upstream and none fixable from inside Seahaven. Kept as the record
+**Deferred 2026-09-13: not part of this project.** Both are OpenEnv's, reproduced against a
+real server, a small fix upstream and neither fixable from inside Seahaven. Kept as the record
 of what was found and verified, so nobody re-derives it.
 
-### B13. Three OpenEnv behaviours a Seahaven world cannot fix from its own side
+### B13. Two OpenEnv behaviours a Seahaven world cannot fix from its own side
 
-**Found:** Phase 6 code review, rounds 1 and 3. **Owner:** unassigned — upstream, or a Seahaven
-workaround if upstream will not move. **Risk:** the log one is the higher: it makes a 500-session
-server's log useless for finding real errors, which is the log an operator reaches for first.
+**Found:** Phase 6 code review, rounds 1 and 3. **Owner:** upstream —
+https://github.com/huggingface/OpenEnv/issues/1155, open against 0.4.2. **Risk:** silent rather than
+loud: a harness that reads state or schema over HTTP is told nothing about the world it is driving,
+and nothing anywhere says so.
 
-All three were reproduced against a real server; none is in Seahaven's code, and none has a fix
-that belongs inside this framework as it stands. The first two are one root cause at two endpoints:
+Both were reproduced against a real server; neither is in Seahaven's code, and neither has a fix
+that belongs inside this framework as it stands. They are one root cause at two endpoints:
 OpenEnv uses the base `State` type where the environment's own subclass was meant.
 
 - **`GET /schema` publishes the base `State`, so a client never sees the state model it is
@@ -231,16 +232,6 @@ OpenEnv uses the base `State` type where the environment's own subclass was mean
   nothing about the world it is driving. Nothing in Phase 6 pins this, deliberately: a test asserting
   the two-key answer would pin upstream's defect as Seahaven's contract. The websocket path — which
   is the path `SeahavenClient` and every eval use — is fully tested.
-- **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
-  OpenEnv's `/ws` handler calls `await websocket.close()` on a connection the client has already
-  closed (`openenv/core/env_server/http_server.py:1694` in 0.4.2) and lets the resulting
-  `starlette.websockets.WebSocketDisconnect` escape into uvicorn's ASGI error path. `components/openenv.md` §4 has `serve` run at `log_level="info"`, so every session
-  that ends normally leaves a traceback in the log. Workarounds, none of them free: a `logging`
-  filter installed by `serve` (which would have to match on uvicorn's logger and the exception type,
-  and would hide a real error of the same shape), running at `warning` (which loses the startup line
-  that tells an operator the port, and contradicts §4), or an upstream `try/except` around that one
-  `close`. Recorded rather than chosen, because filtering another library's error logs from inside
-  `serve` is a decision with a blast radius, not a tidy-up.
 
 ---
 
