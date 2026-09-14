@@ -27,12 +27,12 @@ __all__ = ["BY_CREATION", "add_comment", "list_comments"]
 # projects. A monotonic sequence column on `comments` would carry, and was
 # considered and not taken, for three reasons: the cause is the framework's frozen
 # clock rather than anything this table does, so the fix belongs where the cause
-# is (`BACKLOG.md` B23); `components/projecttracker.md` is `status: complete` and
-# its §1 spells this table's columns, so adding one is a deviation with no
-# correctness argument behind it, unlike the three the phase plan records; and
-# saying it costs nothing, because `seahaven.tool` publishes a tool's whole
-# docstring as its description, so the caveat below is in the tool list the agent
-# reads and not only in this file.
+# is; `components/projecttracker.md` is `status: complete` and its §1 spells this
+# table's columns, so adding one is a deviation with no correctness argument
+# behind it, unlike the three the phase plan records; and saying it costs nothing,
+# because `seahaven.tool` publishes a tool's whole docstring as its description,
+# so the caveat below is in the tool list the agent reads and not only in this
+# file.
 BY_CREATION = _pagination.Order(
     key="comments:created_at_asc", column="created_at", id_column="id", descending=False
 )

@@ -65,6 +65,9 @@ own pytest rootdir. `ruff format` also formats Python blocks inside Markdown, an
 - Python 3.14+, fully typed, tests included. `ty` is the checker.
 - Tests are written with the code and catch real breakage; a test that still passes when the line
   under it is deleted is not a test.
+- Cover the real entry point with a test. This project has a history of defects that passed a unit
+  test and failed on the first real call. When a change touches behaviour a caller can observe, add
+  a test that drives it through `world.instance(...)` as well as the unit test, not instead of it.
 - Comments carry external constraints, not a description of the code beneath them.
 - No `LICENSE` file, no package publication, no version bump, no hub publication of the reference
   world without explicit maintainer sign-off.

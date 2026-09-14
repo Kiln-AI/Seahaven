@@ -558,11 +558,10 @@ generates it. See [fixtures.md](fixtures.md).
 
 **Ordering within one episode.** The clock does not move, so every row one episode writes carries
 the same `created_at`, and ordering by it is not an order. For raw SQL the answer is `ORDER BY
-created_at, rowid`. For a *tool* there is no complete answer today: a keyset cursor has to carry its
-tiebreaker as a value, and `rowid` is not a column a world projects. Order by `(created_at, id)`,
-say so in the tool's docstring, and grade evals on state and changesets rather than on the order of
-an activity feed. The framework-level question — whether `ctx` should offer a monotonic per-instance
-counter — is open, and is `BACKLOG.md` B23 in the Seahaven repository.
+created_at, rowid`. For a *tool* there is no complete answer: a keyset cursor has to carry its
+tiebreaker as a value, `rowid` is not a column a world projects, and `ctx` offers no monotonic
+per-instance counter to page on instead. Order by `(created_at, id)`, say so in the tool's
+docstring, and grade evals on state and changesets rather than on the order of an activity feed.
 
 **Lists without a tiebreak.** `ORDER BY created_at DESC` over rows that share an instant is not
 deterministic. Always order by a column *and* by the id.

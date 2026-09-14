@@ -67,12 +67,9 @@ different fixture. Note that a marker on a test **replaces** the module's rather
 so every marker names its own fixture — including one written only to add `seed=`. The plugin says
 so in the failure message, because it is the commonest way to get here.
 
-Two `seahaven` markers on **one test** are refused outright: nothing chooses between them on
-purpose, and the one that would win is the lower of the two, which is the opposite of how a reader
-going down the file reads them. The same ambiguity a level up — two of them in one module's
-`pytestmark` list — is *not* refused today, and there the **first** wins, which is the other way
-round again. Nobody writes that on purpose; it is `BACKLOG.md` B18 in the Seahaven repository, and
-until it is closed the rule to follow is one marker per place.
+Two `seahaven` markers in **one place** — on one test, on one class, or in one module's
+`pytestmark` list — are refused. Nothing chooses between them on purpose, so the plugin names the
+node that carries both and asks you to keep one.
 
 ## Running them
 
