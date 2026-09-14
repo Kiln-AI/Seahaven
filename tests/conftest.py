@@ -41,6 +41,17 @@ WAIT = 5.0  # every thread test's patience, in seconds
 # The small worlds the lints and the CLI are run against (`tests/worlds/README.md`).
 WORLDS = Path(__file__).resolve().parent / "worlds"
 
+# The three packages of the composite world. Unlike the lint worlds, these are
+# *imported* by the tests that resolve them -- a host adds the `World` object a
+# package exports, which is an ordinary import and not something discovery does --
+# so their source directories go on the path here, before any test module is
+# collected, rather than in a fixture no import statement can wait for.
+COMPOSITE_WORLDS = ("payments", "shop", "emporium")
+for _name in COMPOSITE_WORLDS:
+    _src = str(WORLDS / _name / "src")
+    if _src not in sys.path:
+        sys.path.insert(0, _src)
+
 # Milliseconds on purpose: a clock whose instant is a whole second hides the
 # rounding mistakes that a world's canonical timestamps would trip over.
 INSTANT = datetime(2024, 3, 5, 12, 0, 0, 123000, tzinfo=UTC)
@@ -218,13 +229,19 @@ def isolated_imports() -> Iterator[None]:
     left in `sys.modules` would make the next test's import of it a no-op -- which
     is exactly the thing SH301 is asking about. Declared with
     `pytestmark = pytest.mark.usefixtures("isolated_imports")` by every module
-    that imports a world.
+    that imports a world *during a test*.
 
     Only worlds are purged. A blanket sweep of everything imported during the
     test would also evict a standard-library or third-party module that happened
     to be imported lazily inside it, and a module re-imported behind objects that
     still hold its old classes fails in a way nobody enjoys debugging. A world
     lives under `tests/worlds/` or in a temporary directory; nothing else does.
+
+    The three composite worlds above are the exception, and are unaffected: they
+    are imported by test modules at collection time, before any test runs, so
+    they are never in the set this purges, and their `World` objects stay the
+    same objects for the run -- which they have to, because node identity is
+    object identity.
     """
     path = list(sys.path)
     modules = set(sys.modules)

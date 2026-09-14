@@ -255,8 +255,19 @@ class Instance:
         return result
 
     def tools(self) -> list[dict[str, Any]]:
-        """The tool list, with JSON schemas. Control tools are never in it."""
-        return [tool.listing() for tool in self.world.tools.values() if not tool.control]
+        """The tool list, with JSON schemas. Control tools are never in it.
+
+        The composite list: this world's own tools in registration order, then
+        each added world's contribution in `add_world` order. Every entry is the
+        owning tool's own listing with only the name substituted, so a
+        contributed tool's description and input schema are byte-identical to the
+        added world's and nothing in it reveals where it came from. A world that
+        adds nothing seals to one node and gets its own registry back.
+        """
+        return [
+            entry.tool.listing() | {"name": entry.name}
+            for entry in self.world.composition().tools.values()
+        ]
 
     def inspect(self) -> Db:
         """A read-only handle on this instance, opened once and kept.

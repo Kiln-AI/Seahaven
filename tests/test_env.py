@@ -223,6 +223,29 @@ def test_list_tools_answers_before_a_reset_and_agrees_with_the_instance(env: Sea
     assert before[0]["description"]
 
 
+def test_list_tools_serves_the_composite_surface_before_a_reset(tmp_path: Path) -> None:
+    """A world that adds worlds has one flat surface, episode or no episode.
+
+    Lives here rather than in `test_composition.py` because it needs the `serve`
+    extra, which this module is the one that skips without.
+    """
+    host = build_world(tmp_path, name="host")
+    host.add_world(
+        build_world(tmp_path / "added", name="added"),
+        name="payments",
+        tool_prefix="pay_",
+        tool_allow_list=["mint"],
+    )
+    env = SeahavenEnv(host, include_control_tools=False)
+    before = [tool.model_dump() for tool in listing(env).tools]
+    env.reset()
+    instance = env.instance
+    assert instance is not None
+    after = [tool.model_dump() for tool in listing(env).tools]
+    assert before[-1]["name"] == "pay_mint"
+    assert before == after == instance.tools()
+
+
 def test_a_listed_tool_carries_its_json_schema(env: SeahavenEnv) -> None:
     env.reset()
     rows = next(tool for tool in listing(env).tools if tool.name == "rows")

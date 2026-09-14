@@ -307,15 +307,20 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
     def _listing(self) -> list[dict[str, Any]]:
         """The tool list: the instance's when there is one, the world's when there is not.
 
-        `Instance.tools()` is a view over `world.tools` with the control tools
-        filtered out, so the two answers are the same list; a test pins that they
-        are, because the instance is the spelling `components/openenv.md` gives
-        and the world is the only thing there is to ask before a `reset`.
+        `Instance.tools()` is the world's sealed composition, so the two answers
+        are the same list; a test pins that they are, because the instance is the
+        spelling `components/openenv.md` gives and the world is the only thing
+        there is to ask before a `reset`. Read from the composition and not from
+        `world.tools`, which is the root's own registry and, for a world that adds
+        worlds, is not the surface an agent sees.
         """
         instance = self._instance
         if instance is not None:
             return instance.tools()
-        return [tool.listing() for tool in self.world.tools.values() if not tool.control]
+        return [
+            entry.tool.listing() | {"name": entry.name}
+            for entry in self.world.composition().tools.values()
+        ]
 
     def _readme(self) -> str:
         """The world package's top-level `README.md`, or empty when there is none.

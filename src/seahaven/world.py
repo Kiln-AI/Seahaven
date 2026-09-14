@@ -33,6 +33,15 @@ import apsw
 
 from seahaven import control
 from seahaven.call import Handler, Middleware, build_chain, invoke
+from seahaven.composition import (
+    NAME,
+    RESERVED_NODE_NAMES,
+    AddedWorld,
+    Composition,
+    bump,
+    epoch,
+    resolve,
+)
 from seahaven.ctx import Ctx
 from seahaven.db import build_blank
 from seahaven.errors import WorldBug
@@ -145,6 +154,13 @@ class World:
         self._tools: dict[str, Tool] = {}
         self._middlewares: list[Middleware] = []
         self._startup_hooks: list[RegisteredStartupHook] = []
+        self._added_worlds: list[AddedWorld] = []
+        # The registration epoch and the tree sealed at it, as one attribute so
+        # that reading the pair is one load and cannot tear. `None` until
+        # something asks: a world that is only imported never walks its own tree,
+        # and a seal that failed is retried rather than remembered.
+        self._seal: tuple[int, Composition] | None = None
+        self._seal_lock = threading.Lock()
         self.chain: Handler = build_chain((), invoke)
         # Made on the first instance, not here: a world that is only imported --
         # to be linted, to have its tools listed, to be scaffolded against --
@@ -156,7 +172,11 @@ class World:
         # any tool, `Instance.tools()` filters them out of the listing, and a
         # world that registers either name is refused by `_add`.
         for tool in control.TOOLS:
-            self._add(tool)
+            # A world nobody holds yet cannot be in anyone's tree, so registering
+            # the framework's own two tools on it invalidates no sealed
+            # composition. Without this every `World(...)` anywhere in a process
+            # would reseal every other world on its next use.
+            self._add(tool, invalidates_seals=False)
 
     @property
     def tools(self) -> Mapping[str, Tool]:
@@ -172,6 +192,11 @@ class World:
     def startup_hooks(self) -> Sequence[RegisteredStartupHook]:
         """The startup hooks, in registration order."""
         return tuple(self._startup_hooks)
+
+    @property
+    def added_worlds(self) -> Sequence[AddedWorld]:
+        """The worlds this one adds, in `add_world` order. Read-only."""
+        return tuple(self._added_worlds)
 
     @property
     def accepted_startup_kwargs(self) -> frozenset[str]:
@@ -215,6 +240,108 @@ class World:
             return self._register_startup_hook
         return self._register_startup_hook(obj)
 
+    def add_world(
+        self,
+        world: World,
+        /,
+        *,
+        name: str | None = None,
+        store: str | None = None,
+        tool_prefix: str | None = None,
+        tool_allow_list: Sequence[str] | None = None,
+        tool_block_list: Sequence[str] | None = None,
+        startup: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Add another world to this one: its tools and its store, under a name of this world's.
+
+        The fourth registration verb, and the only one that is call-only: there is
+        nothing to decorate. `name` is this world's internal identity for the added
+        world and is never agent-visible; `store` names the account scope it and
+        its whole subtree belong to, `None` keeping this world's own, which is what
+        shares an account. `tool_prefix`, `tool_allow_list` and `tool_block_list`
+        shape what the *agent* sees; this world's own code can call every tool of
+        an added world whether it is contributed or not. `startup` binds keyword
+        arguments to that node's startup hooks at every instance creation.
+
+        Only what is knowable from the two worlds in hand is checked here. Every
+        whole-tree property -- a name collision after prefixing, a list naming a
+        tool that does not exist, the attach bound -- belongs to the seal, and is
+        raised from the first use of the tree (`composition()`).
+        """
+        added_name = world.name if name is None else name
+        _check_added_name(world, added_name)
+        if store is not None and (not isinstance(store, str) or not store.strip()):
+            # `None` is "the adder's own scope" and is the only way to say it. A
+            # blank string is not that: it opens a scope of its own, named with
+            # nothing, and travels into a fixture's sidecar as that node's scope.
+            raise WorldBug(
+                f"add_world({world.name}, name={added_name!r}): store={store!r} is not a scope "
+                f"name; give a name, or None to stay in this world's own scope"
+            )
+        if tool_allow_list is not None and tool_block_list is not None:
+            raise WorldBug(
+                f"add_world({world.name}, name={added_name!r}): tool_allow_list and "
+                f"tool_block_list name the agent's surface two different ways; give one"
+            )
+        for which, listed in (
+            ("tool_allow_list", tool_allow_list),
+            ("tool_block_list", tool_block_list),
+        ):
+            # A `str` is a `Sequence[str]`, so a type checker cannot catch this
+            # one: the list would be exploded into one "tool name" per character
+            # and reported at the seal as six tools the added world does not have.
+            if isinstance(listed, str):
+                raise WorldBug(
+                    f"add_world({world.name}, name={added_name!r}): {which} is a string, which "
+                    f"would name one tool per character; give a list of names"
+                )
+        if any(existing.name == added_name for existing in self._added_worlds):
+            raise WorldBug(
+                f"add_world({world.name}, name={added_name!r}): {self.name!r} already adds a "
+                f"world under that name; a name is one world's identity in its host"
+            )
+        added = AddedWorld(
+            world=world,
+            name=added_name,
+            store=store,
+            tool_prefix=tool_prefix,
+            tool_allow_list=None if tool_allow_list is None else tuple(tool_allow_list),
+            tool_block_list=None if tool_block_list is None else tuple(tool_block_list),
+            # Copied, so a caller that keeps and mutates the mapping it passed
+            # cannot change the composition after the fact.
+            startup=MappingProxyType(dict(startup or {})),
+        )
+        _check_bound_startup(added)
+        _check_for_a_cycle(self, added)
+        self._added_worlds.append(added)
+        bump()
+
+    def composition(self) -> Composition:
+        """This world's sealed tree: its nodes, their paths, and the flat tool surface.
+
+        Sealed lazily and cached until the next registration anywhere in the
+        process (`composition.bump`). A leaf world seals to one node, so every
+        caller reads the tree whether or not the world adds anything.
+
+        Every dispatched call reads this, so the steady state is one load and one
+        integer compare and takes no lock at all. The lock is for the resealing,
+        where two threads would otherwise each walk the tree; it is dropped again
+        before anything is returned, and a thread that loses the race reseals
+        rather than waits.
+        """
+        current = epoch()
+        seal = self._seal
+        if seal is not None and seal[0] == current:
+            return seal[1]
+        with self._seal_lock:
+            seal = self._seal
+            if seal is None or seal[0] != current:
+                # Stored only on success: a seal that raised is retried on the next
+                # use, so the author sees the error again until they fix it.
+                seal = (current, resolve(self))
+                self._seal = seal
+            return seal[1]
+
     def instance(
         self,
         fixture: str | None = None,
@@ -248,9 +375,10 @@ class World:
         other caller too, for the rest of the run. A copy is how that is said
         locally.
 
-        A copy is a *snapshot of the three registries*, taken at copy time and
-        severed in both directions: the copy does not see a tool, a middleware or
-        a startup hook registered on the original afterwards, its `chain` stays
+        A copy is a *snapshot of the four registries*, taken at copy time and
+        severed in both directions: the copy does not see a tool, a middleware, a
+        startup hook or an added world registered on the original afterwards, its
+        `chain` stays
         as it was, and nothing registered on the copy reaches back. That is the
         one place a world stops being open for registration for the life of the
         process, so take the copy after import-time registration is done.
@@ -266,6 +394,13 @@ class World:
         twin._tools = dict(self._tools)
         twin._middlewares = list(self._middlewares)
         twin._startup_hooks = list(self._startup_hooks)
+        twin._added_worlds = list(self._added_worlds)
+        # A copy is a distinct `World` object and therefore a distinct node, so it
+        # reseals from its own snapshot on first use. Copy the *root* to relocate
+        # its fixtures, never a world something else adds: a host that added the
+        # original does not see the copy.
+        twin._seal = None
+        twin._seal_lock = threading.Lock()
         twin._manager = None
         twin._manager_lock = threading.Lock()
         return twin
@@ -308,7 +443,7 @@ class World:
         # The function itself, so a decorated tool stays an ordinary callable.
         return obj
 
-    def _add(self, tool: Tool) -> None:
+    def _add(self, tool: Tool, *, invalidates_seals: bool = True) -> None:
         # OpenEnv's verbs are refused whoever is registering: they are the wire's,
         # and no flag of this framework's can reclaim them.
         if tool.name in RESERVED_TOOL_NAMES:
@@ -325,6 +460,8 @@ class World:
         if tool.name in self._tools:
             raise WorldBug(f"tool {tool.name!r} is registered twice")
         self._tools[tool.name] = tool
+        if invalidates_seals:
+            bump()
 
     def _register_middleware(self, obj: Middleware) -> Middleware:
         _check_middleware_shape(obj)
@@ -332,10 +469,12 @@ class World:
         # Rebuilt rather than walked per call: the chain is a closure over the
         # middleware it had when it was built, and instances read it at call time.
         self.chain = build_chain(self._middlewares, invoke)
+        bump()
         return obj
 
     def _register_startup_hook(self, obj: StartupHook) -> StartupHook:
         self._startup_hooks.append(_as_startup_hook(obj))
+        bump()
         return obj
 
 
@@ -597,6 +736,73 @@ def _read_sql(path: Traversable, package: str, directory: str, name: str) -> str
             f"schema file {name!r} in directory {directory!r} of package {package!r} "
             f"could not be read as UTF-8 text: {error}"
         ) from error
+
+
+def _check_added_name(world: World, name: str) -> None:
+    """An added world's name is a path segment, a file name and an attached schema name.
+
+    Identifier-like and lowercase for the first two. `__` is refused for the
+    third: a node's schema name is its path with `/` replaced by `__`, so a
+    segment holding `__` would let `a__b` and `a/b` name one schema. `main` and
+    `temp` are SQLite's own schema names and could never be attached.
+    """
+    if not isinstance(name, str) or not NAME.fullmatch(name) or "__" in name:
+        raise WorldBug(
+            f"add_world({world.name}, name={name!r}): a name is lowercase letters, digits and "
+            f"single underscores, starting with a letter. It becomes a path segment, a file name "
+            f"and an attached schema name, which is why '__' is not one of them"
+        )
+    if name in RESERVED_NODE_NAMES:
+        raise WorldBug(
+            f"add_world({world.name}, name={name!r}): {name!r} is one of SQLite's own schema "
+            f"names ({', '.join(sorted(RESERVED_NODE_NAMES))}), so a store could not be attached "
+            f"under it"
+        )
+
+
+def _check_bound_startup(added: AddedWorld) -> None:
+    """`startup=` binds keywords to the added world's *own* hooks, so it names them.
+
+    Its own and not its subtree's: bound keywords are delivered to this node's
+    hooks and nothing deeper. The added world's registry is complete by now -- it
+    was imported before this host could name it.
+    """
+    if not added.startup:
+        return
+    hooks = added.world.startup_hooks
+    if any(hook.takes_var_kwargs for hook in hooks):
+        return
+    accepted = added.world.accepted_startup_kwargs
+    unknown = sorted(set(added.startup) - accepted)
+    if unknown:
+        names = ", ".join(sorted(accepted)) or "nothing"
+        raise WorldBug(
+            f"add_world({added.world.name}, name={added.name!r}): startup names "
+            f"{', '.join(repr(keyword) for keyword in unknown)}, which no startup hook of "
+            f"{added.world.name!r} accepts; its hooks accept: {names}"
+        )
+
+
+def _check_for_a_cycle(host: World, added: AddedWorld) -> None:
+    """A world may not appear in its own subtree, directly or transitively.
+
+    A self-add is the depth-0 case of the same walk. Without this the node graph
+    would not terminate, and no reading of "one store per node" would make sense
+    for a world that contains itself.
+    """
+    pending = [added.world]
+    seen: set[World] = set()
+    while pending:
+        world = pending.pop()
+        if world is host:
+            raise WorldBug(
+                f"add_world({added.world.name}, name={added.name!r}): {host.name!r} is in the "
+                f"tree of {added.world.name!r}, so adding it would put the world inside itself"
+            )
+        if world in seen:
+            continue
+        seen.add(world)
+        pending.extend(inner.world for inner in world.added_worlds)
 
 
 def _check_name(name: str) -> None:

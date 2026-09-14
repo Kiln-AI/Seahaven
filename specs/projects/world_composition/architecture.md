@@ -557,8 +557,19 @@ factory types the same way. This is annotation-only: nothing in the runtime read
 
 ### 8.2 Resolution
 
-`World._tools_by_fn: dict[Callable, Tool]`, filled by `_register_tool` — one line, since the
-decorator already returns the function unchanged. `Composition.by_fn` inverts it across the tree.
+`Composition.by_fn` groups the composition's `Contributed` entries by their tool's `fn` — one pass
+over the flat list, since the decorator already returns the function unchanged and a `Tool` carries
+the function it was built from.
+
+*Built 2026-09-14, phase 1:* an earlier draft of this section put a `World._tools_by_fn:
+dict[Callable, Tool]` on each world and had `by_fn` invert it across the tree. It shipped as the
+grouping above instead, for two reasons: a single-valued map silently loses one of the two tools a
+world registers from one function, while `by_fn`, which is what dispatch reads, correctly reaches
+both; and inverting a per-world map buys nothing that grouping the entries does not, because the
+entries already carry their tool. A per-world `fn → Tool` map is still needed for
+`WorldHandle.call(fn)` below, which resolves over *every* tool of a world in the handle's subtree,
+contributed or not — a set `Composition.by_fn` deliberately does not hold. It arrives with phase 3,
+in the multi-valued shape that consumer needs.
 
 - `Instance.call(fn)`: `comp.by_fn[fn]`. Empty → `WorldBug("<qualname> is not a tool of this world
   or anything it adds")`. More than one entry → `WorldBug` naming the candidate paths and telling
@@ -806,7 +817,7 @@ decision there.
 |---|---|---|
 | `composition.py` | **New.** `AddedWorld`, `Node`, `Contributed`, `Composition`; resolution, the seal, the epoch, all whole-tree validation, `attached_limit()` | 3, 4 |
 | `handles.py` | **New.** `Frame`, `Worlds`, `WorldHandle` | 7.3, 7.6, 8.3 |
-| `world.py` | `add_world`; `added_worlds`; `_tools_by_fn`; `composition()`; `chain` reads `composition().root.agent_chain`; every verb bumps the epoch; `__copy__` snapshots `added_worlds` and drops the seal | 3, 4.2 |
+| `world.py` | `add_world`; `added_worlds`; `composition()`; `chain` reads `composition().root.agent_chain`; every verb bumps the epoch; `__copy__` snapshots `added_worlds` and drops the seal; the per-world `fn → Tool` map `WorldHandle.call(fn)` resolves through, with phase 3 (§8.2) | 3, 4.2 |
 | `ctx.py` | `Ctx` generic in `W: Worlds`; `worlds` field; `with_call(..., worlds=)` | 6.3 |
 | `tool.py` | `Tool[**P, R]`; first-parameter check accepts `Ctx[X]` | 8.1, 6.3 |
 | `call.py` | `Call.node: str = "main"`; `invoke` returns the original object after proving it serialises; `build_chain` gains the per-layer node pairing used by `composition.build_route_chain` | 7.6, 8.4 |

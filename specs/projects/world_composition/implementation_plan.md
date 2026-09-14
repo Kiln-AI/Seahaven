@@ -14,12 +14,12 @@ three pytest suites, the licence check) before it is committed.
 
 ## Phases
 
-- [ ] **Phase 1: the composition model and the seal.** `composition.py`: `AddedWorld`, `NodeKey`,
+- [x] **Phase 1: the composition model and the seal.** `composition.py`: `AddedWorld`, `NodeKey`,
       `Node`, `Contributed`, `Composition` (§2); `World.add_world` with the five call-site checks
       (§3); resolution with scope propagation, BFS canonical paths, alias edges, key-wise bound
       startup and per-node-key contribution (§4.1 steps 1–5); the registration epoch and
       `World.composition()` (§4.2); the six seal checks and `attached_limit()` (§4.4); the flat
-      tool surface, `Instance.tools()` and `World._tools_by_fn` (§5). No chains, no instances yet.
+      tool surface and `Instance.tools()` (§5). No chains, no instances yet.
       The composite test world under `tests/worlds/` (§17) with `test_composition.py` and
       `test_add_world.py`.
 - [ ] **Phase 2: contexts, handles, composite instances and dispatch.** `handles.py` (`Frame`,
