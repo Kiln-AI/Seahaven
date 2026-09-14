@@ -57,7 +57,9 @@ whoever is choosing between fixtures.
 A fixture is addressed by its id everywhere: `world.instance("agency")`, `reset(fixture="agency")`,
 `@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture list`.
 
-See [fixtures.md](fixtures.md).
+A world that adds other worlds freezes one file per store into the same directory, under one
+sidecar; a world that adds none writes exactly what it always wrote. See [fixtures.md](fixtures.md)
+and [composition.md](composition.md).
 
 ## Instance
 
@@ -77,6 +79,10 @@ with projecttracker.world.instance("small_startup", seed=7) as inst:
 
 Leaving the `with` block destroys it: connections closed, directory removed. `inst.destroy()` does
 the same explicitly, and waits for a call in flight to finish first.
+
+An instance of a world that **adds other worlds** is that same thing per store: one file,
+connection, id stream and changeset session for each, under one clock, one seed and one lock. Every
+sentence on this page still holds for it, which is what [composition.md](composition.md) is about.
 
 Instances are cheap and there is no cap on how many a process may hold. Calls into one instance
 serialise under its lock; calls into different instances do not. Over a server, one session is one
@@ -121,8 +127,9 @@ directory, no other instance, no process.
 | `ctx.clock` | The instance's frozen instant: `now()` for an aware UTC `datetime`, `iso()` for the canonical text |
 | `ctx.ids` | The seeded stream: `uuid()` and `random`, a `random.Random` seeded per instance |
 | `ctx.state` | A plain `dict` that lives as long as the instance; where a startup hook leaves what it worked out |
-| `ctx.call` | The current call: `name`, `arguments`, `tool`, and `with_arguments(**changes)` |
+| `ctx.call` | The current call: `name`, `arguments`, `tool`, `node`, and `with_arguments(**changes)` |
 | `ctx.instance` | `id`, `fixture` (or `None` for a blank instance) and `seed`, read-only |
+| `ctx.worlds` | The worlds this one adds, by name — `ctx.worlds.<name>` is that store's tools, `db` and `state` for the length of the call. A world that adds none has no name to ask for, and every name raises `WorldBug` ([composition.md](composition.md)) |
 
 ## Clock
 
@@ -170,7 +177,9 @@ also gives the agent, is outside the promise by rule.
 ## Changeset
 
 `inst.changes()` returns what the instance has changed since it was created: a list of records
-carrying the table, the operation, the row's key, and the row before and after.
+carrying the store, the table, the operation, the row's key, and the row before and after. The store
+is `change.world`, the path of the node the row belongs to, and it is `main` for every record of a
+world that adds none.
 
 ```python
 import projecttracker
@@ -191,7 +200,8 @@ and the current state:
 - rows written by startup hooks are not in it — the session is attached after the hooks have run,
   because those rows are the world's setup and not the agent's work;
 - tables the world names in `World(untracked_tables=...)` are not in it, and neither are FTS5's
-  shadow tables.
+  shadow tables;
+- an added world's store is in it, under its own path, with that world's own exclusions applied.
 
 This is what an eval grades on: the state the episode left behind, rather than the transcript of how
 it got there.

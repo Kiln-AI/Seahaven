@@ -27,6 +27,10 @@ description: "A three-person startup's tracker: one engineering team, two active
 time, and is one of only two wall-clock reads in a world — the other is a blank instance's default
 clock.
 
+A world that **adds other worlds** freezes one state file per store into that same directory, under
+one sidecar at `format_version: 2` with a `nodes` list describing them. Everything on this page
+holds for it; the extra rules are in [composition.md](composition.md).
+
 ## The rules
 
 **A fixture is never opened, only copied.** The first time a process copies a fixture it verifies

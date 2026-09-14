@@ -60,6 +60,72 @@ What the framework is for, in one list:
 - **`seahaven check`** is a small lint over the mistakes a world makes silently, each with a named
   fix.
 
+## Composing worlds
+
+A world can **add other worlds**. Build a payments world once, a chat world once, and a company
+world that adds both plus its own tables and tools. The agent sees one tool list; the company
+world's own tools call the added worlds' tools in process; evals inspect every store through one SQL
+connection.
+
+```python
+import seahaven
+
+# Each world is normally its own package, and the host adds the `world` object
+# that package exports. One file here so the example runs.
+payments = seahaven.World(
+    name="payments",
+    version="1.0.0",
+    schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+)
+
+
+@payments.tool
+def create_charge(ctx: seahaven.Ctx, amount: int) -> dict[str, object]:
+    """Charge the account and return the charge."""
+    charge = {"id": ctx.ids.uuid(), "amount": amount}
+    ctx.db.execute("INSERT INTO charges (id, amount) VALUES (?, ?)", charge["id"], charge["amount"])
+    return charge
+
+
+company = seahaven.World(
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE invoices (id TEXT PRIMARY KEY, charge_id TEXT NOT NULL) STRICT;",
+)
+company.add_world(payments, name="payments", tool_prefix="pay_")
+
+
+@company.tool
+def invoice(ctx: seahaven.Ctx, amount: int) -> dict[str, object]:
+    """Charge the company's payment account and file an invoice against the charge."""
+    charge = ctx.worlds.payments.call(create_charge, amount=amount)
+    filed = {"id": ctx.ids.uuid(), "charge_id": charge["id"]}
+    ctx.db.execute(
+        "INSERT INTO invoices (id, charge_id) VALUES (?, ?)", filed["id"], filed["charge_id"]
+    )
+    return filed
+
+
+with company.instance() as inst:
+    assert [listed["name"] for listed in inst.tools()] == ["invoice", "pay_create_charge"]
+    inst.call("invoice", amount=500)
+    # One read-only connection over both stores, and one changeset across both.
+    charged = inst.inspect().one("SELECT amount FROM payments.charges")
+    assert charged is not None and charged["amount"] == 500
+    assert {change.world for change in inst.changes()} == {"main", "payments"}
+```
+
+If several added worlds contain a payments world, they share one store by default, so a charge
+created through one is visible to the others, as it would be with one real account. Override it
+where it should not be shared:
+
+```py
+world.add_world(payments_world.world, name="payments_eu", tool_prefix="eu_", store="eu")
+```
+
+Each store is its own SQLite file with its own DDL, and fixtures are frozen and forked at the top
+level with every store inside. [`composition.md`](src/seahaven/docs/composition.md) is the page.
+
 ## Status
 
 **Early development. Nothing here is stable, and none of it is published.** The framework, the
@@ -181,6 +247,7 @@ installed, and `seahaven docs` prints the directory. In this repository they are
 - [`index.md`](src/seahaven/docs/index.md) — what Seahaven is, the reading order, the commands
 - [`concepts.md`](src/seahaven/docs/concepts.md) — world, fixture, instance, tool, clock, changesets
 - [`authoring.md`](src/seahaven/docs/authoring.md) — writing tools, errors, middleware, startup hooks, the schema
+- [`composition.md`](src/seahaven/docs/composition.md) — adding other worlds, shared stores, composite fixtures
 - [`fixtures.md`](src/seahaven/docs/fixtures.md) — freezing, forking, generators
 - [`testing.md`](src/seahaven/docs/testing.md) — the pytest plugin, what to test
 - [`serving.md`](src/seahaven/docs/serving.md) — `seahaven serve`, the client, control tools

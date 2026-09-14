@@ -74,6 +74,19 @@ closed or dismissed through the standard phase flow.
   .nodes)` and `Instance.composition()` mean nothing here is unknowable in process; what has no home
   is volunteering it.
 
+- **Two member tables in the docs are verified by nothing.**
+  `tests/test_docs_examples.py`'s `_RECEIVER_TYPES` has no `handle` or `report` entry, so the two
+  largest tables phase 6 added -- `handle.call`/`db`/`state`/`worlds` (`reference/api.md:178-182`)
+  and `report.path`/`world`/`world_version`/`scope`/`aliases`/`schema_hash`/`frozen_world_version`
+  (`:302-307`) -- resolve against no live object. All thirteen were checked by hand and are correct
+  today, so this is drift risk rather than a present defect: the check that catches an invented
+  member everywhere else on that page is not asked here.
+
+  `report` is the cheap half to close, since every documented mention is a genuine `NodeReport`
+  member. `handle` is not: `composition.md` writes `ctx.worlds.payments.db.execute(...)`, and a
+  class-level walk trips over `db` being a `property` object, so closing that half needs a live
+  composite in the `receivers` fixture plus a break after the first handle member.
+
 ## Closed
 
 _None yet._

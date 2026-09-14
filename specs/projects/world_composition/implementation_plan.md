@@ -49,7 +49,7 @@ three pytest suites, the licence check) before it is committed.
       errors as SH504 (§4.3); SH206–SH209, SH406, SH502–SH504 and per-node SH401–SH405 (§14),
       `lint/world.py` new. Lint fixture pairs under `tests/worlds/`; the composite OpenEnv
       end-to-end test (§17). Needs phases 3 and 4.
-- [ ] **Phase 6: docs.** A `composition.md` page under `src/seahaven/docs/` and the FS §14 README
+- [x] **Phase 6: docs.** A `composition.md` page under `src/seahaven/docs/` and the FS §14 README
       section, with examples that run under `tests/test_docs_examples.py`; the authoring-docs
       requirements of FS §13 in `authoring.md` (prefer an added world's tools over direct SQL;
       prefixes and lists match the client's real surface; never assume sole writership; return

@@ -263,6 +263,9 @@ before a commit rather than in a run.
 **Fix.** `fixtures are immutable: fork it, change the fork, and freeze that`. If the file is simply
 missing, the fix is to regenerate it.
 
+**Per node.** A composite fixture holds one state file per store, and each is checked against its
+own `file_sha256` with the node's path in the message.
+
 ## SH403 — a fixture's `schema_hash` does not match the world
 
 **Rule.** The hash of the normalised DDL in the sidecar equals the loaded world's.
@@ -274,6 +277,11 @@ before a commit.
 **Fix.** `regenerate it with seahaven fixture freeze or seahaven fixture fork`. **Every** fixture of
 the world, in parent order, because they all conform to one schema. This is the cost a schema change
 carries, and it is why the generator script is committed.
+
+**Per node.** Each store of a composite fixture is checked against the hash of *its own* world's
+DDL, with the node's path in the message — so a dependency whose schema moved is reported as that
+node and not as the host's. That half of the rule needs the tree, and is the only part of it that
+says nothing when the composition does not seal.
 
 ## SH404 — a fixture's `now` is not canonical
 
@@ -287,9 +295,13 @@ row in the fixture.
 **Fix.** `canonical is 2026-06-01T09:00:00.000Z: UTC, milliseconds, trailing Z`. In practice: pass
 `--now` in that format to `seahaven fixture freeze`.
 
+Whole-sidecar even for a composite fixture, unlike the three rules around it: there is one clock per
+instance and no store has a `now` of its own.
+
 ## SH405 — a fixture's state file has `-wal` or `-shm` companions
 
-**Rule.** No `state.sqlite-wal` or `state.sqlite-shm` beside the state file.
+**Rule.** No `state.sqlite-wal` or `state.sqlite-shm` beside the state file, and none beside any of
+the per-node state files a composite fixture holds.
 
 **Why.** A fixture is checkpointed and vacuumed before it is sealed, so either file means the
 database was opened for writing after it was frozen — and whatever the fixture's hash covers, it does
@@ -371,8 +383,8 @@ name, no `startup` keyword bound to two values, and no more added stores than SQ
 
 **Why.** A composition is sealed lazily, at the first use of the tree, because a host's own tools are
 registered by imports that run after its `add_world` lines and a world can never be told what added
-it. So these are registration errors that raise from `world.instance(...)`, `world.tools`, a call, a
-freeze — or from here. `check` seals as its first act, which is what turns each of them into a line
+it. So these are registration errors that raise from `world.instance(...)`, `inst.tools()`, a call,
+a freeze — or from here. `check` seals as its first act, which is what turns each of them into a line
 with the offending `add_world` on it rather than a traceback out of the first run.
 
 **Fix.** `correct the add_world the message names; nothing can use this world until it seals`. The
