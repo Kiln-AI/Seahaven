@@ -552,9 +552,19 @@ def test_bulk_rolls_back_when_the_block_raises(instance: Instance) -> None:
     assert instance.inspect().rows("SELECT id FROM notes") == []
 
 
-def test_bulk_yields_the_instances_own_context_with_no_call(instance: Instance) -> None:
+def test_bulk_yields_the_root_nodes_context_with_no_call(instance: Instance) -> None:
+    """The instance's own state and store, with no call -- and a live `ctx.worlds`.
+
+    Not the template context itself: a `bulk()` block reaches every node through
+    `ctx.worlds.<name>.db`, which only a context bound to the block's activation
+    can do.
+    """
     with instance.bulk() as ctx:
-        assert ctx is instance.ctx
+        assert (ctx.db, ctx.state, ctx.ids) == (
+            instance.ctx.db,
+            instance.ctx.state,
+            instance.ctx.ids,
+        )
         assert ctx.call is None
 
 

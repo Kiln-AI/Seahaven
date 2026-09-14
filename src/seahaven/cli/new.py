@@ -29,6 +29,7 @@ from string import Template
 
 import seahaven
 from seahaven.cli import CliError, package_name
+from seahaven.names import NAME_RULE, why_not_a_name
 
 __all__ = ["HUB_FILES", "TEMPLATE_SUFFIX", "add_parser", "render", "run"]
 
@@ -98,6 +99,13 @@ def render(name: str, target: Path, *, hub: bool = False) -> Path:
             f"{name!r} does not make a package name: {package!r} is not a Python identifier; "
             f"use letters, digits and underscores, starting with a letter"
         )
+    # The name reaches the rendered `world.py` verbatim, and `World(name=...)`
+    # holds it to `names.why_not_a_name`. Refused here rather than there: a
+    # scaffold that cannot be imported is met at the author's first `pytest`, in
+    # a directory they then have to delete.
+    reason = why_not_a_name(name)
+    if reason is not None:
+        raise CliError(f"{name!r} is not a world name: {reason}. A world's name is {NAME_RULE}.")
     if target.exists():
         raise CliError(f"{target} already exists; seahaven new writes a new directory")
     substitutions = {

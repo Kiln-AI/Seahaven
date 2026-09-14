@@ -117,6 +117,23 @@ def test_ddl_that_does_not_execute_is_sh104_with_sqlites_message(
     assert "Traceback" not in line
 
 
+def test_a_world_that_does_not_seal_is_a_line_and_not_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The whole point of sealing first: a registration error arrives as a finding.
+
+    `unsealed` also carries an undescribed tool, so this asserts the other half
+    too -- a world whose tree does not resolve still gets every rule that needs
+    no tree.
+    """
+    code, lines = check(WORLDS / "unsealed", monkeypatch, capsys)
+    assert code == 1
+    for line in lines:
+        assert FINDING_LINE.match(line), line
+    assert [line.split(" ", 1)[0] for line in lines] == ["SH205", "SH504"]
+    assert "tool_allow_list names 'post_entrie'" in lines[1]
+
+
 def test_a_package_with_no_world_is_sh501(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -10,9 +10,10 @@ from typing import Annotated, Any
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from seahaven.call import Call, Handler, build_chain, invoke
+from seahaven.call import Call, Handler, build_chain, invoke, serialise
 from seahaven.ctx import Ctx
 from seahaven.errors import ArgumentError, ToolError, WorldBug
+from seahaven.handles import Worlds
 from seahaven.tool import Tool
 
 TABLE = "CREATE TABLE notes (id TEXT PRIMARY KEY) STRICT"
@@ -211,7 +212,14 @@ def test_a_result_that_cannot_be_serialised_rolls_the_call_back(notes: Ctx) -> N
     assert notes.db.rows("SELECT id FROM notes") == []
 
 
-def test_results_are_rendered_as_data(ctx: Ctx) -> None:
+def test_a_result_is_proved_to_render_and_then_handed_back_as_it_is(ctx: Ctx) -> None:
+    """The object the tool returned, not its rendering (architecture section 8.4).
+
+    A host tool calling an added world's tool receives what that tool built, which
+    is what makes the typed call path's `R` true; the rendering is the wire's, and
+    `openenv/env.py` does it there.
+    """
+
     class Note(BaseModel):
         id: str
         at: datetime
@@ -221,15 +229,20 @@ def test_results_are_rendered_as_data(ctx: Ctx) -> None:
         notes: list[Note]
         next: str | None
 
+    page_out = Page(notes=[Note(id="n1", at=datetime(2024, 3, 5, 12, tzinfo=UTC))], next=None)
+
     def page(ctx: Ctx) -> Any:
         """Page."""
-        return Page(notes=[Note(id="n1", at=datetime(2024, 3, 5, 12, tzinfo=UTC))], next=None)
+        return page_out
 
     def nothing(ctx: Ctx) -> Any:
         """Nothing."""
         return None
 
-    assert run(ctx, call_to(page)) == {
+    result = run(ctx, call_to(page))
+
+    assert result is page_out
+    assert serialise(result) == {
         "notes": [{"id": "n1", "at": "2024-03-05T12:00:00Z"}],
         "next": None,
     }
@@ -391,6 +404,25 @@ def test_state_outlives_a_call_and_the_call_does_not(ctx: Ctx) -> None:
     assert ctx.state == {"calls": 2}
     assert seen[0] is not seen[1]
     assert ctx.call is None
+
+
+def test_with_call_keeps_the_contexts_worlds_unless_it_is_handed_another(ctx: Ctx) -> None:
+    """The two answers the two overloads describe (architecture section 6.3).
+
+    Only the second widens the context's type parameter, which is why they are
+    two: a world that declared `Ctx[CompanyWorlds]` keeps that declaration inside
+    its own middleware, where the only thing being changed is the call.
+    """
+    call = call_to(write, id="a")
+    elsewhere = Worlds()
+
+    bound = ctx.with_call(call)
+    rebound = ctx.with_call(call, worlds=elsewhere)
+
+    assert bound.call is call
+    assert bound.worlds is ctx.worlds
+    assert rebound.worlds is elsewhere
+    assert bound.db is ctx.db and bound.state is ctx.state
 
 
 def test_an_unexpected_exception_is_logged_with_its_traceback_and_re_raised(

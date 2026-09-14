@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from seahaven.ctx import Ctx
 from seahaven.errors import ArgumentError, WorldBug
+from seahaven.handles import WorldHandle, Worlds
 from seahaven.tool import Tool, _blame, _build_schema
 
 if TYPE_CHECKING:  # deliberately not importable at runtime: see the refusal below
@@ -227,6 +228,36 @@ def test_the_context_parameter_is_positional_and_unannotated_or_a_ctx() -> None:
 
     assert "the first parameter is the context" in refusal(wrong_type)
     assert "the first parameter is the context" in refusal(keyword_only)
+
+
+def test_a_parameterised_context_is_a_context() -> None:
+    """`Ctx[CompanyWorlds]` is a world declaring its children to a type checker.
+
+    It is the same object at run time as a bare `Ctx`, so registration has no
+    reason to know the difference -- and the annotation is what the whole of
+    architecture section 8.3 is (`seahaven check` binds the class to the
+    registrations, not this).
+    """
+
+    class HostWorlds(Worlds):
+        payments: WorldHandle
+
+    def declared(ctx: Ctx[HostWorlds], key: str) -> dict:
+        """Declared."""
+        return {}
+
+    def anything(ctx: Ctx[Any], key: str) -> dict:
+        """Anything."""
+        return {}
+
+    assert build(declared).name == "declared"
+    assert build(anything).name == "anything"
+
+    def other(ctx: dict[str, Any], key: str) -> dict:
+        """Some other generic altogether."""
+        return {}
+
+    assert "the first parameter is the context" in refusal(other)
 
 
 def test_only_plain_synchronous_functions_are_tools() -> None:

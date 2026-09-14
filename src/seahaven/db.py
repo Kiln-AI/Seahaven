@@ -6,13 +6,14 @@ that matters is `sandbox.py`, and it applies to SQL an *agent* wrote.
 
 Three doors are opened here. `build_blank` writes a fresh database from a world's
 DDL, `open_instance` opens the writable connection an instance serves calls from,
-and `open_inspection` opens a second, read-only view of the same file for looking
-at state without disturbing it. Every connection an instance opens carries its
-clock and its own seeded `random()`; `build_blank` carries neither, because it
-predates the instance -- there is no instant and no seed yet, and the database it
-writes is the world's schema rather than any one run of it. A world whose schema
-files draw randomness or read the clock while they run therefore writes a blank
-database that is not reproducible, which is the same gap on both.
+and `open_inspection` opens a second, read-only view of the same file -- and of
+every other node's file, attached -- for looking at state without disturbing it.
+Every connection an instance opens carries its clock and its own seeded
+`random()`; `build_blank` carries neither, because it predates the instance --
+there is no instant and no seed yet, and the database it writes is the world's
+schema rather than any one run of it. A world whose schema files draw randomness
+or read the clock while they run therefore writes a blank database that is not
+reproducible, which is the same gap on both.
 """
 
 import re
@@ -278,26 +279,51 @@ def open_instance(path: Path, clock: Clock, seed: bytes) -> Db:
     return Db(conn, register_clock_functions(conn, clock))
 
 
-def open_inspection(path: Path, clock: Clock, seed: bytes, stream: bytes) -> Db:
+def open_inspection(
+    path: Path,
+    clock: Clock,
+    seed: bytes,
+    stream: bytes,
+    attachments: Sequence[tuple[str, Path]] = (),
+) -> Db:
     """Open a second, read-only view of an instance for looking at its state.
 
     `stream` names which read-only door this is -- `INSPECTION_STREAM` for the
     handle a caller reads state through, `CONTROL_STREAM` for the control tools'
     own -- so that two doors onto one instance do not hand out the same random
-    values. See `ids.register_random_functions`.
+    values. See `ids.register_random_functions`. One door is one stream whatever
+    it is attached to: a composite instance's read-only handles each draw from a
+    single stream of their own, not one per node, since the nodes are schemas on
+    one connection.
+
+    `attachments` are `(schema name, file)` pairs -- a composite instance's added
+    nodes, under the schema names their paths derive -- and this is the one place
+    in the framework where two nodes' files meet. The schema name is *bound*, so
+    no identifier is ever interpolated into the statement.
+
+    The order is load-bearing. `_deny_writes` denies `SQLITE_ATTACH`, so every
+    attach has to happen before it is installed and none can happen after: that
+    single ordering is what makes the cross-node view possible and what closes
+    it, and it is why this list cannot grow once the connection is open.
     """
     conn = apsw.Connection(
-        f"file:{quote(Path(path).as_posix())}?mode=ro",
-        flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI,
+        _read_only_uri(path), flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI
     )
     _harden(conn)
     register_random_functions(conn, seed, stream)
     helper = register_clock_functions(conn, clock)
+    for schema, attached in attachments:
+        conn.execute("ATTACH DATABASE ? AS ?", (_read_only_uri(attached), schema))
     # Installed once and for the connection's life: nothing toggles this one.
     # The sandbox's authorizer replaces an authorizer rather than stacking on it,
     # so an inspection connection is never a door the sandbox opens.
     conn.authorizer = _deny_writes
     return Db(conn, helper)
+
+
+def _read_only_uri(path: Path) -> str:
+    """A file as SQLite opens it for reading and nothing else."""
+    return f"file:{quote(Path(path).as_posix())}?mode=ro"
 
 
 def build_blank(path: Path | Literal[":memory:"], ddl: str) -> apsw.Connection:

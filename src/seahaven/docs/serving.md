@@ -91,8 +91,11 @@ prevent. An unexpected Python exception inside a tool is logged with its traceba
 a fixed `{"code": "internal", "message": "internal error"}`, so engine text cannot reach an agent
 even from a world with no error handler.
 
-The `state` message answers `episode_id`, `step_count`, `fixture`, `now` and `world`. Every step
-counts, including one that was refused: the count is of what the session asked for.
+The `state` message answers `episode_id`, `step_count`, `fixture`, `now`, `world` and
+`composition`. Every step counts, including one that was refused: the count is of what the session
+asked for. `composition` is the session's stores — one record per node of a world that adds other
+worlds, `null` before the first `reset` ([composition.md](composition.md)). No observation carries
+any of it: `state` is the eval's, never the agent's.
 
 Metadata is the world's `name` and `version`, and the environment's README is the world's top-level
 `README.md`, the one beside `pyproject.toml`, published whole as the card a hub shows. The one-line

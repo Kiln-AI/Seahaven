@@ -27,17 +27,27 @@ from importlib.resources.abc import Traversable
 from importlib.resources.readers import MultiplexedPath
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Concatenate, overload
 
 import apsw
 
 from seahaven import control
-from seahaven.call import Handler, Middleware, build_chain, invoke
+from seahaven.call import Handler, Middleware
+from seahaven.composition import (
+    NAME,
+    RESERVED_NODE_NAMES,
+    AddedWorld,
+    Composition,
+    bump,
+    epoch,
+    resolve,
+)
 from seahaven.ctx import Ctx
 from seahaven.db import build_blank
 from seahaven.errors import WorldBug
 from seahaven.fixtures import Fixture, load_all
-from seahaven.instances import Instance, InstanceManager
+from seahaven.instances import Instance, InstanceManager, calling
+from seahaven.names import NAME_RULE, why_not_a_name
 from seahaven.tool import Tool
 
 __all__ = [
@@ -82,7 +92,8 @@ DDL_DOES_NOT_EXECUTE = "has DDL that does not execute"
 
 _POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 _WHITESPACE = re.compile(r"\s+")
-# Both separators, always: a world is spelled once and read on every platform.
+# Both separators, always: `sql_files` names a directory inside a package, and a
+# package is read on every platform whatever the one it was written on.
 _SEPARATOR = re.compile(r"[/\\]")
 
 
@@ -143,9 +154,20 @@ class World:
         self.work_dir = Path(work_dir) if work_dir is not None else None
         self.untracked_tables = tuple(untracked_tables)
         self._tools: dict[str, Tool] = {}
+        # The registry inverted, for `ctx.worlds.<name>.call(fn)`. Multi-valued
+        # because one function may be registered as two tools -- a factory called
+        # twice with two names -- and a map that kept one of them would send a
+        # call by reference to whichever the registry happened to hold last.
+        self._tools_by_fn: dict[Callable[..., Any], tuple[Tool, ...]] = {}
         self._middlewares: list[Middleware] = []
         self._startup_hooks: list[RegisteredStartupHook] = []
-        self.chain: Handler = build_chain((), invoke)
+        self._added_worlds: list[AddedWorld] = []
+        # The registration epoch and the tree sealed at it, as one attribute so
+        # that reading the pair is one load and cannot tear. `None` until
+        # something asks: a world that is only imported never walks its own tree,
+        # and a seal that failed is retried rather than remembered.
+        self._seal: tuple[int, Composition] | None = None
+        self._seal_lock = threading.Lock()
         # Made on the first instance, not here: a world that is only imported --
         # to be linted, to have its tools listed, to be scaffolded against --
         # never touches the working directory at all.
@@ -156,12 +178,31 @@ class World:
         # any tool, `Instance.tools()` filters them out of the listing, and a
         # world that registers either name is refused by `_add`.
         for tool in control.TOOLS:
-            self._add(tool)
+            # A world nobody holds yet cannot be in anyone's tree, so registering
+            # the framework's own two tools on it invalidates no sealed
+            # composition. Without this every `World(...)` anywhere in a process
+            # would reseal every other world on its next use.
+            self._add(tool, invalidates_seals=False)
 
     @property
     def tools(self) -> Mapping[str, Tool]:
         """The registry, in registration order. Read-only: register through `tool`."""
         return MappingProxyType(self._tools)
+
+    @property
+    def tools_by_fn(self) -> Mapping[Callable[..., Any], tuple[Tool, ...]]:
+        """The registry by the function each tool was built from, in registration order.
+
+        What `ctx.worlds.<name>.call(fn)` resolves through, over every world in
+        the handle's subtree: *every* tool of this world, contributed to a host's
+        surface or filtered out of it, because the allow and block lists shape
+        what an agent sees and host code can call everything.
+
+        The framework's own control tools are not in it. They are no part of a
+        world's surface -- never contributed, and refused by name by both `call`
+        paths -- so there is nothing for a reference to them to reach.
+        """
+        return MappingProxyType(self._tools_by_fn)
 
     @property
     def middlewares(self) -> Sequence[Middleware]:
@@ -174,6 +215,22 @@ class World:
         return tuple(self._startup_hooks)
 
     @property
+    def chain(self) -> Handler:
+        """What an agent-initiated call to one of this world's own tools descends.
+
+        The root node's chain, which for a world that adds nothing is this world's
+        middlewares and `invoke` -- the chain it has always been. A contributed
+        tool has its own, on the node that owns it, because the route to it runs
+        through more worlds than this one.
+        """
+        return self.composition().root.agent_chain
+
+    @property
+    def added_worlds(self) -> Sequence[AddedWorld]:
+        """The worlds this one adds, in `add_world` order. Read-only."""
+        return tuple(self._added_worlds)
+
+    @property
     def accepted_startup_kwargs(self) -> frozenset[str]:
         """Every keyword argument some startup hook names.
 
@@ -181,6 +238,39 @@ class World:
         `takes_var_kwargs` for that; this set is the named ones only.
         """
         return frozenset().union(*(hook.accepts for hook in self._startup_hooks))
+
+    # Three overloads, so that a registered tool keeps the type it was written
+    # with: `@world.tool` hands the function back as itself and a factory's `Tool`
+    # comes back parameterised, which is what `inst.call(fn, ...)` and
+    # `ctx.worlds.<name>.call(fn, ...)` read their arguments and their result from
+    # (architecture section 8.1). Without them every tool in every world is an
+    # untyped callable and `R` is `Any` everywhere.
+    # No options on this one: a factory built the tool's schema and argument model
+    # from the options *it* was given, and `_register_tool` refuses any passed
+    # here. Writing the overloads is where that becomes a checker error rather
+    # than a `WorldBug` at import.
+    @overload
+    def tool[**P, R](self, obj: Tool[P, R], /) -> Tool[P, R]: ...
+    @overload
+    def tool[**P, R](
+        self,
+        obj: Callable[Concatenate[Ctx[Any], P], R],
+        /,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        transaction: bool | None = None,
+    ) -> Callable[Concatenate[Ctx[Any], P], R]: ...
+    @overload
+    def tool[**P, R](
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        transaction: bool | None = None,
+    ) -> Callable[
+        [Callable[Concatenate[Ctx[Any], P], R]], Callable[Concatenate[Ctx[Any], P], R]
+    ]: ...
 
     def tool(
         self,
@@ -215,6 +305,108 @@ class World:
             return self._register_startup_hook
         return self._register_startup_hook(obj)
 
+    def add_world(
+        self,
+        world: World,
+        /,
+        *,
+        name: str | None = None,
+        store: str | None = None,
+        tool_prefix: str | None = None,
+        tool_allow_list: Sequence[str] | None = None,
+        tool_block_list: Sequence[str] | None = None,
+        startup: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Add another world to this one: its tools and its store, under a name of this world's.
+
+        The fourth registration verb, and the only one that is call-only: there is
+        nothing to decorate. `name` is this world's internal identity for the added
+        world and is never agent-visible; `store` names the account scope it and
+        its whole subtree belong to, `None` keeping this world's own, which is what
+        shares an account. `tool_prefix`, `tool_allow_list` and `tool_block_list`
+        shape what the *agent* sees; this world's own code can call every tool of
+        an added world whether it is contributed or not. `startup` binds keyword
+        arguments to that node's startup hooks at every instance creation.
+
+        Only what is knowable from the two worlds in hand is checked here. Every
+        whole-tree property -- a name collision after prefixing, a list naming a
+        tool that does not exist, the attach bound -- belongs to the seal, and is
+        raised from the first use of the tree (`composition()`).
+        """
+        added_name = world.name if name is None else name
+        _check_added_name(world, added_name)
+        if store is not None and (not isinstance(store, str) or not store.strip()):
+            # `None` is "the adder's own scope" and is the only way to say it. A
+            # blank string is not that: it opens a scope of its own, named with
+            # nothing, and travels into a fixture's sidecar as that node's scope.
+            raise WorldBug(
+                f"add_world({world.name}, name={added_name!r}): store={store!r} is not a scope "
+                f"name; give a name, or None to stay in this world's own scope"
+            )
+        if tool_allow_list is not None and tool_block_list is not None:
+            raise WorldBug(
+                f"add_world({world.name}, name={added_name!r}): tool_allow_list and "
+                f"tool_block_list name the agent's surface two different ways; give one"
+            )
+        for which, listed in (
+            ("tool_allow_list", tool_allow_list),
+            ("tool_block_list", tool_block_list),
+        ):
+            # A `str` is a `Sequence[str]`, so a type checker cannot catch this
+            # one: the list would be exploded into one "tool name" per character
+            # and reported at the seal as six tools the added world does not have.
+            if isinstance(listed, str):
+                raise WorldBug(
+                    f"add_world({world.name}, name={added_name!r}): {which} is a string, which "
+                    f"would name one tool per character; give a list of names"
+                )
+        if any(existing.name == added_name for existing in self._added_worlds):
+            raise WorldBug(
+                f"add_world({world.name}, name={added_name!r}): {self.name!r} already adds a "
+                f"world under that name; a name is one world's identity in its host"
+            )
+        added = AddedWorld(
+            world=world,
+            name=added_name,
+            store=store,
+            tool_prefix=tool_prefix,
+            tool_allow_list=None if tool_allow_list is None else tuple(tool_allow_list),
+            tool_block_list=None if tool_block_list is None else tuple(tool_block_list),
+            # Copied, so a caller that keeps and mutates the mapping it passed
+            # cannot change the composition after the fact.
+            startup=MappingProxyType(dict(startup or {})),
+        )
+        _check_bound_startup(added)
+        _check_for_a_cycle(self, added)
+        self._added_worlds.append(added)
+        bump()
+
+    def composition(self) -> Composition:
+        """This world's sealed tree: its nodes, their paths, and the flat tool surface.
+
+        Sealed lazily and cached until the next registration anywhere in the
+        process (`composition.bump`). A leaf world seals to one node, so every
+        caller reads the tree whether or not the world adds anything.
+
+        Every dispatched call reads this, so the steady state is one load and one
+        integer compare and takes no lock at all. The lock is for the resealing,
+        where two threads would otherwise each walk the tree; it is dropped again
+        before anything is returned, and a thread that loses the race reseals
+        rather than waits.
+        """
+        current = epoch()
+        seal = self._seal
+        if seal is not None and seal[0] == current:
+            return seal[1]
+        with self._seal_lock:
+            seal = self._seal
+            if seal is None or seal[0] != current:
+                # Stored only on success: a seal that raised is retried on the next
+                # use, so the author sees the error again until they fix it.
+                seal = (current, resolve(self))
+                self._seal = seal
+            return seal[1]
+
     def instance(
         self,
         fixture: str | None = None,
@@ -229,7 +421,16 @@ class World:
         carries its own. Everything else keyword is passed to the startup hooks
         that named it. The instance is a context manager and leaving the block
         destroys it.
+
+        Never from inside a tool call: a handler that wants another world reaches
+        it through `ctx.worlds`, and a world that made its own instance would be
+        writing to a store no eval can see.
         """
+        if calling():
+            raise WorldBug(
+                "instances cannot be created from inside a tool call; reach added worlds "
+                "through ctx.worlds"
+            )
         return self._instances().create(fixture, seed=seed, now=now, startup_kwargs=startup_kwargs)
 
     def fixtures(self) -> list[Fixture]:
@@ -248,12 +449,13 @@ class World:
         other caller too, for the rest of the run. A copy is how that is said
         locally.
 
-        A copy is a *snapshot of the three registries*, taken at copy time and
-        severed in both directions: the copy does not see a tool, a middleware or
-        a startup hook registered on the original afterwards, its `chain` stays
-        as it was, and nothing registered on the copy reaches back. That is the
-        one place a world stops being open for registration for the life of the
-        process, so take the copy after import-time registration is done.
+        A copy is a *snapshot of the four registries*, taken at copy time and
+        severed in both directions: the copy does not see a tool, a middleware, a
+        startup hook or an added world registered on the original afterwards, so
+        its `chain` is what its own snapshot seals to, and nothing registered on
+        the copy reaches back. That is the one place a world stops being open for
+        registration for the life of the process, so take the copy after
+        import-time registration is done.
 
         The instance manager is deliberately *not* carried over: a manager hands
         the world it was made for to every instance it makes, and that world is
@@ -264,8 +466,16 @@ class World:
         twin = object.__new__(type(self))
         twin.__dict__.update(self.__dict__)
         twin._tools = dict(self._tools)
+        twin._tools_by_fn = dict(self._tools_by_fn)
         twin._middlewares = list(self._middlewares)
         twin._startup_hooks = list(self._startup_hooks)
+        twin._added_worlds = list(self._added_worlds)
+        # A copy is a distinct `World` object and therefore a distinct node, so it
+        # reseals from its own snapshot on first use. Copy the *root* to relocate
+        # its fixtures, never a world something else adds: a host that added the
+        # original does not see the copy.
+        twin._seal = None
+        twin._seal_lock = threading.Lock()
         twin._manager = None
         twin._manager_lock = threading.Lock()
         return twin
@@ -308,7 +518,7 @@ class World:
         # The function itself, so a decorated tool stays an ordinary callable.
         return obj
 
-    def _add(self, tool: Tool) -> None:
+    def _add(self, tool: Tool, *, invalidates_seals: bool = True) -> None:
         # OpenEnv's verbs are refused whoever is registering: they are the wire's,
         # and no flag of this framework's can reclaim them.
         if tool.name in RESERVED_TOOL_NAMES:
@@ -324,18 +534,26 @@ class World:
             raise WorldBug(f"tool {tool.name!r} uses the name of a control tool")
         if tool.name in self._tools:
             raise WorldBug(f"tool {tool.name!r} is registered twice")
+        # Everything that can refuse this tool has refused it by now: nothing
+        # below leaves a world half-registered.
+        _check_the_function_can_key_the_registry(tool)
         self._tools[tool.name] = tool
+        if not tool.control:
+            self._tools_by_fn[tool.fn] = (*self._tools_by_fn.get(tool.fn, ()), tool)
+        if invalidates_seals:
+            bump()
 
     def _register_middleware(self, obj: Middleware) -> Middleware:
         _check_middleware_shape(obj)
         self._middlewares.append(obj)
-        # Rebuilt rather than walked per call: the chain is a closure over the
-        # middleware it had when it was built, and instances read it at call time.
-        self.chain = build_chain(self._middlewares, invoke)
+        # The chains are closures over the middleware each node had when the tree
+        # was sealed, so this invalidates the seal and the next use rebuilds them.
+        bump()
         return obj
 
     def _register_startup_hook(self, obj: StartupHook) -> StartupHook:
         self._startup_hooks.append(_as_startup_hook(obj))
+        bump()
         return obj
 
 
@@ -599,6 +817,93 @@ def _read_sql(path: Traversable, package: str, directory: str, name: str) -> str
         ) from error
 
 
+def _check_the_function_can_key_the_registry(tool: Tool) -> None:
+    """A tool is keyed by its function as well as by its name.
+
+    `tools_by_fn` is what `ctx.worlds.<name>.call(fn)` resolves through, so a
+    function that cannot be a dictionary key cannot be a tool. Said here rather
+    than left as a bare `TypeError`: `from_function` accepts any callable, and an
+    ordinary `@dataclass` with a `__call__` is one.
+
+    Control tools are not in that map, and are checked all the same: they are the
+    framework's own, so one that could not be is a bug here and not in a world.
+    """
+    try:
+        hash(tool.fn)
+    except TypeError as error:
+        raise WorldBug(
+            f"tool {tool.name!r} is built from a callable that cannot be hashed, and a tool is "
+            f"keyed by the function it was built from as well as by its name"
+        ) from error
+
+
+def _check_added_name(world: World, name: str) -> None:
+    """An added world's name is a path segment, a file name and an attached schema name.
+
+    Identifier-like and lowercase for the first two. `__` is refused for the
+    third: a node's schema name is its path with `/` replaced by `__`, so a
+    segment holding `__` would let `a__b` and `a/b` name one schema. `main` and
+    `temp` are SQLite's own schema names and could never be attached.
+    """
+    if not isinstance(name, str) or not NAME.fullmatch(name) or "__" in name:
+        raise WorldBug(
+            f"add_world({world.name}, name={name!r}): a name is lowercase letters, digits and "
+            f"single underscores, starting with a letter. It becomes a path segment, a file name "
+            f"and an attached schema name, which is why '__' is not one of them"
+        )
+    if name in RESERVED_NODE_NAMES:
+        raise WorldBug(
+            f"add_world({world.name}, name={name!r}): {name!r} is one of SQLite's own schema "
+            f"names ({', '.join(sorted(RESERVED_NODE_NAMES))}), so a store could not be attached "
+            f"under it"
+        )
+
+
+def _check_bound_startup(added: AddedWorld) -> None:
+    """`startup=` binds keywords to the added world's *own* hooks, so it names them.
+
+    Its own and not its subtree's: bound keywords are delivered to this node's
+    hooks and nothing deeper. The added world's registry is complete by now -- it
+    was imported before this host could name it.
+    """
+    if not added.startup:
+        return
+    hooks = added.world.startup_hooks
+    if any(hook.takes_var_kwargs for hook in hooks):
+        return
+    accepted = added.world.accepted_startup_kwargs
+    unknown = sorted(set(added.startup) - accepted)
+    if unknown:
+        names = ", ".join(sorted(accepted)) or "nothing"
+        raise WorldBug(
+            f"add_world({added.world.name}, name={added.name!r}): startup names "
+            f"{', '.join(repr(keyword) for keyword in unknown)}, which no startup hook of "
+            f"{added.world.name!r} accepts; its hooks accept: {names}"
+        )
+
+
+def _check_for_a_cycle(host: World, added: AddedWorld) -> None:
+    """A world may not appear in its own subtree, directly or transitively.
+
+    A self-add is the depth-0 case of the same walk. Without this the node graph
+    would not terminate, and no reading of "one store per node" would make sense
+    for a world that contains itself.
+    """
+    pending = [added.world]
+    seen: set[World] = set()
+    while pending:
+        world = pending.pop()
+        if world is host:
+            raise WorldBug(
+                f"add_world({added.world.name}, name={added.name!r}): {host.name!r} is in the "
+                f"tree of {added.world.name!r}, so adding it would put the world inside itself"
+            )
+        if world in seen:
+            continue
+        seen.add(world)
+        pending.extend(inner.world for inner in world.added_worlds)
+
+
 def _check_name(name: str) -> None:
     """A world's name becomes a directory name, so it has to be one.
 
@@ -611,25 +916,17 @@ def _check_name(name: str) -> None:
     directories, and `World("../..")` put a live database outside the working root
     entirely, where the sweep never looks and the files stay for ever.
 
-    The rule is `fixtures.check_id`'s -- one path segment, no leading dot, no NUL
-    -- with both separators refused rather than the platform's, because a world is
-    spelled once and read on every platform. (That is the one place the two rules
-    differ, and deliberately: `check_id`'s is `components/fixtures_instances.md`
-    §1's, which names the platform's own separator.) A name is also headed for
-    more than a path -- a log line, a sidecar, a URL -- which is the other reason
-    it is checked here, where the name is accepted, rather than where a directory
-    is made from it.
+    The rule is `names.why_not_a_name`'s, which `fixtures.check_id` applies to a
+    fixture id for the same reasons; it is written down once there. A name is also
+    headed for more than a path -- a log line, a sidecar, a URL -- which is the
+    other reason it is checked here, where the name is accepted, rather than where
+    a directory is made from it.
     """
-    if (
-        not name
-        or "\x00" in name
-        or _SEPARATOR.search(name)
-        or name.startswith(".")
-        or name != Path(name).name
-    ):
+    reason = why_not_a_name(name)
+    if reason is not None:
         raise WorldBug(
-            f"not a world name: {name!r}; World(name=...) is one directory name, with no "
-            f"separator and no leading dot"
+            f"not a world name: {name!r}: {reason}. World(name=...) is one directory name: "
+            f"{NAME_RULE}."
         )
 
 

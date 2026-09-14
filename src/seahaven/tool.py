@@ -12,11 +12,11 @@ or an extension's -- builds its tool with them and hands the result to
 """
 
 import inspect
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, time
 from enum import Enum
-from typing import Any, Self, get_args
+from typing import Any, Concatenate, get_args, get_origin
 
 import pydantic
 from pydantic import ConfigDict, create_model
@@ -48,18 +48,25 @@ _MUTABLE_DEFAULTS = (list, dict, set, bytearray)
 
 
 @dataclass(frozen=True, eq=False)
-class Tool:
+class Tool[**P = ..., R = Any]:
     """One registered tool.
 
     Hashable by name, which is what the registry keys on, and a tool's name is
     unique in a world by construction. Equality is identity: a `Tool` carries a
     function, a model class and a schema dict, and there is no useful sense in
     which two separately built ones are the same tool.
+
+    Generic in the function's own parameters and return type, so a tool built by
+    a factory carries what a tool built by the decorator carries: the decorator
+    hands the function itself back and `inst.call(fn, ...)` reads its signature,
+    while a factory hands back a `Tool` and this is where those types survive.
+    Annotation-only -- nothing in the runtime reads `P` or `R` -- and both
+    parameters default, so a bare `Tool` is the annotation it always was.
     """
 
     name: str
     description: str
-    fn: Callable[..., Any]
+    fn: Callable[Concatenate[Ctx[Any], P], R]
     params: type[pydantic.BaseModel]
     schema: dict[str, Any]
     transaction: bool = True
@@ -72,15 +79,20 @@ class Tool:
         return hash(self.name)
 
     @classmethod
-    def from_function(
+    def from_function[**Q, S](
         cls,
-        fn: Callable[..., Any],
+        fn: Callable[Concatenate[Ctx[Any], Q], S],
         *,
         name: str | None = None,
         description: str | None = None,
         transaction: bool = True,
-    ) -> Self:
-        """Build a tool from a function, refusing anything that cannot be one."""
+    ) -> Tool[Q, S]:
+        """Build a tool from a function, refusing anything that cannot be one.
+
+        `Tool(...)`, not `cls(...)`: the function's parameters and result have to
+        reach the returned type, and `Self` cannot carry them. Nothing subclasses
+        `Tool`, and the class is public to be *built* from rather than derived.
+        """
         tool_name = name or getattr(fn, "__name__", "")
         if not tool_name:
             raise WorldBug(f"a tool needs a name: {fn!r} has no __name__, so pass name=")
@@ -93,7 +105,7 @@ class Tool:
         fields = {p.name: _field(tool_name, p) for p in parameters[1:]}
 
         params = _build_model(tool_name, fields)
-        return cls(
+        return Tool(
             name=tool_name,
             description=description if description is not None else (inspect.getdoc(fn) or ""),
             fn=fn,
@@ -126,6 +138,61 @@ class Tool:
         # function is called with the name Python can spell.
         return {name: getattr(model, name) for name in type(model).model_fields}
 
+    def arguments(self, positional: Sequence[Any], keywords: Mapping[str, Any]) -> dict[str, Any]:
+        """This call's arguments spelled the way Python spells them, as the wire spells them.
+
+        The typed call path names arguments by the function's own *parameters*,
+        and its `ParamSpec` (`*args: P.args, **kwargs: P.kwargs`) makes a
+        parameter the function declares positionally legal to pass positionally --
+        so a call that type-checks has to run. Validation, on the other side of
+        this, takes the names the tool list publishes, and the two differ wherever
+        an argument declares an alias: the agent sends `from` and the function
+        receives `from_`. Positional arguments therefore bind in the argument
+        model's field order -- the signature's order after the context -- and
+        every name is then translated.
+
+        A `WorldBug` either way it can go wrong: only in-process host code can
+        reach this, and both mistakes are ones a type checker has already refused.
+        """
+        names = list(self.params.model_fields)
+        if len(positional) > len(names):
+            raise WorldBug(
+                f"tool {self.name!r} takes {len(names)} argument(s) and was passed "
+                f"{len(positional)} positionally"
+            )
+        twice = sorted(set(names[: len(positional)]) & set(keywords))
+        if twice:
+            raise WorldBug(
+                f"tool {self.name!r}: {', '.join(twice)} given both positionally and by name"
+            )
+        wire = self._wire_names(names)
+        given = {**dict(zip(names, positional, strict=False)), **keywords}
+        # A name that is not a parameter at all passes through under its own
+        # spelling, for `validate` to refuse in the words it refuses an agent's.
+        return {wire.get(name, name): value for name, value in given.items()}
+
+    def _wire_names(self, names: Sequence[str]) -> dict[str, str]:
+        """Each parameter's name to the name a call sends it under.
+
+        Read from the published schema, whose properties are the argument model's
+        fields in order, rather than from each `FieldInfo`: the tool list is the
+        contract, so whatever the list says an argument is called is what a typed
+        call sends it as -- an `alias`, a `validation_alias` and the first of an
+        `AliasChoices` alike, with no rule here to keep in step with pydantic's.
+
+        A schema that does not describe these fields one for one is not one this
+        can read, and every parameter then keeps its own name, which is what it
+        had before aliases were translated at all. That is a hand-built tool, or
+        one whose aliases collide -- two parameters publishing under one name
+        collapse `properties` to fewer entries than there are fields -- and such
+        a tool has already published a schema an argument is missing from, so
+        the identity fallback is no worse than the list it came from.
+        """
+        published = tuple(self.schema.get("properties", ()))
+        if len(published) != len(names):
+            return {}
+        return dict(zip(names, published, strict=True))
+
     def listing(self) -> dict[str, Any]:
         """The tool as a tool list carries it, which is OpenEnv's own `Tool` shape."""
         return {"name": self.name, "description": self.description, "input_schema": self.schema}
@@ -156,12 +223,23 @@ def _signature(tool_name: str, fn: Callable[..., Any]) -> inspect.Signature:
 
 
 def _check_context_parameter(tool_name: str, parameter: inspect.Parameter) -> None:
-    annotation = parameter.annotation
-    if parameter.kind not in _POSITIONAL or annotation not in (inspect.Parameter.empty, Ctx):
+    if parameter.kind not in _POSITIONAL or not _is_ctx(parameter.annotation):
         raise WorldBug(
             f"tool {tool_name!r}: the first parameter is the context, taken positionally and "
-            f"annotated `Ctx` or not annotated at all; {parameter.name!r} is neither"
+            f"annotated `Ctx`, `Ctx[X]` or not annotated at all; {parameter.name!r} is neither"
         )
+
+
+def _is_ctx(annotation: Any) -> bool:
+    """Whether an annotation is the context: bare, parameterised, or absent.
+
+    `Ctx[CompanyWorlds]` is a world declaring the children it adds to a type
+    checker (architecture section 8.3), and it is the same object at run time as
+    a bare `Ctx`, so registration has no reason to know the difference.
+    """
+    return (
+        annotation is inspect.Parameter.empty or annotation is Ctx or get_origin(annotation) is Ctx
+    )
 
 
 def _field(tool_name: str, parameter: inspect.Parameter) -> tuple[Any, Any]:

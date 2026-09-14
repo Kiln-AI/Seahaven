@@ -2,10 +2,11 @@
 
     uv run python -m bench all --out bench/results/latest.md
 
-Four subcommands -- `baseline`, `sweep`, `isolation`, `all` -- because a sweep
-takes minutes and someone changing the harness wants one measurement back in
-seconds. `--quick` shrinks every count to something a test can afford; it is not
-a measurement and the report it writes says the counts it used.
+Five subcommands -- `baseline`, `sweep`, `isolation`, `composite`, `all` --
+because a sweep takes minutes and someone changing the harness wants one
+measurement back in seconds. `--quick` shrinks every count to something a test
+can afford; it is not a measurement and the report it writes says the counts it
+used.
 """
 
 import argparse
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from bench import report
 from bench.baseline import baseline, share
+from bench.composite import composite
 from bench.environment import capture
 from bench.harness import cold_cache_supported, quiet_logging
 from bench.runner import CACHES, Cache
@@ -33,6 +35,8 @@ SWEEP_CALLS = 200
 REPEATS = 3
 ISOLATION_SECONDS = 3.0
 ISOLATION_READERS = 4
+COMPOSITE_CALLS = 1000
+TREE_REPEATS = 5
 SEED = 11
 
 QUICK = {
@@ -43,6 +47,8 @@ QUICK = {
     "readers": 2,
     "gates": (1, 0),
     "workers": (2,),
+    "composite_calls": 4,
+    "tree_repeats": 1,
 }
 
 
@@ -103,6 +109,18 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command in ("isolation", "all")
                 else None
             ),
+            # Last, because a seal is timed by invalidating every cached
+            # composition in the process: whatever runs after it pays for one
+            # reseal of its own world.
+            composite=(
+                composite(
+                    calls=args.composite_calls,
+                    repeats=args.repeats,
+                    tree_repeats=args.tree_repeats,
+                )
+                if args.command in ("composite", "all")
+                else None
+            ),
             seconds=0.0,
         )
     document = report.render(dataclasses.replace(results, seconds=time.perf_counter() - began))
@@ -117,12 +135,13 @@ def main(argv: list[str] | None = None) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m bench",
-        description="Seahaven's benchmark: two workloads over ProjectTracker agency, and a "
-        "sweep of the concurrency gate. Run by hand; never a gate on anything.",
+        description="Seahaven's benchmark: two workloads over ProjectTracker agency, a "
+        "sweep of the concurrency gate, and what a node of a composite world costs. Run by "
+        "hand; never a gate on anything.",
     )
     parser.add_argument(
         "command",
-        choices=("baseline", "sweep", "isolation", "all"),
+        choices=("baseline", "sweep", "isolation", "composite", "all"),
         help="which measurements to run",
     )
     parser.add_argument("--out", default=None, help="write the report here instead of stdout")
@@ -157,6 +176,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--readers", type=int, default=ISOLATION_READERS, help="isolation probe reader sessions"
+    )
+    parser.add_argument(
+        "--composite-calls",
+        type=int,
+        default=COMPOSITE_CALLS,
+        help="calls per pass in the composite tables",
+    )
+    parser.add_argument(
+        "--tree-repeats",
+        type=int,
+        default=TREE_REPEATS,
+        help="times each composite tree is sealed, opened and destroyed",
     )
     parser.add_argument("--seed", type=int, default=SEED, help="the sweep's shuffle seed")
     parser.add_argument("--warm-only", action="store_true", help="skip the cold-cache runs")
