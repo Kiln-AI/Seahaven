@@ -37,15 +37,11 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
 
 ## Quickstart
 
-Install with `uv add seahaven` or `pip install seahaven`. Python 3.14+.
+**Install:** `uv add seahaven` or `pip install seahaven`. Python 3.14+.
 
-Scaffold a world:
+**Scaffold a world:** `uv run seahaven new crm`
 
-```sh
-seahaven new crm
-```
-
-Build your world: a schema and a set of tools. Here is a CRM with one table, a search index and two
+**Build your world:** a schema and a set of tools. Here is a CRM with one table, a search index and two
 tools:
 
 ```python
@@ -80,7 +76,7 @@ def search_stale_leads(ctx: seahaven.Ctx, query: str) -> list[dict[str, str]]:
 
 Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
 
-Run your agent against it. Every rollout gets a private copy of a fixture, the same seed replays the
+**Run your agent against it:** Every rollout gets a private copy of a fixture, the same seed replays the
 same run, and what the agent changed is a diff:
 
 ```py
@@ -90,11 +86,10 @@ for rollout in range(100):
         reward = grade(world_instance.changes())                     # the net diff the agent left behind
 ```
 
-Serve it. Every session gets its own instance, any OpenEnv client can drive it, and with the control
-tools on your harness can read the final state:
+**Serve it:** Host and OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.
 
 ```sh
-seahaven serve --include-control-tools
+uv run seahaven serve
 ```
 
 ```py
@@ -104,14 +99,11 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     env.reset(fixture="big_co", seed=42)
     env.call("create_contact", email="ada@example.com", notes="asked about pricing for 50 seats")
     stale = env.call("search_stale_leads", query="pricing").result
-    changes = env.call("controller_changes").result  # the final state, as a diff
+    changes = env.state()  # the final state, as a diff
 ```
 
 For a full-size example, see [ProjectTracker](worlds/projecttracker/), the reference world: a
 fictional issue tracker with nine tables, 25 tools, search and three fixtures.
-
-Building a world with an agent? Point it at `seahaven docs`. The docs ship inside the package and
-always match the installed version.
 
 ## Serving (OpenEnv)
 
@@ -119,6 +111,11 @@ Seahaven's remote lifecycle and transport are [OpenEnv](https://huggingface.co/d
 an open standard for connecting to RL environments. `seahaven serve` runs one world, creating a
 unique instance and episode for each connection. Serve over 100 instances per process. Connect with
 any OpenEnv client or tool, like [Kiln](https://kiln.tech).
+
+## Agents
+
+Building a world with an agent? Point it at `uv run seahaven docs`. The docs ship inside the package and
+always match the installed version.
 
 ## License
 
