@@ -241,6 +241,12 @@ class Ids:
 Product-shaped keys — `ENG-13`, a sequential invoice number — are the world's own business, built on
 `ids.random` or on its tables. This is the stream they draw from.
 
+SQLite's `random()` and `randomblob()` are overridden on every connection an instance opens, each
+from a stream of its own derived from the instance seed, so SQL replays as `ctx.ids` does — and no
+two doors onto one instance, nor `ctx.ids`, hand out the same values. They are registered as
+innocuous, so a `DEFAULT` clause and a trigger may call them, and deliberately not as deterministic,
+so SQLite asks them for every call.
+
 ## `Call`
 
 ```py
@@ -399,7 +405,9 @@ enormous one. `read_only=False` allows writes to the listed tables, which commit
 any other tool's.
 
 `max_rows` and `max_bytes` are the world's truncation policy, for a product that truncates; unset
-means the whole result. `functions` allows SQLite functions beyond the default list.
+means the whole result. `functions` allows SQLite functions beyond the default list. `random()` and
+`randomblob()` are on that list: an agent may draw from them because what it draws is the instance's
+seeded stream, not the host's entropy.
 
 Nothing is inferred from a name: an FTS5 virtual table and its shadow tables are denied like any
 other table the world did not list, and allowed when it does list them. Full-text `MATCH` therefore

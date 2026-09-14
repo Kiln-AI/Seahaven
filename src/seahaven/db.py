@@ -8,6 +8,12 @@ Three doors are opened here. `build_blank` writes a fresh database from a world'
 DDL, `open_instance` opens the writable connection an instance serves calls from,
 and `open_inspection` opens a second, read-only view of the same file -- and of
 every other node's file, attached -- for looking at state without disturbing it.
+Every connection an instance opens carries its clock and its own seeded
+`random()`; `build_blank` carries neither, because it predates the instance --
+there is no instant and no seed yet, and the database it writes is the world's
+schema rather than any one run of it. A world whose schema files draw randomness
+or read the clock while they run therefore writes a blank database that is not
+reproducible, which is the same gap on both and is `BACKLOG.md` B27.
 """
 
 import re
@@ -22,6 +28,7 @@ import apsw
 
 from seahaven.clock import Clock, register_clock_functions
 from seahaven.errors import DbError, WorldBug
+from seahaven.ids import INSTANCE_STREAM, register_random_functions
 
 __all__ = [
     "Db",
@@ -151,8 +158,8 @@ class Db:
 
         Errors raised through it are APSW's, not `DbError`. Do not close it,
         change its pragmas or its authorizer, or open a second connection to the
-        same file: the clock functions, the changeset session and the per-call
-        transaction all live on this connection.
+        same file: the clock and randomness functions, the changeset session and
+        the per-call transaction all live on this connection.
         """
         return self._conn
 
@@ -249,7 +256,7 @@ class Db:
                 self._helper.close()
 
 
-def open_instance(path: Path, clock: Clock) -> Db:
+def open_instance(path: Path, clock: Clock, seed: bytes) -> Db:
     """Open the writable connection an instance serves its tool calls from."""
     conn = apsw.Connection(str(path))
     _harden(conn)
@@ -267,11 +274,27 @@ def open_instance(path: Path, clock: Clock) -> Db:
     conn.set_busy_timeout(0)
     # SQLite's own sqlite3_limit defaults are left alone: world code is trusted,
     # and the sandbox lowers the value cap for the length of an agent statement.
+
+    register_random_functions(conn, seed, INSTANCE_STREAM)
     return Db(conn, register_clock_functions(conn, clock))
 
 
-def open_inspection(path: Path, clock: Clock, attachments: Sequence[tuple[str, Path]] = ()) -> Db:
+def open_inspection(
+    path: Path,
+    clock: Clock,
+    seed: bytes,
+    stream: bytes,
+    attachments: Sequence[tuple[str, Path]] = (),
+) -> Db:
     """Open a second, read-only view of an instance for looking at its state.
+
+    `stream` names which read-only door this is -- `INSPECTION_STREAM` for the
+    handle a caller reads state through, `CONTROL_STREAM` for the control tools'
+    own -- so that two doors onto one instance do not hand out the same random
+    values. See `ids.register_random_functions`. One door is one stream whatever
+    it is attached to: a composite instance's read-only handles each draw from a
+    single stream of their own, not one per node, since the nodes are schemas on
+    one connection.
 
     `attachments` are `(schema name, file)` pairs -- a composite instance's added
     nodes, under the schema names their paths derive -- and this is the one place
@@ -287,6 +310,7 @@ def open_inspection(path: Path, clock: Clock, attachments: Sequence[tuple[str, P
         _read_only_uri(path), flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI
     )
     _harden(conn)
+    register_random_functions(conn, seed, stream)
     helper = register_clock_functions(conn, clock)
     for schema, attached in attachments:
         conn.execute("ATTACH DATABASE ? AS ?", (_read_only_uri(attached), schema))

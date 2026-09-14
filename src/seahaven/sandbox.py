@@ -54,8 +54,7 @@ __all__ = [
 # SQLite functions an agent's SQL may call. An allowlist rather than a denylist,
 # because the interesting ones to refuse are the ones nobody thought of.
 #
-# The three groups left out on purpose:
-#   * `random`, `randomblob` -- an instance is meant to be reproducible.
+# The two groups left out on purpose:
 #   * `load_extension` -- loads native code. Denied here and disabled on the
 #     connection; either alone would do.
 #   * `sqlite_version`, `sqlite_source_id`, `changes`, `last_insert_rowid`,
@@ -94,6 +93,9 @@ ALLOWED_FUNCTIONS = frozenset(
         # the clock. These names are `clock.py`'s overrides, not SQLite's originals.
         "current_date", "current_time", "current_timestamp", "date", "datetime",
         "julianday", "strftime", "time", "timediff", "unixepoch",
+        # randomness, on the same terms: `ids.py`'s overrides draw from the
+        # instance's seed, so an agent rolling dice still replays.
+        "random", "randomblob",
     }
 )  # fmt: skip
 

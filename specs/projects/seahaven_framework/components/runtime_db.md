@@ -28,8 +28,8 @@ class Db:
 
 type SqlValue = None | int | float | str | bytes
 
-def open_instance(path: Path, clock: Clock) -> Db: ...
-def open_inspection(path: Path, clock: Clock) -> Db: ...
+def open_instance(path: Path, clock: Clock, seed: bytes) -> Db: ...
+def open_inspection(path: Path, clock: Clock, seed: bytes, stream: bytes) -> Db: ...
 def build_blank(path: Path | Literal[":memory:"], ddl: str) -> apsw.Connection: ...
 def shadow_tables(conn: apsw.Connection) -> frozenset[str]: ...
 def world_tables(conn: apsw.Connection) -> list[str]: ...
@@ -74,7 +74,8 @@ conn.pragma("foreign_keys", "ON")
 conn.config(SQLITE_DBCONFIG_DEFENSIVE, 1); conn.config(SQLITE_DBCONFIG_TRUSTED_SCHEMA, 0)
 conn.enable_load_extension(False)
 conn.set_busy_timeout(0)                       # one writer per instance by construction; a wait is a bug
-helper = register_clock_functions(conn, clock) # section 2
+register_random_functions(conn, seed, INSTANCE_STREAM)  # section 3
+helper = register_clock_functions(conn, clock)          # section 2
 ```
 
 No `sqlite3_limit` is changed from SQLite's defaults on this connection (statement length 1 GB,
@@ -83,7 +84,9 @@ lowers `SQLITE_LIMIT_LENGTH` for the duration of an agent statement and restores
 world code is trusted and gets SQLite's own defaults.
 
 `open_inspection`: `file:<path>?mode=ro` URI, `SQLITE_OPEN_READONLY`, same hardening, clock
-functions, `deny_writes` authorizer installed permanently.
+functions, randomness functions on the `stream` the caller names (`INSPECTION_STREAM` for the
+`inspect()` handle, `CONTROL_STREAM` for the control tools' own), `deny_writes` authorizer installed
+permanently.
 
 `build_blank(path, ddl)`: refuses an existing file; `foreign_keys=ON`; executes the DDL in one
 transaction; returns the open connection. The framework adds no tables of its own.
@@ -126,6 +129,28 @@ class Ids:
 
 `caller_seed`: `None` → `b"default"`; `int` → 8-byte big-endian (negative refused); `bytes` as is.
 Issue-key minting belongs to ProjectTracker; `Ids` is world-agnostic.
+
+SQL's own randomness lives here too, because it is the same seed:
+
+```python
+INSTANCE_STREAM = b"instance"; INSPECTION_STREAM = b"inspection"; CONTROL_STREAM = b"control"
+def register_random_functions(conn: apsw.Connection, seed: bytes, stream: bytes) -> None
+```
+
+Overrides for `random()` (0 args) and `randomblob()` (1 arg), registered `SQLITE_INNOCUOUS` and
+deliberately **not** `SQLITE_DETERMINISTIC` — SQLite factors a constant deterministic call out of
+the loop and evaluates it once. They draw from `random.Random(sha256(seed + b"\0" + stream))`, so
+each of an instance's three connections replays a stream of its own and none of them is the stream
+`ctx.ids` takes (which is the instance seed itself). SQLite's own PRNG is not an option: it is
+seeded once per process from the default VFS's `xRandomness` and shared by every connection, and
+per-connection seeding exists only as the test-control `SQLITE_TESTCTRL_PRNG_SEED`.
+
+Semantics are SQLite's: `random()` is a signed 64-bit integer with `randomFunc`'s fold away from
+`-2**63`; `randomblob(n)` reads `n` as `sqlite3_value_int64` does, raises `n < 1` to 1, and checks
+the connection's `SQLITE_LIMIT_LENGTH` **before** drawing — the sandbox lowers that limit for the
+length of an agent statement, and drawing first would allocate the value the cap exists to refuse.
+The override holds a **weak** reference to the connection to read that limit: a strong one is a
+cycle through the connection's own function table that the collector cannot break.
 
 ## 4. `sandbox.py`
 
@@ -181,8 +206,10 @@ so agent SQL cannot materialise an enormous single value, which is the one failu
 worth stopping.
 
 `ALLOWED_FUNCTIONS` allows aggregates, window, text, numeric, math and JSON functions and the clock
-overrides. Left out on purpose: `random`, `randomblob`, `load_extension`, `sqlite_version`,
-`changes`, `last_insert_rowid`, `total_changes`, `sqlite_offset`. FTS5's functions are not in the
+and randomness overrides — `random` and `randomblob` are section 3's, drawing from the instance's
+seed rather than the host's entropy, so an agent may call them and the run still replays. Left out
+on purpose: `load_extension`, `sqlite_version`, `changes`, `last_insert_rowid`, `total_changes`,
+`sqlite_offset`. FTS5's functions are not in the
 default list because shadow tables are denied, and there are **four** of them, not three: the
 auxiliaries `bm25`, `snippet` and `highlight`, plus **`match`**, which is the name SQLite asks the
 authorizer about when it meets the `MATCH` *operator*. A world exposing search through SQL passes

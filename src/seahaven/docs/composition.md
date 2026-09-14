@@ -441,7 +441,10 @@ the framework has.
   in every added world reads the same instant.
 - **One seed**, and each node draws ids from its own stream, salted with its canonical path. Adding
   or removing a node never perturbs another node's ids, and the same fixture and seed reproduce
-  every node.
+  every node. SQL's `random()` and `randomblob()` are seeded per node from the same salt, so a
+  `DEFAULT (randomblob(8))` in one added world's schema replays and is not the stream any other
+  node — or any `ctx.ids` — draws from. The root's stream is the instance seed untouched, which is
+  why a world that adds nothing mints exactly what it always did.
 - **`inst.db`, `inst.state_path` and the `ctx` a tool of the root receives are the root's.** An added
   node's store is reached through `ctx.worlds`, never from the instance.
 - **Isolation between nodes is structural.** A world's `ctx.db` is one file, and a world's own

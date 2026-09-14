@@ -8,6 +8,7 @@ committed package per shape would be a directory of them. The committed tree
 """
 
 import copy
+import hashlib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -15,8 +16,11 @@ from typing import Any
 import emporium
 import pytest
 
+from seahaven.clock import Clock
 from seahaven.ctx import Ctx
+from seahaven.db import open_instance
 from seahaven.errors import WorldBug
+from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, INSTANCE_STREAM, Ids
 from seahaven.instances import node_seed
 from seahaven.world import World
 from tests.conftest import INSTANT_ISO, composable_world
@@ -138,6 +142,100 @@ def test_the_node_seed_of_the_root_is_the_instance_seed(tmp_path: Path) -> None:
     assert node_seed(b"base", "child") != b"base"
     assert node_seed(b"base", "child") == node_seed(b"base", "child")
     assert node_seed(b"base", "child") != node_seed(b"base", "child/grand")
+
+
+# ------------------------------------------------------------ the SQL streams
+
+
+def draws(db: Any, count: int = 3) -> list[tuple[int, bytes]]:
+    """`count` draws of each seeded SQL function on one node's own connection."""
+    rolled = []
+    for _ in range(count):
+        row = db.one("SELECT random() AS r, randomblob(8) AS b")
+        assert row is not None
+        rolled.append((row["r"], row["b"]))
+    return rolled
+
+
+def test_each_node_draws_its_sql_randomness_from_a_stream_of_its_own(tmp_path: Path) -> None:
+    """`random()` is registered per connection, and there is one connection per node.
+
+    Two nodes sharing a stream in SQL would be the same leak `ctx.ids` is salted
+    by path to avoid, one door over: an agent drawing on one store would read out
+    what a `DEFAULT` clause is about to write into another.
+    """
+    with two_levels(tmp_path).instance(None, seed=7) as live, live.bulk() as ctx:
+        rolled = [
+            draws(ctx.db),
+            draws(ctx.worlds.child.db),
+            draws(ctx.worlds.child.worlds.grand.db),
+        ]
+    assert len({tuple(node) for node in rolled}) == 3
+
+
+def test_the_same_seed_replays_every_nodes_sql_stream(tmp_path: Path) -> None:
+    host = two_levels(tmp_path)
+
+    def rolled() -> list[list[tuple[int, bytes]]]:
+        with host.instance(None, seed=7) as live, live.bulk() as ctx:
+            return [
+                draws(ctx.db),
+                draws(ctx.worlds.child.db),
+                draws(ctx.worlds.child.worlds.grand.db),
+            ]
+
+    assert rolled() == rolled()
+
+
+def test_the_roots_sql_stream_is_untouched_by_the_nodes_below_it(tmp_path: Path) -> None:
+    """The other half of "a leaf world is the degenerate case", in SQL.
+
+    The root's node seed is the instance seed itself, so its connection registers
+    `random()` and `randomblob()` from exactly the seed a world that adds nothing
+    has always registered them from.
+    """
+    with rooted("host", tmp_path / "a").instance(None, seed=7) as alone, alone.bulk() as ctx:
+        expected = draws(ctx.db)
+
+    with two_levels(tmp_path / "b").instance(None, seed=7) as live, live.bulk() as ctx:
+        assert draws(ctx.db) == expected
+        base = live.seed
+
+    # And pinned against the derivation itself, because the two above move
+    # together under any change to the root's seed: `origin/main` registers an
+    # instance's writable connection on the instance seed with nothing between.
+    plain = open_instance(tmp_path / "plain.sqlite", Clock.from_iso(INSTANT_ISO), base)
+    try:
+        assert draws(plain) == expected
+    finally:
+        plain.close()
+
+
+def test_a_node_named_after_a_sql_door_does_not_draw_that_doors_stream(tmp_path: Path) -> None:
+    """A child may be called `instance`, `inspection` or `control`; so is each door.
+
+    `node_seed` and `ids._stream_seed` both salt the one instance seed as
+    `sha256(base + b"\0" + ...)`, and a node's name and a door's label share no
+    namespace, so a node of that name would otherwise mint its identifiers out of
+    the very stream a connection is handing to SQL -- and an agent's
+    `SELECT random()` would read them out. The `node` tag in `node_seed` is what
+    separates the two.
+    """
+    host = rooted("host", tmp_path)
+    labels = (INSTANCE_STREAM, INSPECTION_STREAM, CONTROL_STREAM)
+    named = [label.decode() for label in labels]
+    for name in named:
+        host.add_world(composable_world(name), name=name)
+
+    with host.instance(None, seed=7) as live:
+        base = live.seed
+        minted = [live.call(f"{name}_write", value="x")["id"] for name in named]
+
+    # The doors' own derivation, written out rather than imported, because it is
+    # the shape being separated from and not an implementation detail to follow.
+    echoes = [Ids(hashlib.sha256(base + b"\0" + label).digest()).uuid() for label in labels]
+    assert minted != echoes
+    assert not set(minted) & set(echoes)
 
 
 # ------------------------------------------------------------- startup hooks

@@ -529,6 +529,19 @@ def test_a_composite_pass_reports_the_calls_it_made() -> None:
     assert cost.nodes == 1
 
 
+def flatten(text: str) -> str:
+    """One space for every run of whitespace, and no blockquote markers.
+
+    `report._wrapped` breaks the prose it renders at 96 columns, and where the
+    break lands depends on the run -- the command, the commit, the machine's CPU
+    model. The provenance paragraph is quoted as well, so a break inside the
+    model name leaves `> ` in the middle of it. A substring looked for across one
+    of those breaks is in the document and still missed; flattening both sides
+    asserts the content rather than this machine's layout.
+    """
+    return " ".join(" ".join(line.removeprefix(">") for line in text.splitlines()).split())
+
+
 def test_the_composite_section_carries_its_own_provenance_and_both_tables() -> None:
     """It is pasted into reports whose other tables came from another run."""
     environment = capture()
@@ -541,15 +554,19 @@ def test_the_composite_section_carries_its_own_provenance_and_both_tables() -> N
             composite=composite(calls=2, repeats=1, tree_repeats=1),
         )
     )
-    section = document[document.index("## 7.") :]
-    assert "**Provenance.**" in section
-    assert "python -m bench composite --quick" in section
-    assert environment.commit in section
-    assert environment.cpu_model in section
-    assert "### Standing one up" in section
-    assert "### What a node costs a call" in section
-    assert "| `emporium` | 4 | 4 |" in section, "four nodes, four stores"
-    assert "settle_order" in section
+    # Whitespace-flattened on both sides, because the provenance paragraph is
+    # re-wrapped at 96 columns and the break lands wherever this machine's
+    # command, commit and CPU model put it -- on another host it lands mid-model
+    # and an unflattened `in` misses content that is right there.
+    section = flatten(document[document.index("## 7.") :])
+    assert flatten("**Provenance.**") in section
+    assert flatten("python -m bench composite --quick") in section
+    assert flatten(environment.commit) in section
+    assert flatten(environment.cpu_model) in section
+    assert flatten("### Standing one up") in section
+    assert flatten("### What a node costs a call") in section
+    assert flatten("| `emporium` | 4 | 4 |") in section, "four nodes, four stores"
+    assert flatten("settle_order") in section
 
 
 def test_the_method_section_is_dropped_when_no_projecttracker_run_happened(world: World) -> None:

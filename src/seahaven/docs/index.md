@@ -96,7 +96,9 @@ Every command except `new` and `docs` finds the world by convention: the project
 
 - **Time comes from `ctx.clock`** and ids and randomness from `ctx.ids`. An instance's clock does
   not move, so a replay of the same fixture and seed gives the same run — for a world that takes
-  both from `ctx`. The framework offers reproducibility; it does not enforce it.
+  both from `ctx`. SQL's own `CURRENT_TIMESTAMP`, `random()` and `randomblob()` are overridden on
+  every connection to read the same instant and the same seed. The framework offers
+  reproducibility; it does not enforce it.
 - **Fixtures are immutable.** Fork, change the fork, freeze that. There is no in-place edit path.
 - **SQL goes through `ctx.db`**, on the one connection the instance owns. `ctx.db.conn` is the raw
   APSW connection for what the wrapper does not cover; never close it or change its pragmas.

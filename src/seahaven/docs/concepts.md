@@ -166,6 +166,29 @@ def first_issue_id() -> str:
 assert first_issue_id() == first_issue_id()
 ```
 
+SQL is seeded from the same place. Every connection an instance opens overrides SQLite's `random()`
+and `randomblob()`, the way it overrides the date and time functions, so a `DEFAULT (randomblob(8))`
+in a world's schema and a `SELECT random()` an agent wrote both replay. Each connection draws from a
+stream of its own, derived from the instance seed and separate from `ctx.ids`, so an agent rolling
+dice in SQL neither shifts the identifiers world code mints after it nor reads out what an
+`inspect()` handle will draw.
+
+```python
+import projecttracker
+
+world = projecttracker.world
+
+
+def roll() -> int:
+    with world.instance("small_startup", seed=11) as inst:
+        rolled = inst.inspect().one("SELECT random() AS value")
+        assert rolled is not None
+        return int(rolled["value"])
+
+
+assert roll() == roll()
+```
+
 **Reproducibility is offered, not enforced.** The framework gives you a frozen clock and a seeded
 stream and guarantees those are deterministic. A world that calls `datetime.now()` or `uuid.uuid4()`
 gets exactly what it asked for, and `seahaven check` warns about both (`SH201`, `SH203`) rather than

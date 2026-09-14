@@ -72,7 +72,7 @@ from seahaven.db import Db, build_blank, open_inspection, open_instance
 from seahaven.errors import ToolError, UnknownTool, WorldBug
 from seahaven.fixtures import Fixture, check_composition, check_id, freeze, load, verify
 from seahaven.handles import Frame, unbound
-from seahaven.ids import Ids, instance_seed
+from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, Ids, instance_seed
 from seahaven.tool import Tool
 
 if TYPE_CHECKING:  # `world.py` imports this module; the annotation is all that is needed here
@@ -395,7 +395,13 @@ class Instance:
         """
         with self._held():
             if self._inspection is None:
-                self._inspection = open_inspection(self.state_path, self.clock, self._attachments())
+                self._inspection = open_inspection(
+                    self.state_path,
+                    self.clock,
+                    self.ctx.instance.seed,
+                    INSPECTION_STREAM,
+                    self._attachments(),
+                )
             return self._inspection
 
     def composition(self) -> tuple[NodeReport, ...]:
@@ -570,7 +576,13 @@ class Instance:
         """
         with self._held():
             if self._control is None:
-                self._control = open_inspection(self.state_path, self.clock, self._attachments())
+                self._control = open_inspection(
+                    self.state_path,
+                    self.clock,
+                    self.ctx.instance.seed,
+                    CONTROL_STREAM,
+                    self._attachments(),
+                )
             return self._control
 
     def _attachments(self) -> list[tuple[str, Path]]:
@@ -768,7 +780,10 @@ class InstanceManager:
                 _copy_fixture(fixture, composition, directory)
                 clock = Clock.from_iso(fixture.now)
             # The fixture id, or the world's name for a blank instance, so one
-            # caller seed against two fixtures gives two streams.
+            # caller seed against two fixtures gives two streams. Derived before
+            # any connection is opened, because every node's connection carries a
+            # stream of it too: `random()` and `randomblob()` are registered on
+            # each one from that node's own seed.
             base = instance_seed(fixture_id if fixture_id is not None else world.name, seed)
             info = InstanceInfo(id=instance_id, fixture=fixture_id, seed=base)
             for node in composition.nodes:
@@ -1016,18 +1031,35 @@ def node_seed(base: bytes, path: str) -> bytes:
     added node's is a function of its own canonical path alone, so adding or
     removing a node perturbs no other node's stream -- which is why the path is
     the salt rather than a position in the tree.
+
+    The `node` tag is domain separation against `ids._stream_seed`, which derives
+    a connection's `random()` stream as `sha256(seed + b"\0" + label)` over the
+    same base. A child may be named anything `^[a-z][a-z0-9_]*$` matches, `control`,
+    `inspection` and `instance` included, so without the tag a node of that name
+    would draw its identifiers from the very stream one of the root's three doors
+    hands to SQL -- and an agent's `SELECT random()` would read out the ids that
+    node is about to mint. Pinned by
+    `test_composite_instance.py::test_a_node_named_after_a_sql_door_does_not_draw_that_doors_stream`.
     """
     if path == ROOT_PATH:
         return base
-    return hashlib.sha256(base + b"\0" + path.encode("utf-8")).digest()
+    return hashlib.sha256(base + b"\0node\0" + path.encode("utf-8")).digest()
 
 
 def _open_node(
     node: Node, directory: Path, clock: Clock, base: bytes, info: InstanceInfo
 ) -> NodeRuntime:
-    """Open one node's file and build the context every call on it starts from."""
-    db = open_instance(directory / node.file_name, clock)
-    ids = Ids(node_seed(base, node.path))
+    """Open one node's file and build the context every call on it starts from.
+
+    The connection is opened on the node's own seed, so `random()` and
+    `randomblob()` in one node's SQL are a stream of that node's -- two nodes of
+    one instance share neither each other's nor their own `ctx.ids`. The root's
+    node seed is the instance seed itself, so a leaf world's writable connection
+    draws exactly what it drew before composition existed.
+    """
+    seed = node_seed(base, node.path)
+    db = open_instance(directory / node.file_name, clock, seed)
+    ids = Ids(seed)
     state: dict[str, Any] = {}
     return NodeRuntime(
         node=node,

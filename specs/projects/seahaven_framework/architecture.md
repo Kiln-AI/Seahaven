@@ -340,7 +340,10 @@ telemetry, no network.
 - **Seed:** `instance_seed = sha256(fixture_id_or_world_name + b"\0" + caller_seed_bytes)`;
   `seed=None` means `b"default"`; an `int` seed is encoded big-endian. `Ids.random =
   random.Random(int.from_bytes(seed))`. Instance ids themselves are `uuid4()` from the OS: identity
-  is not data and must be unique across processes.
+  is not data and must be unique across processes. SQL's `random()` and `randomblob()` are overridden
+  per connection from the same instance seed, each door on its own label
+  (`sha256(seed + b"\0" + stream)`), so a door replays across two runs of one seed while no two
+  doors of an instance, and not `ctx.ids` either, hand out the same values.
 - **Clock:** `Clock(now)` frozen; `register_clock_functions(conn, clock)` as in the reference
   implementation, including the private helper connection that evaluates SQLite's real date
   functions with `'now'` substituted, so modifiers and formats stay SQLite's. Functions registered
@@ -362,11 +365,12 @@ Each has a document under `components/`. Responsibilities and interfaces here; i
 
 ### 8.1 `components/runtime_db.md`: `Db`, connection setup, clock functions, `Ids`, sandbox
 
-- `open_instance(path, clock) -> Db`: WAL, `synchronous=NORMAL`, `foreign_keys=ON`, `DEFENSIVE`,
-  `TRUSTED_SCHEMA=0`, `busy_timeout=0`, SQLite's own `sqlite3_limit` defaults untouched, clock
-  functions, `load_extension` disabled.
-- `open_inspection(path, clock) -> Db`: `mode=ro` URI, write-denying authorizer, clock functions.
-  The write-denying authorizer is internal to this connection and is installed once, permanently.
+- `open_instance(path, clock, seed) -> Db`: WAL, `synchronous=NORMAL`, `foreign_keys=ON`,
+  `DEFENSIVE`, `TRUSTED_SCHEMA=0`, `busy_timeout=0`, SQLite's own `sqlite3_limit` defaults
+  untouched, clock functions, randomness functions on `INSTANCE_STREAM`, `load_extension` disabled.
+- `open_inspection(path, clock, seed, stream) -> Db`: `mode=ro` URI, write-denying authorizer, clock
+  functions, randomness functions on the caller's stream label. The write-denying authorizer is
+  internal to this connection and is installed once, permanently.
 - `sandbox.Authorizer(tables, read_only)` and `sandbox.run_statement(db, sql, params, *, authorizer,
   max_rows, max_bytes) -> SqlResult`: the reference implementation's design. Default-deny;
   `ALLOWED_FUNCTIONS` allowlist; refusals recorded and classified into `DbError.refusals`; execution

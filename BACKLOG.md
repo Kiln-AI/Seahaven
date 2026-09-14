@@ -171,6 +171,27 @@ tests in the repo that a plain CI run skips), or keep it and re-state what `slow
 `pyproject.toml` so the definition matches the only tests that use it. Not taken here because the
 measurement came out of a task that was told not to change tests for speed.
 
+### B27. A world's schema files can read the wall clock and the host's entropy while `build_blank` runs
+
+**Found:** 2026-09-14, reviewing the seeded `random()` and `randomblob()` change (`src/seahaven/ids.py`,
+`src/seahaven/db.py`). **Owner:** unassigned. **Risk:** a blank instance of such a world is not
+reproducible, and a fixture frozen from one bakes whatever the host gave it.
+
+`build_blank` opens a plain connection with neither `register_clock_functions` nor
+`register_random_functions` on it, because it runs before an instance exists: there is no instant
+and no seed yet. It does not only run DDL, though. `db.py:317` iterates every statement in the
+world's schema on purpose, so a world that seeds reference rows -- `INSERT INTO plans VALUES
+('free', randomblob(8))`, or a `created_at` defaulting to `CURRENT_TIMESTAMP` -- reads the host on
+every blank build. Both holes are the same shape and the clock one predates the randomness one; the
+randomness change did not widen it, because `build_blank` never had either set of overrides.
+
+Three ways to close it, and the choice is a maintainer's: give `build_blank` a clock and a seed of
+its own (`World.name` is the natural source, which is what a blank instance's seed already derives
+from); refuse a schema whose statements are not pure DDL, which `lint/ddl.py` is already the place
+for and which `_WALL_CLOCK` there half does already as a warning; or state in `authoring.md` that
+schema files are DDL only and that seed rows belong in a startup hook, where `ctx` is in hand. Not
+taken here because it is neither the clock's phase nor the randomness change's scope.
+
 ---
 
 ## Deferred — upstream

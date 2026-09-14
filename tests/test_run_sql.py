@@ -365,12 +365,46 @@ def test_a_cap_of_zero_is_a_world_that_truncates_everything(tmp_path: Path) -> N
         }
 
 
-def test_random_is_refused(reader: Instance) -> None:
-    """An instance is reproducible, so the one function that would not be is not offered."""
-    with pytest.raises(DbError) as raised:
-        ask(reader, "SELECT random()")
+def test_random_is_answered_from_the_instances_seed(tmp_path: Path) -> None:
+    """An instance is reproducible, so the door offers randomness rather than refusing it.
 
-    assert raised.value.refusals == ("function 'random'",)
+    The stream is the instance's, not the process's: the same seed replays it
+    through the door, and a different seed gives a different one.
+    """
+    world = sql_world(tmp_path)
+    dice = "SELECT random(), hex(randomblob(4))"
+
+    def rolls(seed: int) -> list[list[Any]]:
+        with world.instance(None, seed=seed) as instance:
+            return [ask(instance, dice)["rows"] for _ in range(3)]
+
+    assert rolls(11) == rolls(11)
+    assert rolls(11) != rolls(12)
+    # Three calls to one door, not one call answered three times: a stream, not
+    # a constant.
+    first, second, third = rolls(11)
+    assert first != second != third
+
+
+def test_drawing_random_in_sql_does_not_shift_the_worlds_ids(tmp_path: Path) -> None:
+    """An agent rolling dice through the door must not move `ctx.ids` along with it.
+
+    Both streams come from the one instance seed, so the run is still determined
+    by the seed and the fixture; what is separate is which draw each takes. A
+    door wired to `ctx.ids.random` instead would pass every test in `test_ids.py`
+    and fail this one.
+    """
+    world = sql_world(tmp_path)
+
+    def minted(*, rolling: bool) -> list[str]:
+        with world.instance(None, seed=5) as instance:
+            seed(instance)
+            if rolling:
+                ask(instance, "SELECT random(), randomblob(16)")
+            with instance.bulk() as ctx:
+                return [ctx.ids.uuid() for _ in range(3)]
+
+    assert minted(rolling=True) == minted(rolling=False)
 
 
 def test_a_blob_comes_back_as_base64_and_a_null_as_null(reader: Instance) -> None:
