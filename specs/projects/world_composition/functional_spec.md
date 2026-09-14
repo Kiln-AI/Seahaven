@@ -11,10 +11,11 @@ agent sees reveals that the world is composed.
 This is the only design document for the project (decided 2026-09-13: overview and functional spec;
 architecture is worked out in the repo with the code). It fixes behaviour and contracts and stops at
 exact Python signatures, module layout and packaging. It is written against the Seahaven framework
-as specified in `../matrix_framework/` (functional spec, architecture, components), which calls this
-feature **composable world modules** and records it as post-V1, P2, "needs DDL and fixture
-composition rules" (`../matrix_framework/PostV1.md`). This spec is those rules. Where it needs the
-framework to change, §13 lists the change. The overview records the session; where a sketch there
+as specified in `../seahaven_framework/` (functional spec, architecture, components). That spec does
+not cover **composable world modules**, the framework's name for this feature: it keeps tool
+projections and filtering out of scope (§24) and says nothing about a world adding worlds. This spec
+supplies the DDL and fixture composition rules the feature needs. Where it needs the framework to
+change, §13 lists the change. The overview records the session; where a sketch there
 differs from this spec, this spec governs. When it lands is not part of this spec; the lead triggers
 implementation.
 
@@ -22,7 +23,7 @@ implementation.
 
 The first drafts of this spec were written before the framework spec was merged and assumed a
 class-based world model. The framework decided Flask-style app-object registration
-(`../matrix_framework/decisions.md`, round 8): one `seahaven.World` object per package, tools as
+(framework spec §3.2): one `seahaven.World` object per package, tools as
 plain functions decorated `@world.tool` taking `ctx` first, `world.middleware`,
 `world.instance_startup`. This spec now builds on that, unchanged. Three allocation and shape
 decisions taken in the rewrite, open to veto:
@@ -31,8 +32,8 @@ decisions taken in the rewrite, open to veto:
   `Ctx`, the fixture sidecar, freeze, inspection and changesets, none of which the extension
   contract (framework spec §21) can reach, so it cannot ship as an extension. The simulated
   third-party SaaS worlds (Stripe-like, Slack-like) remain the private, sold-through-access product.
-  This splits the "composable world modules: private, P2" row of the allocation table into
-  mechanism (public, post-V1) and worlds (private).
+  The planning record this spec was drafted from listed composable world modules as one private,
+  post-V1 item; this splits it into mechanism (public, post-V1) and worlds (private).
 - **`world.add_world(...)` is a fourth registration verb**, in the framework's own idiom; a
   `Worlds` class is optional typing sugar (§2.4), never required.
 - **`reset()` keyword arguments are broadcast** to every startup hook in the tree that names them,
@@ -110,10 +111,10 @@ Rules:
 - A world with added worlds can still be run standalone as a root, with its own fixtures. Its
   fixtures are invisible to any host that adds it (§5.4).
 - Registration timing is the framework's: at import, before instances exist; registering during
-  calls is unsupported (framework decisions, DC-23).
+  calls is unsupported (framework spec §3.2: registration is explicit and happens at import time).
 
 **Why the lists and the prefix are not projections.** The framework keeps tool projections, groups
-and filtering out of Seahaven (decisions, round 4): reshaping a surface after the fact is the
+and filtering out of Seahaven (framework spec §24): reshaping a surface after the fact is the
 harness's job. `tool_allow_list`, `tool_block_list` and `tool_prefix` are not that. They are world
 code, written by the host's author, declaring which of a dependency's tools are the client's real
 surface and under what names, the same act as writing the tool list, fixed before any instance
@@ -240,7 +241,8 @@ Two consequences for the framework (§13):
 - **A typed result must be the object the tool returned.** `invoke` currently returns the serialised
   form (`to_jsonable_python`), so a tool returning an `Issue` model would hand in-process callers a
   dict and `R = Issue` would lie. `invoke` serialises inside the transaction to prove the result
-  serialises (keeping the rollback rule, DC-25) and returns the **original object**; the OpenEnv
+  serialises (keeping the framework's rule that an unserialisable result rolls the call back,
+  framework architecture §4) and returns the **original object**; the OpenEnv
   layer serialises for the wire. Guidance: tools return pydantic models or TypedDicts, not bare
   dicts, so results complete too.
 - **`Ctx` may be parameterised** for the optional `Worlds` sugar below; the registration check
@@ -442,7 +444,8 @@ store in one agent-visible call.
   would mean nothing.
 - **Host code has full read-write SQL access to every added world's store** (decided 2026-09-13):
   `ctx.worlds.stripe.db`. The host owns the instance; this is a framework and cannot predict every
-  use, and world code is trusted (framework A7: `ctx.db.conn` is public for the same reason). Direct
+  use, and world code is trusted (framework spec §1, trust; §4 makes `ctx.db.conn` public for the
+  same reason). Direct
   writes bypass the added world's handlers and therefore its invariants (clock stamps, id streams,
   audit rows, FTS triggers); the authoring docs guide the creation agent to prefer the added world's
   tools over direct SQL wherever a tool exists. Guidance, not enforcement.
@@ -543,10 +546,10 @@ An eval asking "was the invoice created and was the message posted" is one SQL s
 This is the one place files are combined, and it is safe because it is read-only and never a world
 tool. A world's `run_sql` never sees a sibling node's tables (§5.1).
 
-Bound: SQLite's attached-database limit, 10 by default and 125 at compile time (`../matrix/research/
-datastore_options/notes_sqlite_core_facts.md`). Exceeding it is a registration error when the host
-loads, not a surprise at instance creation. Whether the framework's SQLite build raises the limit is
-the repo's question.
+Bound: SQLite's attached-database limit. The SQLite that apsw bundles sets it at 125 (measured on
+apsw 3.53.4, for both the runtime default and the compile-time maximum); the architecture probes the
+installed value rather than assuming it. Exceeding it is a registration error when the host loads,
+not a surprise at instance creation.
 
 ### 6.2 Changes
 
@@ -683,8 +686,8 @@ Requirements handed elsewhere:
   prefixes and lists to match the client's real surface (§8); a world must not assume it is the only
   writer to a world it adds, since sharing is the default (§2.3); return models, not bare dicts, so
   typed calls complete (§2.4).
-- **Allocation** (`../matrix_framework/functional_spec.md` §24): the mechanism is framework core,
-  post-V1; the simulated third-party SaaS worlds are private (§0).
+- **Allocation**: the mechanism is framework core, post-V1; the simulated third-party SaaS worlds
+  are private (§0).
 
 ## 14. Proposed README section
 

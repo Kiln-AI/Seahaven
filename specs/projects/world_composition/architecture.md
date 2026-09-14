@@ -9,11 +9,6 @@ is deep enough that whoever implements it designs nothing significant. It is wri
 framework as specified in `../seahaven_framework/` (`architecture.md` and the eight documents under
 `components/`), none of whose decisions it reopens.
 
-Note on references: the functional spec and overview cite the framework project as
-`../matrix_framework/`, and cite `PostV1.md` and `decisions.md` within it. In this repository that
-project is `../seahaven_framework/` and those two files do not exist. This document uses the real
-paths. The stale citations in the upstream documents are unfixed and are flagged, not edited.
-
 Four decisions were taken before drafting. Three answer questions the functional spec leaves to
 "the repo, with the code" (§12); the second reopened §2.3, which is now revised.
 
@@ -26,8 +21,7 @@ Four decisions were taken before drafting. Three answer questions the functional
   justification was not expressible. See §4.5.
 - **The node cap is SQLite's attach limit and nothing lower** (§9). Measured: apsw 3.53.4 bundles
   SQLite 3.53.4 with `SQLITE_LIMIT_ATTACHED` at 125 for both the runtime default and the
-  compile-time maximum, so the bound is 126 nodes with no custom build. The functional spec's §6.1
-  assumed 10 by default and left the build as an open question; it is closed.
+  compile-time maximum, so the bound is 126 nodes with no custom build.
 - **One document**, no `components/`. Composition is one mechanism cutting across ten existing
   modules rather than a set of subsystems with independent internals.
 
@@ -599,7 +593,7 @@ def invoke(ctx, call):
     return result
 ```
 
-The serialisation stays inside the transaction, so DC-25's rule holds: a result that cannot be
+The serialisation stays inside the transaction, so the framework's rule holds: a result that cannot be
 serialised still rolls the call back. What changes is that the **original object** is returned, so
 `R` in §8.1 is not a lie and a host tool receiving a `Charge` receives a `Charge`.
 

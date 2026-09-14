@@ -18,10 +18,10 @@ namespacing), adds a few more APIs and the company DB, and have it be a combined
 
 This was never in the original plan. A search of all 141 spec files and all 50 commits found
 nothing: world-level composition was never specified, and nothing was lost. (Update 2026-09-13: the
-framework spec in `../matrix_framework/`, merged after this was written, had recorded "composable
+framework spec in `../seahaven_framework/`, merged after this was written, had recorded "composable
 world modules" as a post-V1 P2 item awaiting "DDL and fixture composition rules"; the functional
 spec here supplies them and is written against that framework.) What exists nearby is not this —
-`functional_areas/endpoint_primitive/spec.md` §5.1 composes *projections* into an exposure (the tool
+`functional_areas/endpoint_primitive/spec.md` §5.1 in the planning repository composes *projections* into an exposure (the tool
 layer of one world), and HUD's "namespaced mounts" appear only in the column explaining why we are
 not building on HUD.
 
