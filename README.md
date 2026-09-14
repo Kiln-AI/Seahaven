@@ -69,11 +69,6 @@ ProjectTracker is not on a hub, and there is no licence file — publication and
 maintainer decision that has not been taken. `pip install seahaven` therefore gets you a stub rather
 than an error: install from a checkout, and expect names to move.
 
-The specification is the source of truth and lives in `specs/projects/seahaven_framework/`: read
-`project_overview.md`, then `functional_spec.md`, then `architecture.md` and `components/`.
-`BACKLOG.md` carries the known defects and gaps, and the docs point at the ones a reader would
-otherwise walk into.
-
 ## What is in the repository
 
 | | |
@@ -82,7 +77,6 @@ otherwise walk into.
 | `worlds/projecttracker/` | the reference world: a fictional issue tracker, nine tables, 25 tools plus Seahaven's two SQL helpers, three fixtures |
 | `extensions/seahaven-xmlrpc/` | the example extension, proving the extension contract carries a protocol the framework knows nothing about |
 | `bench/` | the benchmark and its committed results, with the caveats they need |
-| `specs/` | the specification and the phase plans |
 
 ## Running it from a checkout
 
