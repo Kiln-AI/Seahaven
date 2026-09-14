@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # Backlog: World Composition
@@ -9,7 +9,11 @@ closed or dismissed through the standard phase flow.
 
 ## Open
 
-- **`AliasPath` makes the tool list disagree with validation.**
+_None. Every item was decided in phase 8._
+
+## Closed
+
+- **`AliasPath` makes the tool list disagree with validation.** — *dismissed.*
   `Field(validation_alias=AliasPath("p", 0))` publishes the *parameter's own* name in the tool
   schema but validates only the nested shape, so the name the tool list advertises is one
   validation rejects — by reference, by name, and for an agent's own call alike. That is exactly
@@ -22,7 +26,11 @@ closed or dismissed through the standard phase flow.
   in `tool._field`, which is a change to the registration surface that no phase of this project
   names.
 
-- **Both fixture readers follow symlinks.**
+  **Dismissed.** Reaching this needs an obscure pydantic feature the docs never mention, and it
+  predates composition — genuinely rare on both counts. The cost of refusing it at registration is
+  not worth spending now. `AliasPath` stays unsupported and undocumented.
+
+- **Both fixture readers follow symlinks.** — *closed.*
   Planting a node's state file in a fixture directory as a symlink to a database outside it, with
   `file_sha256` set to the *target's* digest, makes `verify()` hash the target and `_copy_fixture`
   copy it into the new instance: the instance comes up on the outside file's contents, and every
@@ -39,7 +47,14 @@ closed or dismissed through the standard phase flow.
   `mkdirat` on a descriptor rather than a path -- while the fixtures side does not, so the two
   sides of one framework disagree about one threat.
 
-- **`world._check_name` and `fixtures.check_id` accept a Windows drive-relative name.**
+  **Closed** by `9c1c0a8`, "Refuse a symlink where a fixture's state file should be". Option A
+  (refuse a symlink outright) was chosen over option B (resolve it and require containment inside
+  the fixture directory): a fixture that points outside itself is a fixture plus an invisible
+  dependency. B's use case — sharing one large database between two fixtures on the same disk — is
+  real but unasked for, and can be added if anyone asks for it. `seahaven check` had the same hole
+  and now reports it under the existing SH402, so the linter and the runtime agree.
+
+- **`world._check_name` and `fixtures.check_id` accept a Windows drive-relative name.** — *closed.*
   `C:x` passes both on Linux: `_check_name` refuses both platforms' separators but not a drive
   letter, and `check_id` refuses only the running platform's (`name != Path(name).name`). A world
   or a fixture id authored on Linux under such a name is refused the moment the same artifact is
@@ -50,7 +65,12 @@ closed or dismissed through the standard phase flow.
   refuses a name that is not `PurePosixPath(value).name` *and* not `PureWindowsPath(value).name` --
   so the three name rules the framework applies to durable artifacts now disagree with each other.
 
-- **SH206 is blind to a tool a block list hides.**
+  **Closed** by `75e5d97`, "Lock down the name rules for worlds and fixture ids", which went
+  considerably further than the item asked. Rather than close the drive-letter gap alone, the whole
+  charset was locked down now, on the reasoning that a cross-platform name problem is far worse to
+  fix once names are already in other people's fixtures. The three rules now read from one.
+
+- **SH206 is blind to a tool a block list hides.** — *dismissed.*
   `lint/code._renamed_by_node` collects only the entries whose contributed name differs from the
   tool's own, so a world added with no `tool_prefix` and a `tool_block_list` is skipped entirely. A
   description reading "Call `beta` first" earns no finding even though `beta` is reachable under no
@@ -62,7 +82,12 @@ closed or dismissed through the standard phase flow.
   Whether the wider rule is wanted is the decision: the block-list case has no fix but "accept it or
   unhide the tool", which is a different sentence from SH206's own.
 
-- **`seahaven check` has no home for what an author wants to know and is not a finding.**
+  **Dismissed.** §14 scopes SH206 to prefixed worlds, and widening it changes what the rule means.
+  The gap is not worth that, given the block-list case has no fix but "accept it or unhide the
+  tool" — a different sentence from the one SH206 exists to say.
+
+- **`seahaven check` has no home for what an author wants to know and is not a finding.** —
+  *dismissed.*
   The node count architecture §15 originally promised is the case that raised it, and a composite
   world has others: which nodes there are, which scopes they resolved into, which routes alias which.
   §15.1 records why `check` itself is the wrong place — it prints findings and nothing else, so a
@@ -74,7 +99,12 @@ closed or dismissed through the standard phase flow.
   .nodes)` and `Instance.composition()` mean nothing here is unknowable in process; what has no home
   is volunteering it.
 
-- **Two member tables in the docs are verified by nothing.**
+  **Dismissed** from this backlog as not a defect. It is a feature request that landed here because a
+  spec sentence promised something the code did not do, and that sentence has been corrected
+  (§15.1). If a `seahaven world info`-shaped command is wanted, it deserves its own spec rather than
+  a slot in a cleanup phase.
+
+- **Two member tables in the docs are verified by nothing.** — *dismissed.*
   `tests/test_docs_examples.py`'s `_RECEIVER_TYPES` has no `handle` or `report` entry, so the two
   largest tables phase 6 added -- `handle.call`/`db`/`state`/`worlds` (`reference/api.md:178-182`)
   and `report.path`/`world`/`world_version`/`scope`/`aliases`/`schema_hash`/`frozen_world_version`
@@ -87,6 +117,5 @@ closed or dismissed through the standard phase flow.
   class-level walk trips over `db` being a `property` object, so closing that half needs a live
   composite in the `receivers` fixture plus a break after the first handle member.
 
-## Closed
-
-_None yet._
+  **Dismissed.** All thirteen members were verified by hand and are correct. This is drift insurance
+  on documentation rather than a defect, and nothing is worth spending here.

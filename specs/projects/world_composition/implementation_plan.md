@@ -61,7 +61,7 @@ three pytest suites, the licence check) before it is committed.
       one-row read and write mix against a three-node tree — run beside the existing ProjectTracker
       workloads, with results in `bench/results/latest.md` so the per-node floor §15 assumes is a
       number. Never a gate. Needs phase 4.
-- [ ] **Phase 8: Backlog.** Review open backlog items with the user, then close or dismiss each
+- [x] **Phase 8: Backlog.** Review open backlog items with the user, then close or dismiss each
       through the standard phase flow.
 
 ## Order
