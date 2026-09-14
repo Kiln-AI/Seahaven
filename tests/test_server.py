@@ -418,7 +418,7 @@ def test_the_served_schema_publishes_the_observation_with_its_descriptions(
     field either model declares has a description in the first place -- is
     `test_every_declared_field_publishes_a_description`, in process, because
     `/schema` answers `State.model_json_schema()` and never sees
-    `SeahavenState` (`BACKLOG.md` B13).
+    `SeahavenState`.
     """
     with serving(world) as url, urllib.request.urlopen(url + "/schema") as response:
         schema = json.loads(response.read())

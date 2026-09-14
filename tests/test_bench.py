@@ -14,7 +14,7 @@ enough to exercise every path and the suite is not the place to spend minutes.
 """
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,6 +22,17 @@ import pytest
 from bench import report
 from bench.__main__ import main
 from bench.baseline import BaselinePoint, Share, share
+from bench.composite import (
+    READ,
+    SETTLE,
+    WRITE,
+    Leg,
+    composite,
+    legs,
+    per_call,
+    standing_up,
+    trees,
+)
 from bench.environment import capture
 from bench.harness import (
     Caller,
@@ -407,6 +418,7 @@ def test_main_writes_a_report_and_leaves_the_gate_alone(tmp_path: Path) -> None:
     document = out.read_text()
     assert document.startswith("# Seahaven benchmark")
     assert "## 4. One slow call" in document
+    assert "## 7. A composite tree" in document
 
 
 def test_main_refuses_to_overwrite_a_hand_written_reading(tmp_path: Path) -> None:
@@ -433,3 +445,209 @@ def test_summary_of_one_run_has_no_spread() -> None:
     run = Run(calls=1, seconds=1.0, latencies=(0.5,), per_worker=(1,))
     summary: Summary = summarise([run])
     assert summary.spread == 0.0
+
+
+def test_the_ladder_is_the_committed_composite_tree() -> None:
+    """What the composite section measures is the tree `tests/worlds/README.md` describes.
+
+    Asserted here rather than assumed in the report, because the two halves of
+    that document -- a `payments` leaf, and an `emporium` of four nodes with one
+    alias -- are what the per-node arithmetic divides by. A change to those
+    worlds that the benchmark did not notice would be a table of the same shape
+    holding different measurements.
+    """
+    ladder = trees()
+    assert [tree.name for tree in ladder] == ["payments", "shop", "emporium"]
+    assert [tree.nodes for tree in ladder] == [1, 2, 4]
+    assert [node.path for node in ladder[-1].world.composition().nodes] == [
+        "main",
+        "payments",
+        "payments_eu",
+        "shop",
+    ]
+    assert trees() is ladder, "node identity is object identity: one ladder per process"
+
+
+def test_standing_up_counts_the_stores_a_node_really_costs() -> None:
+    """One database per node, counted off a live instance rather than derived."""
+    costs = standing_up(trees(), repeats=2)
+    assert [cost.tree for cost in costs] == ["payments", "shop", "emporium"]
+    for cost in costs:
+        assert cost.stores == cost.nodes
+        assert cost.files >= cost.stores, "each store, plus whatever SQLite keeps beside it"
+        assert cost.idle_bytes > 0
+        assert cost.seal_seconds > 0
+        assert cost.open_min <= cost.open_seconds <= cost.open_max
+        assert cost.destroy_min <= cost.destroy_seconds <= cost.destroy_max
+    assert costs[-1].idle_bytes > costs[0].idle_bytes, "four nodes hold more than one"
+
+
+def test_the_composite_read_returns_one_row_however_often_it_is_called() -> None:
+    """A pass that read a growing list would be measuring the list and not the call."""
+    for leg in _legs_named("one-row read"):
+        with leg.tree.world.instance() as instance:
+            caller = leg.prepare(instance)
+            rows = [cast(list[Any], caller(index)) for index in range(CALLS)]
+        assert [len(row) for row in rows] == [1] * CALLS, leg.tree.name
+
+
+def test_the_composite_write_writes_one_row_per_call() -> None:
+    (leg,) = [one for one in _legs_named("one-row write") if one.tree.name == "emporium"]
+    with leg.tree.world.instance() as instance:
+        caller = leg.prepare(instance)
+        for index in range(CALLS):
+            caller(index)
+        assert len(instance.call("pay_list_charges")) == CALLS
+
+
+def test_settle_order_writes_three_nodes_in_one_call() -> None:
+    """The row the leaf has no equivalent of: three stores under one activation."""
+    (leg,) = _legs_named("settle_order")
+    with leg.tree.world.instance() as instance:
+        caller = leg.prepare(instance)
+        caller(0)
+        assert {change.world for change in instance.changes()} == {"main", "payments", "shop"}
+
+
+def test_the_composite_measurement_destroys_every_instance_it_opens() -> None:
+    """Every pass opens a fresh instance, and a leaked one is a leaked file and connection."""
+    ladder = trees()
+    before = [len(tree.world._instances()._instances) for tree in ladder]
+    measured = composite(calls=2, repeats=1, tree_repeats=1)
+    assert [len(tree.world._instances()._instances) for tree in ladder] == before
+    assert len(measured.trees) == len(ladder)
+    assert {(cost.workload, cost.tree) for cost in measured.calls} == {
+        (leg.workload, leg.tree.name) for leg in legs(ladder)
+    }
+
+
+def test_a_composite_pass_reports_the_calls_it_made() -> None:
+    (leg,) = [one for one in _legs_named("one-row read") if one.tree.name == "payments"]
+    (cost,) = per_call((leg,), calls=CALLS, repeats=2)
+    assert cost.summary.runs == 2
+    assert cost.summary.calls == CALLS * 2
+    assert cost.nodes == 1
+
+
+def flatten(text: str) -> str:
+    """One space for every run of whitespace, and no blockquote markers.
+
+    `report._wrapped` breaks the prose it renders at 96 columns, and where the
+    break lands depends on the run -- the command, the commit, the machine's CPU
+    model. The provenance paragraph is quoted as well, so a break inside the
+    model name leaves `> ` in the middle of it. A substring looked for across one
+    of those breaks is in the document and still missed; flattening both sides
+    asserts the content rather than this machine's layout.
+    """
+    return " ".join(" ".join(line.removeprefix(">") for line in text.splitlines()).split())
+
+
+def test_the_composite_section_carries_its_own_provenance_and_both_tables() -> None:
+    """It is pasted into reports whose other tables came from another run."""
+    environment = capture()
+    document = report.render(
+        report.Results(
+            environment=environment,
+            command="python -m bench composite --quick",
+            seconds=1.0,
+            cold_skipped=None,
+            composite=composite(calls=2, repeats=1, tree_repeats=1),
+        )
+    )
+    # Whitespace-flattened on both sides, because the provenance paragraph is
+    # re-wrapped at 96 columns and the break lands wherever this machine's
+    # command, commit and CPU model put it -- on another host it lands mid-model
+    # and an unflattened `in` misses content that is right there.
+    section = flatten(document[document.index("## 7.") :])
+    assert flatten("**Provenance.**") in section
+    assert flatten("python -m bench composite --quick") in section
+    assert flatten(environment.commit) in section
+    assert flatten(environment.cpu_model) in section
+    assert flatten("### Standing one up") in section
+    assert flatten("### What a node costs a call") in section
+    assert flatten("| `emporium` | 4 | 4 |") in section, "four nodes, four stores"
+    assert flatten("settle_order") in section
+
+
+def test_the_method_section_is_dropped_when_no_projecttracker_run_happened(world: World) -> None:
+    """`## Method` describes `agency`, and a composite-only run drove none of it."""
+    composite_only = report.render(
+        report.Results(
+            environment=capture(),
+            command="python -m bench composite --quick",
+            seconds=1.0,
+            cold_skipped=None,
+            composite=composite(calls=2, repeats=1, tree_repeats=1),
+        )
+    )
+    assert "## Method" not in composite_only
+    assert "## Method" in report.render(_results(world))
+
+
+def _legs_named(workload: str) -> list[Leg]:
+    return [leg for leg in legs(trees()) if leg.workload == workload]
+
+
+def test_a_tree_is_measured_at_least_once() -> None:
+    with pytest.raises(ValueError, match="at least once"):
+        standing_up(trees(), repeats=0)
+
+
+def test_standing_up_discards_the_first_open_of_a_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tree's first open in a process is slower than its steady state and is thrown away."""
+    leaf = trees()[0]
+    opened = 0
+    real = leaf.world.instance
+
+    def counting(*arguments: Any, **keywords: Any) -> Instance:
+        nonlocal opened
+        opened += 1
+        return real(*arguments, **keywords)
+
+    monkeypatch.setattr(leaf.world, "instance", counting)
+    (cost,) = standing_up((leaf,), repeats=2)
+    assert opened == 3, "two measured passes, and one discarded before them"
+    assert cost.destroy_min <= cost.destroy_seconds <= cost.destroy_max
+
+
+def test_per_call_interleaves_its_repeats_across_the_legs() -> None:
+    """A repeat is a whole pass over every leg, so drift is not handed to whichever ran last."""
+    leaf = trees()[0]
+    order: list[str] = []
+
+    def marking(name: str) -> Callable[[Instance], Caller]:
+        def prepare(instance: Instance) -> Caller:
+            order.append(name)
+            return lambda _index: instance.call("list_charges")
+
+        return prepare
+
+    lines = (Leg("first", leaf, marking("first")), Leg("second", leaf, marking("second")))
+    assert len(per_call(lines, calls=1, repeats=2)) == 2
+    assert order == ["first", "second", "first", "second"]
+
+
+def test_the_derived_bullets_are_tied_to_the_leg_names() -> None:
+    """`report._call_deltas` finds its rows by the names `composite` gives them.
+
+    The two bullets that compare a leaf with a composite, and the one that prices
+    the cross-node call, are selected by workload name. A rename that reached only
+    one of the two modules would drop them from the report in silence, and the
+    table rows would still be there to make the section look complete.
+    """
+    assert {leg.workload for leg in legs(trees())} == {READ, WRITE, SETTLE}
+    document = report.render(
+        report.Results(
+            environment=capture(),
+            command="python -m bench composite --quick",
+            seconds=1.0,
+            cold_skipped=None,
+            composite=composite(calls=2, repeats=2, tree_repeats=1),
+        )
+    )
+    # Whitespace-flattened, because every bullet is re-wrapped at 96 columns and a
+    # line break may land anywhere inside the sentence being looked for.
+    flat = " ".join(document[document.index("## 7.") :].split())
+    assert flat.count("the same tool at one node and at 4") == 2
+    assert f"**{SETTLE}** is " in flat
+    assert "x the cost of one call" in flat

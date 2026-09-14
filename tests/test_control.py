@@ -327,6 +327,7 @@ def test_a_control_call_from_inside_a_call_does_not_deadlock(tmp_path: Path) -> 
         assert instance.call("audited") == {
             "changed": [
                 {
+                    "world": "main",
                     "table": "notes",
                     "op": "insert",
                     "key": {"id": "n1"},

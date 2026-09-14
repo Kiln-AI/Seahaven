@@ -1,11 +1,12 @@
-"""The world-code rules: SH201, SH203 and SH205.
+"""The world-code rules: SH201, SH203, SH205, SH206, SH208 and SH209.
 
-All three are warnings. A wall-clock read and a draw from `random` are nearly
-always a mistake -- fixture-relative data dated from the machine's clock, a run
-that will not replay -- but sometimes deliberate, and a rule an author has to
-argue with is a rule an author turns off. An empty tool description is the same
-shape of problem: the description is what an agent reads to decide whether to
-call the tool, and a world under development has tools that do not have one yet.
+Three warnings and two errors about code, plus one warning about the text an
+agent reads. A wall-clock read and a draw from `random` are nearly always a
+mistake -- fixture-relative data dated from the machine's clock, a run that will
+not replay -- but sometimes deliberate, and a rule an author has to argue with is
+a rule an author turns off. An empty tool description is the same shape of
+problem: the description is what an agent reads to decide whether to call the
+tool, and a world under development has tools that do not have one yet.
 
 The two call rules work on the dotted name of the expression being called, with
 its root expanded through the module's own imports, so `datetime.now()`,
@@ -13,14 +14,28 @@ its root expanded through the module's own imports, so `datetime.now()`,
 `from time import time; time()` are one rule and not four. It is also what keeps
 the endorsed spellings clean: the root of `ctx.clock.now()` and of
 `ctx.ids.random.random()` is `ctx`, which no import binds.
+
+The two composition rules are errors because neither is ever deliberate. An
+instance made inside a call is a `WorldBug` the moment the line runs, and a child
+name that is not registered is a `WorldBug` the moment it is reached -- both in
+an eval, weeks after the module was written. SH206 is the third: a prefix does
+not rewrite description text (functional spec section 3.3), so an added world
+whose descriptions name their siblings ships an agent surface that names tools
+the agent cannot call. The framework never edits the text; the host drops the
+prefix or accepts the infidelity.
 """
 
 import ast
 import inspect
-from collections.abc import Iterator
+import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path
+from typing import NamedTuple
 
+from seahaven.composition import Contributed
 from seahaven.lint import Finding, Target
+from seahaven.lint.coverage import REGISTERING_DIRECTORIES
+from seahaven.lint.world import declaration_path
 from seahaven.tool import Tool
 
 __all__ = ["run"]
@@ -56,14 +71,35 @@ _WALL_CLOCK = frozenset(
 # is how `ctx.ids.uuid()`'s own output is parsed.
 _UUID = frozenset({"uuid.uuid4", "uuid.uuid1"})
 
+# The attribute whose call makes an instance. Matched as a name and not as a
+# resolved dotted expression, because `world.instance(...)`, `payments.world
+# .instance(...)` and `self._world.instance(...)` are one mistake and the
+# receiver is whatever the module happens to have called its `World`.
+_INSTANCE = "instance"
+
+# The one expression this package reads child names out of. Exactly this and not
+# any `.worlds`, because `ctx.worlds.<child>.worlds.<grandchild>` is the
+# sanctioned way to a grandchild and those names belong to the child's
+# registrations rather than to this world's.
+_CTX_WORLDS = "ctx.worlds"
+
 _CLOCK_FIX = "take the instance's time from ctx.clock.iso() or ctx.clock.now()"
 _IDS_FIX = "draw from ctx.ids: ctx.ids.uuid() for an identifier, ctx.ids.random for anything else"
+_INSTANCE_FIX = (
+    "reach an added world with ctx.worlds.<name>.call(...); world.instance(...) belongs in an "
+    "eval or a test, never in a call"
+)
+_STALE_FIX = (
+    "drop the tool_prefix on that add_world, or accept the mention: check never rewrites a "
+    "description"
+)
 
 
 def run(target: Target) -> list[Finding]:
-    """SH201, SH203 and SH205 over every module in the world's package."""
+    """SH201, SH203, SH205, SH206, SH208 and SH209 over the world's package."""
     findings: list[Finding] = []
     package_dir = target.package_dir
+    children = {added.name for added in target.world.added_worlds}
     for path in sorted(package_dir.rglob("*.py")):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -71,29 +107,71 @@ def run(target: Target) -> list[Finding]:
             # A module that does not parse did not import either, and the import
             # failure is already SH501; two reports of one broken file is noise.
             continue
-        findings += _module_findings(path, tree, in_middleware=_in_middleware(path, package_dir))
+        findings += _module_findings(
+            path,
+            tree,
+            in_middleware=_inside(path, package_dir, _MIDDLEWARE),
+            registers=any(
+                _inside(path, package_dir, directory) for directory in REGISTERING_DIRECTORIES
+            ),
+            world=target.world.name,
+            children=children,
+        )
     findings += _description_findings(target)
+    findings += _stale_description_findings(target)
     return findings
 
 
-def _module_findings(path: Path, tree: ast.Module, *, in_middleware: bool) -> list[Finding]:
+def _module_findings(
+    path: Path,
+    tree: ast.Module,
+    *,
+    in_middleware: bool,
+    registers: bool,
+    world: str,
+    children: set[str],
+) -> list[Finding]:
     aliases = _aliases(tree)
     findings: list[Finding] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import | ast.ImportFrom) and _imports_random(node):
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            if _imports_random(node):
+                findings.append(
+                    Finding(
+                        code="SH203",
+                        severity="warning",
+                        path=path,
+                        line=node.lineno,
+                        message="the random module does not replay",
+                        fix=_IDS_FIX,
+                    )
+                )
+            continue
+        named = _child_named(node)
+        if named is not None and named.child not in children:
             findings.append(
                 Finding(
-                    code="SH203",
-                    severity="warning",
+                    code="SH209",
+                    severity="error",
                     path=path,
-                    line=node.lineno,
-                    message="the random module does not replay",
-                    fix=_IDS_FIX,
+                    line=named.line,
+                    message=f"world {world!r} adds no world named {named.child!r}",
+                    fix=_child_fix(children),
                 )
             )
-            continue
         if not isinstance(node, ast.Call):
             continue
+        if registers and isinstance(node.func, ast.Attribute) and node.func.attr == _INSTANCE:
+            findings.append(
+                Finding(
+                    code="SH208",
+                    severity="error",
+                    path=path,
+                    line=node.lineno,
+                    message="creating an instance from inside a call is a WorldBug",
+                    fix=_INSTANCE_FIX,
+                )
+            )
         called = _resolve(_dotted(node.func), aliases)
         if called is None:
             continue
@@ -152,6 +230,105 @@ def _description_findings(target: Target) -> list[Finding]:
     return findings
 
 
+def _stale_description_findings(target: Target) -> list[Finding]:
+    """SH206: a renamed tool's description names a sibling by the name nobody sees.
+
+    Per node, over the names a node's tools are actually *published* under. A node
+    reached by two routes is described once here even though it is contributed
+    twice -- there is one piece of text, written in one place, and the second
+    route's stale surface is SH207's to report.
+
+    Anchored on the host's own `add_world`, not on the sentence. The text belongs
+    to the added world and the edit does not: an installed vendor world's
+    description is inside `site-packages`, a file the host's author cannot change
+    and should not, while `tool_prefix=` is in this world's `world.py`. Where the
+    sentence is written is in the message, because a reader does need to know it
+    is not theirs.
+    """
+    composition = target.composition
+    if composition is None:
+        return []
+    findings: list[Finding] = []
+    for path, entries in _renamed_by_node(composition.tools.values()).items():
+        for tool, exposed in entries.items():
+            for other, other_exposed in entries.items():
+                if other is tool or not _mentions(tool.description, other.name):
+                    continue
+                findings.append(
+                    Finding(
+                        code="SH206",
+                        severity="warning",
+                        path=declaration_path(target),
+                        message=(
+                            f"{exposed!r} describes {other.name!r}, which node {path!r} "
+                            f"contributes as {other_exposed!r}; the description is "
+                            f"{_written_at(tool, target.package_dir)}"
+                        ),
+                        fix=_STALE_FIX,
+                    )
+                )
+    return findings
+
+
+def _written_at(tool: Tool, fallback: Path) -> str:
+    """Where a tool's description is written, for a message that has to name a file."""
+    path, line = _source_of(tool, fallback)
+    return f"{path}:{line}" if line is not None else str(path)
+
+
+def _renamed_by_node(entries: Iterable[Contributed]) -> dict[str, dict[Tool, str]]:
+    """Each node's renamed tools, as the tool itself and the name the agent sees.
+
+    Renamed only: a tool contributed under its own name is one whose description
+    a reader of the tool list can follow, and a world with no prefix anywhere is
+    the case this rule has nothing to say about.
+    """
+    renamed: dict[str, dict[Tool, str]] = {}
+    for entry in entries:
+        if entry.name != entry.tool.name:
+            renamed.setdefault(entry.node.path, {}).setdefault(entry.tool, entry.name)
+    return renamed
+
+
+def _mentions(description: str, name: str) -> bool:
+    """Whether a description names a tool, on a word boundary and not inside another name."""
+    return re.search(rf"\b{re.escape(name)}\b", description) is not None
+
+
+class _Child(NamedTuple):
+    """A child name a module spells out, and the line it spells it on."""
+
+    child: str
+    line: int
+
+
+def _child_named(node: ast.AST) -> _Child | None:
+    """The child name a `ctx.worlds` attribute or string subscript spells, if any.
+
+    A name beginning with an underscore is not one: `Worlds.__getattr__` is
+    consulted only for what ordinary attribute lookup does not find, so
+    `ctx.worlds.__class__` reaches the container itself and never a child.
+    """
+    match node:
+        case ast.Attribute(value=value, attr=str(name)) if _dotted(value) == _CTX_WORLDS:
+            return None if name.startswith("_") else _Child(name, node.lineno)
+        case ast.Subscript(value=value, slice=ast.Constant(value=str(name))) if (
+            _dotted(value) == _CTX_WORLDS
+        ):
+            return _Child(name, node.lineno)
+        case _:
+            return None
+
+
+def _child_fix(children: set[str]) -> str:
+    """What to do about a name no `add_world` registered."""
+    if not children:
+        return "this world adds no worlds, so ctx.worlds reaches nothing; add_world one first"
+    return (
+        f"name one of the worlds it adds ({', '.join(sorted(children))}), or add the one it means"
+    )
+
+
 def _source_of(tool: Tool, fallback: Path) -> tuple[Path, int | None]:
     """Where a tool's function is written, as far as Python can say."""
     try:
@@ -165,10 +342,15 @@ def _source_of(tool: Tool, fallback: Path) -> tuple[Path, int | None]:
         return fallback, None
 
 
-def _in_middleware(path: Path, package_dir: Path) -> bool:
-    """Whether a module is part of the world's middleware layer."""
+def _inside(path: Path, package_dir: Path, directory: str) -> bool:
+    """Whether a module is part of one of the world's registering layers.
+
+    The module `tools.py` counts as `tools/`: a small world keeps its tools in
+    one module and the rule is about what the code is for, not about how many
+    files it took.
+    """
     parts = path.relative_to(package_dir).parts
-    return _MIDDLEWARE in parts[:-1] or parts[-1] == f"{_MIDDLEWARE}.py"
+    return directory in parts[:-1] or parts[-1] == f"{directory}.py"
 
 
 def _imports_random(node: ast.Import | ast.ImportFrom) -> bool:

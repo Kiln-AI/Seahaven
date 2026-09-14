@@ -8,7 +8,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Any
 
@@ -19,7 +19,7 @@ from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
 from seahaven.tool import Tool
-from seahaven.world import World, sql_files
+from seahaven.world import CONTROL_TOOL_NAMES, World, sql_files
 
 # `src/`, for the one test that runs `seahaven` in a subprocess of its own: it
 # must import the tree under test, not whatever is installed.
@@ -91,6 +91,17 @@ def test_a_world_is_its_name_its_version_and_its_schema(tmp_path: Path) -> None:
         ".hidden",
         "a/../b",
         "a\x00b",
+        # `names.why_not_a_name`'s clauses, one case each: the drive letter that
+        # only Windows reads as a path, a character outside the charset, the
+        # edges Windows strips, a device name, and the limit.
+        "C:x",
+        "café",
+        " leading",
+        "trailing ",
+        "trailing.",
+        "con",
+        "aux.sqlite",
+        "x" * 129,
     ],
 )
 def test_a_world_name_that_is_not_a_directory_name_is_refused(tmp_path: Path, bad: str) -> None:
@@ -102,6 +113,28 @@ def test_a_world_name_that_is_not_a_directory_name_is_refused(tmp_path: Path, ba
     """
     with pytest.raises(WorldBug, match="not a world name"):
         World(bad, "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+
+
+def test_a_refused_world_name_says_which_clause_it_broke_and_what_the_rule_is(
+    tmp_path: Path,
+) -> None:
+    """The report this rule generates is "my world name stopped working"; this answers it."""
+    with pytest.raises(WorldBug) as raised:
+        World("café", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+
+    message = str(raised.value)
+    assert "'é'" in message
+    assert "1 to 128 characters" in message
+    # The clause names what is wrong and the rule names the charset, each once: a
+    # refusal that spells the alphabet out twice is a refusal nobody finishes.
+    assert message.count("letters, digits") == 1
+
+
+@pytest.mark.parametrize(
+    "name", ["payments", "my-world", "my_world", "my world", "World2", "v1.2.3", "projecttracker"]
+)
+def test_the_names_people_use_are_world_names(tmp_path: Path, name: str) -> None:
+    assert World(name, "1.0.0", SCHEMA, fixtures_dir=tmp_path).name == name
 
 
 def test_a_world_name_is_refused_before_anything_is_built(tmp_path: Path) -> None:
@@ -219,7 +252,7 @@ def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
     assert world.startup_hooks == ()
 
 
-def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -> None:
+def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path, ctx: Ctx) -> None:
     """The other direction, which the docstring and the spec both promise.
 
     `world.py`'s module docstring says registration is open for the life of the
@@ -228,7 +261,10 @@ def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -
     world is copied once import-time registration is done and not before.
     """
 
+    ran: list[str] = []
+
     def passthrough(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        ran.append("middleware")
         return next_(ctx, call)
 
     def startup(ctx: Ctx) -> None:
@@ -237,7 +273,6 @@ def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -
     world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
     world.tool(echo)
     elsewhere = copy.copy(world)
-    frozen_chain = elsewhere.chain
 
     world.tool(echo, name="echo_twice")
     world.middleware(passthrough)
@@ -246,7 +281,13 @@ def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -
     assert "echo_twice" not in elsewhere.tools
     assert elsewhere.middlewares == ()
     assert elsewhere.startup_hooks == ()
-    assert elsewhere.chain is frozen_chain
+    # The chain is the copy's own tree sealed, and a middleware registered on the
+    # original after the copy was taken is not in it. Asserted by running it: the
+    # chain is rebuilt by every reseal, so it is the same chain, not the same
+    # object.
+    call = Call("echo", {"word": "hi"}, elsewhere.tools["echo"])
+    assert elsewhere.chain(ctx.with_call(call), call) == {"word": "hi"}
+    assert ran == []
 
 
 def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) -> None:
@@ -294,6 +335,62 @@ def test_the_registry_is_ordered_and_read_only(world: World) -> None:
         world.tools["third"] = world.tools["echo"]  # ty: ignore[invalid-assignment]
 
 
+def test_the_registry_inverted_by_function_holds_every_tool_built_from_one(
+    world: World,
+) -> None:
+    """What `ctx.worlds.<name>.call(fn)` resolves through, and why it is multi-valued."""
+    world.tool(echo)
+    world.tool(Tool.from_function(echo, name="echo_twice"))
+
+    @world.tool
+    def second(ctx: Ctx) -> dict:
+        """Second."""
+        return {}
+
+    assert world.tools_by_fn[echo] == (world.tools["echo"], world.tools["echo_twice"])
+    assert world.tools_by_fn[second] == (world.tools["second"],)
+    with pytest.raises(TypeError):
+        world.tools_by_fn[echo] = ()  # ty: ignore[invalid-assignment]
+
+
+def test_the_inverted_registry_holds_no_control_tool(world: World) -> None:
+    """They are the framework's, not a world's surface, and no `call` serves them."""
+    control_tools = [world.tools[name] for name in CONTROL_TOOL_NAMES]
+
+    assert [tool for tools in world.tools_by_fn.values() for tool in tools] == []
+    assert all(tool.fn not in world.tools_by_fn for tool in control_tools)
+
+
+def test_a_function_that_cannot_be_a_dictionary_key_cannot_be_a_tool(world: World) -> None:
+    """The inverted registry keys on it, so the whole registration is refused, not half of it."""
+
+    @dataclass  # unhashable: dataclasses drop `__hash__` unless frozen or eq=False
+    class Callable_:
+        label: str
+
+        def __call__(self, ctx: Ctx, word: str) -> dict[str, str]:
+            """Echo."""
+            return {"word": word}
+
+    built = Tool.from_function(Callable_("one"), name="echo_object")
+
+    with pytest.raises(WorldBug, match="cannot be hashed"):
+        world.tool(built)
+
+    assert "echo_object" not in world.tools
+
+
+def test_a_copy_snapshots_the_inverted_registry_too(tmp_path: Path) -> None:
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world.tool(echo)
+    elsewhere = copy.copy(world)
+
+    world.tool(echo, name="echo_twice")
+
+    assert elsewhere.tools_by_fn[echo] == (elsewhere.tools["echo"],)
+    assert world.tools_by_fn[echo] == (world.tools["echo"], world.tools["echo_twice"])
+
+
 def test_a_name_can_only_be_registered_once(world: World) -> None:
     world.tool(echo)
 
@@ -338,7 +435,7 @@ def test_options_cannot_be_passed_with_a_tool_a_factory_built(
 
 def test_something_that_is_neither_a_function_nor_a_tool_is_refused(world: World) -> None:
     with pytest.raises(WorldBug, match="a function or a Tool"):
-        world.tool(42)  # ty: ignore[invalid-argument-type]
+        world.tool(42)  # ty: ignore[no-matching-overload]
 
 
 def test_the_decorator_forms_return_what_was_decorated(world: World, ctx: Ctx) -> None:

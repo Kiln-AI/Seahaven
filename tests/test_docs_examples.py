@@ -344,6 +344,15 @@ def test_every_documented_member_exists(page: Path, receivers: dict[str, object]
                 # A method, not a container: the rest of the chain is whatever it
                 # returns, which this cannot follow without calling it.
                 break
+            if isinstance(receiver, seahaven.Worlds):
+                # `ctx.worlds.payments`: the rest of the chain is a child name the
+                # page's own world author chose, and no live object here can
+                # answer it -- this world adds nothing. The container also raises
+                # `WorldBug` rather than `AttributeError` for a name no
+                # `add_world` registered, so a `hasattr` walk would not merely
+                # report it missing, it would error the test. `SH209` is what
+                # checks a child name, against the world that declares it.
+                break
 
 
 # Where a stub signature in the reference is looked up, in order.

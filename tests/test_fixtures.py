@@ -31,6 +31,21 @@ def sidecar_of(fixture: Fixture) -> dict[str, Any]:
     return yaml.safe_load((fixture.dir / SIDECAR_NAME).read_text())
 
 
+def link_out(fixture: Fixture, target: Path) -> None:
+    """Make the fixture's state file a link to `target`, with the sidecar agreeing.
+
+    The whole of the attack, planted: `file_sha256` is the *target's* digest, so
+    every integrity check the sidecar supports reports green while the file the
+    fixture offers is one it does not contain.
+    """
+    fixture.state_path.unlink()
+    fixture.state_path.symlink_to(target)
+    sidecar = fixture.dir / SIDECAR_NAME
+    written = sidecar_of(fixture)
+    written["file_sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+    sidecar.write_text(yaml.safe_dump(written, sort_keys=True))
+
+
 def test_freeze_writes_a_directory_with_a_state_file_and_a_sidecar(world: World) -> None:
     with world.instance(None, now=INSTANT_ISO) as instance:
         add(instance, "n1")
@@ -130,12 +145,59 @@ def test_freeze_refuses_an_id_that_already_exists(world: World) -> None:
     assert contents(world.fixtures_dir) == ["start"]
 
 
-@pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "/abs", ".hidden", "a/../b", "a\x00b"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        ".",
+        "..",
+        "a/b",
+        "/abs",
+        ".hidden",
+        "a/../b",
+        "a\x00b",
+        # `names.why_not_a_name`'s clauses, one case each. A fixture is the
+        # artifact that travels furthest, so the id it is addressed by has to be
+        # a name on the machine it is copied to as much as on this one.
+        "C:x",
+        "café",
+        " leading",
+        "trailing ",
+        "trailing.",
+        "con",
+        "aux.sqlite",
+        "x" * 129,
+    ],
+)
 def test_freeze_refuses_an_id_that_is_not_a_directory_name(world: World, bad: str) -> None:
     with world.instance(None) as instance, pytest.raises(WorldBug, match="not a fixture id"):
         instance.freeze(bad, "Empty.")
 
     assert contents(world.fixtures_dir) == []
+
+
+def test_a_refused_fixture_id_says_which_clause_it_broke_and_what_the_rule_is(world: World) -> None:
+    with world.instance(None) as instance, pytest.raises(WorldBug) as raised:
+        instance.freeze("café", "Empty.")
+
+    message = str(raised.value)
+    assert "'é'" in message
+    assert "1 to 128 characters" in message
+    # The clause names what is wrong and the rule names the charset, each once: a
+    # refusal that spells the alphabet out twice is a refusal nobody finishes.
+    assert message.count("letters, digits") == 1
+
+
+@pytest.mark.parametrize("id", ["payments", "my-world", "my_world", "my world", "World2", "v1.2.3"])
+def test_the_ids_people_use_round_trip_through_the_filesystem(world: World, id: str) -> None:
+    """Minted, listed and addressed again: the charset is legal on disk, not only to the rule."""
+    with world.instance(None, now=INSTANT_ISO) as instance:
+        instance.freeze(id, "Empty.")
+
+    assert contents(world.fixtures_dir) == [id]
+    assert sorted(load_all(world.fixtures_dir)) == [id]
+    with world.instance(id) as forked:
+        assert forked.fixture == id
 
 
 def test_freeze_refuses_an_instance_that_no_longer_holds_the_schema(world: World) -> None:
@@ -207,7 +269,7 @@ def test_load_reads_a_sidecar_without_opening_the_state_file(world: World) -> No
         (None, "cannot be read"),
         ("{{{ not yaml", "not valid YAML"),
         ("- a list", "not a mapping"),
-        ("format_version: 2\nid: start\n", "format_version is 2"),
+        ("format_version: 3\nid: start\n", "format_version is 3"),
         ("id: start\n", "format_version is None"),
     ],
 )
@@ -285,6 +347,41 @@ def test_verify_refuses_a_fixture_with_no_state_file(world: World) -> None:
     frozen.state_path.unlink()
 
     with pytest.raises(WorldBug, match=STATE_NAME):
+        verify(frozen)
+
+
+def test_a_state_file_planted_as_a_symlink_is_refused_by_both_readers(world: World) -> None:
+    """A link out of the directory is followed by everything that reads a fixture.
+
+    Hashing follows it and the copy follows it, and the sidecar carries the
+    target's digest, so without this refusal the instance comes up on a database
+    the fixture does not contain with every check green.
+    """
+    with world.instance(None) as instance:
+        add(instance, "n1", "the note this fixture holds")
+        frozen = instance.freeze("start", "One note.")
+    with world.instance(None) as instance:
+        add(instance, "n2", "a note from outside the fixture")
+        elsewhere = instance.freeze("elsewhere", "A database of its own.")
+
+    link_out(frozen, elsewhere.state_path)
+
+    with pytest.raises(WorldBug) as raised:
+        verify(load(frozen.dir))
+    assert "is a symbolic link" in str(raised.value)
+    assert str(frozen.state_path) in str(raised.value)
+    with pytest.raises(WorldBug, match="is a symbolic link"):
+        world.instance("start")
+
+
+def test_a_state_file_that_is_a_link_to_nothing_is_refused_as_a_link(world: World) -> None:
+    """`lstat`: the link is judged, not the file it fails to reach."""
+    with world.instance(None) as instance:
+        frozen = instance.freeze("start", "Empty.")
+    frozen.state_path.unlink()
+    frozen.state_path.symlink_to(frozen.dir / "nothing.sqlite")
+
+    with pytest.raises(WorldBug, match="is a symbolic link"):
         verify(frozen)
 
 

@@ -91,8 +91,11 @@ prevent. An unexpected Python exception inside a tool is logged with its traceba
 a fixed `{"code": "internal", "message": "internal error"}`, so engine text cannot reach an agent
 even from a world with no error handler.
 
-The `state` message answers `episode_id`, `step_count`, `fixture`, `now` and `world`. Every step
-counts, including one that was refused: the count is of what the session asked for.
+The `state` message answers `episode_id`, `step_count`, `fixture`, `now`, `world` and
+`composition`. Every step counts, including one that was refused: the count is of what the session
+asked for. `composition` is the session's stores — one record per node of a world that adds other
+worlds, `null` before the first `reset` ([composition.md](composition.md)). No observation carries
+any of it: `state` is the eval's, never the agent's.
 
 Metadata is the world's `name` and `version`, and the environment's README is the world's top-level
 `README.md`, the one beside `pyproject.toml`, published whole as the card a hub shows. The one-line
@@ -231,9 +234,8 @@ sessions and a gate of 16 is the ordinary case rather than an edge one.
 
 Nothing is dropped: the promise that calls queue is kept to the letter. But a call that queues for
 seconds behind a thread barging in front of it is not the service that promise implies, and an
-episode whose session is the unlucky one will time out. This is `BACKLOG.md` B20 in the Seahaven
-repository, and the fix is a gate that hands slots out in arrival order rather than a different
-number.
+episode whose session is the unlucky one will time out. The fix is a gate that hands slots out in
+arrival order rather than a different number.
 
 **The gate is not a serving feature.** It is process-wide and on by default in *any* process that
 calls a tool, an in-process eval harness driving instances on threads included; `serve` only gives it
@@ -286,7 +288,7 @@ sign-off and has not happened.
 
 ## Rough edges worth knowing before you meet them
 
-These are real, reproduced, and recorded in the Seahaven repository's `BACKLOG.md`. None of them is
+These are real and reproduced, and all three are OpenEnv's rather than Seahaven's. None of them is
 in the WebSocket path an eval and `SeahavenClient` use.
 
 - **`POST /reset`, `POST /step` and `GET /state` over plain HTTP are refused, with a `501`.**
@@ -324,7 +326,9 @@ in the WebSocket path an eval and `SeahavenClient` use.
   three is a production environment. Deleting them would pass that check while declaring a Seahaven
   world to be something it is not, so only the behaviour changes. This is local protection and not a
   fix: the defect is upstream's, is unfixed there, and a world built on a stock OpenEnv server still
-  has it. Drive episodes over `/ws`. (B13.)
+  has it. Drive episodes over `/ws`.
+  ([huggingface/OpenEnv#1156](https://github.com/huggingface/OpenEnv/issues/1156).)
 - **`GET /schema` publishes the base state model**, so a client never sees the state shape it is
   driving: `create_app` takes an action class and an observation class and no state class, and the
-  route answers `State.model_json_schema()` for every environment. (B13.)
+  route answers `State.model_json_schema()` for every environment.
+  ([huggingface/OpenEnv#1155](https://github.com/huggingface/OpenEnv/issues/1155).)

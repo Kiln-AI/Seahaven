@@ -177,8 +177,7 @@ no admin — a blank instance, or `empty` — is `INVALID_INPUT`. A `user_id` na
 rowid`. `list_comments` cannot do that — a keyset cursor carries its tiebreaker as a value and
 `rowid` is not a projected column — so it orders by `(created_at, id)` and says so in its docstring:
 oldest first across the fixture's history, id order among the comments one episode wrote. Do not
-write an eval that grades on the order of comments an agent added; grade on the rows. (The
-framework-level question is `BACKLOG.md` B23.)
+write an eval that grades on the order of comments an agent added; grade on the rows.
 
 ## The fixtures
 

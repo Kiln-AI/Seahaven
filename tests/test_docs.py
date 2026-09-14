@@ -21,6 +21,7 @@ PAGES = (
     "index.md",
     "concepts.md",
     "authoring.md",
+    "composition.md",
     "fixtures.md",
     "testing.md",
     "serving.md",

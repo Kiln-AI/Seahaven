@@ -87,6 +87,20 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.ty.src]
 include = ["src", "tests", "scripts", "worlds", "extensions", "bench"]
 
+# The composite worlds of `tests/worlds/README.md` are packages that import one
+# another, because that is how a host world reaches a world it adds. Nothing
+# installs them -- `tests/conftest.py` puts them on `sys.path` for the same
+# reason -- so ty is told where they are the same way.
+[tool.ty.environment]
+extra-paths = [
+    "tests/worlds/payments/src",
+    "tests/worlds/shop/src",
+    "tests/worlds/emporium/src",
+    "tests/worlds/ledger/src",
+    "tests/worlds/bazaar/src",
+    "tests/worlds/unsealed/src",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

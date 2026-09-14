@@ -33,6 +33,3 @@ seahaven = { workspace = true }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-# `slow` is the fixture rebuild, which regenerates all three fixtures and
-# compares them: always run in CI, deselectable with `-m "not slow"` locally.
-markers = ["slow: takes seconds; deselect with -m 'not slow'"]
