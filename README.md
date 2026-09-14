@@ -1,13 +1,26 @@
 # Seahaven
 
-Seahaven is a Python framework for building **synthetic worlds**: faithful, stateful mocks of the
-tool surface a real company's agent works against, on SQLite, that agents work against in evals and
-in RL.
+**Synthetic worlds for AI agents.** Fake, stateful replicas of the systems your agent works
+against, for evals and RL.
 
-A world is an ordinary Python package. Its schema is hand-written SQLite DDL, its tools are plain
-Python functions, and its data is a set of frozen SQLite files called fixtures. An eval makes an
-*instance* — a private copy of one fixture — drives it through tool calls, and grades it on the
-state the episode left behind.
+> **Seahaven** *(noun)*
+>
+> 1. A Python framework for building synthetic worlds for AI agents.
+> 2. The town in *The Truman Show*. An entire world built so that one inhabitant believes it is
+>    real.
+
+Seahaven is a Python framework for building synthetic worlds: stateful mocks of the tools, APIs and
+databases an agent works against, that the agent cannot tell from the real thing. You bring the
+world's logic, a schema and a set of tools. Seahaven owns the rest: a private copy of the world per
+agent, reset, a frozen clock, seeded ids, validation, hosting, and a diff of everything the agent
+changed. It excels at cloning existing systems for agent evals and RL.
+
+Evals and RL need a read-write environment you can stand up by the hundred, reset in milliseconds,
+and inspect afterwards. A real system, or its staging copy, is none of those things: expensive to
+set up, impossible to reset, throttled, and shared. A Seahaven world is a file copy to create, a SQL
+query to inspect, and a file delete to destroy.
+
+## A world, in one screen
 
 ```python
 import seahaven
@@ -44,158 +57,242 @@ with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
     assert [change.op for change in inst.changes()] == ["insert"]  # what an eval grades
 ```
 
-What the framework is for, in one list:
+A declaration, a function whose signature is its published contract, an instance that is a private
+copy, a frozen clock, and a changeset an eval can grade. A real world spreads the same parts over a
+package, which `seahaven new` lays out, and adds fixtures, errors and tests.
 
-- **Time is frozen and ids are seeded**, so the same fixture, seed and calls give the same run.
-  Every SQLite date function on the instance's connection returns the fixture's instant too.
-- **Fixtures are immutable and verified.** They are copied, never opened; the sidecar carries the
-  schema hash and the file's SHA-256, and an instance refuses a fixture that does not match.
-- **Every tool is validated strictly** against a JSON schema derived from its signature, and every
-  violation is reported at once.
-- **A changeset**, not a transcript: `inst.changes()` is the net difference between the fixture and
-  the state the episode left.
-- **Nothing engine-shaped reaches the agent** unless the world chose it — that is the error
-  handler's job, and every world has one.
-- **Remote is OpenEnv.** `seahaven serve` runs one world, one instance per session.
-- **`seahaven check`** is a small lint over the mistakes a world makes silently, each with a named
-  fix.
+## Features
 
-## Status
+- **Stateful worlds.** Writes change every later read. Each instance is its own SQLite database,
+  forked from a fixture in milliseconds. Expose it as REST-shaped tools, a sandboxed SQL tool,
+  full-text search, or a protocol of your own.
+- **Fixtures.** Freeze known starting states like `small_startup` or `agency` and reuse them across
+  evals. Fixtures are immutable, hash-verified, and committed with the script that builds them.
+- **Ephemeral instances.** An instance lives as long as the episode, then is deleted. Nothing to
+  clean up, nothing shared between runs.
+- **Hosting.** Serve hundreds of instances of a world from one process. Every session gets its own
+  private copy.
+- **Fast.** Thousands of tool calls per second per process, across concurrent instances. A tool
+  call is low milliseconds.
+- **Time is first class.** Every instance has a clock, frozen at its fixture's `now`. Tools read it,
+  and so does every SQLite date function. The same fixture, seed and calls give the same run.
+- **Changesets.** `inst.changes()` is the net diff between the fixture and what the agent left
+  behind. Grade on state, not on transcripts.
+- **Composable worlds** *(coming soon)*. YourWorld imports StripeWorld and ShopifyWorld. Reuse worlds
+  others built and write only your domain's datastore and APIs.
+- **[OpenEnv](https://huggingface.co/docs/openenv/index) compatible.** `seahaven serve` is an OpenEnv
+  environment. Drive it with any OpenEnv client, or publish it to a hub like Hugging Face.
+- **Built for AI authors.** Docs ship inside the package, `seahaven check` turns every framework
+  rule into a lint with a named fix, and a pytest plugin gives every world tests for free.
+- **Extensible.** New protocols and query languages are ordinary Python packages on documented
+  seams. An XML-RPC extension ships as the worked example.
 
-**Early development. Nothing here is stable, and none of it is published.** The framework, the
-reference world, the example extension and the benchmark are complete and tested in this
-repository; the `seahaven` name on PyPI holds a placeholder release that contains none of it,
-ProjectTracker is not on a hub, and there is no licence file — publication and licensing are a
-maintainer decision that has not been taken. `pip install seahaven` therefore gets you a stub rather
-than an error: install from a checkout, and expect names to move.
+## Quickstart
 
-## What is in the repository
-
-| | |
-|---|---|
-| `src/seahaven/` | the framework: the runtime database layer, world and dispatch, fixtures and instances, the helpers, the CLI and lints, the OpenEnv server and client, the pytest plugin, and the bundled docs |
-| `worlds/projecttracker/` | the reference world: a fictional issue tracker, nine tables, 25 tools plus Seahaven's two SQL helpers, three fixtures |
-| `extensions/seahaven-xmlrpc/` | the example extension, proving the extension contract carries a protocol the framework knows nothing about |
-| `bench/` | the benchmark and its committed results, with the caveats they need |
-
-## Running it from a checkout
-
-Python 3.14+ and [uv](https://docs.astral.sh/uv/). It has to be a **final** 3.14, not a release
-candidate — see the note below the examples.
+Seahaven is not on PyPI yet (the name holds a placeholder release), so install it from a checkout.
+You need [uv](https://docs.astral.sh/uv/) and a **final** release of Python 3.14 or newer, not a
+release candidate.
 
 ```sh
-uv self update                             # or however you installed uv: pip, Homebrew, a distro
+git clone https://github.com/Kiln-AI/Seahaven && cd Seahaven
 uv python install 3.14
-git clone https://github.com/Kiln-AI/Seahaven
-cd Seahaven
 uv sync --extra serve
-uv run pytest                              # the framework's own suite
-uv run pytest worlds/projecttracker        # the reference world
-uv run pytest extensions/seahaven-xmlrpc   # the example extension
-uv run ruff check && uv run ty check
 ```
 
-Try the reference world:
+Scaffold a world. The scaffold is a working world: one table, two tools, an error handler, passing
+tests, and the script every fixture will be built by.
+
+```sh
+uv run seahaven new crm
+uv pip install -e ./crm --no-deps
+uv run pytest crm                          # the scaffold's tests
+uv run seahaven check --world crm:world    # every lint, each with a named fix
+```
+
+A world is a schema, tools, fixtures and tests. The schema is hand-written SQLite DDL:
+
+```sql
+-- crm/src/crm/schema/001_core.sql
+CREATE TABLE customers (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    plan TEXT NOT NULL CHECK (plan IN ('free', 'pro')),
+    created_at TEXT NOT NULL
+) STRICT;
+```
+
+Tools are plain functions. The signature is the JSON schema an agent sees, the docstring is the
+description, and errors are the ones the real product would return:
+
+```py
+# crm/src/crm/tools/customers.py
+from typing import Any
+
+import seahaven
+
+from crm.errors import NotFound
+from crm.world import world
+
+
+@world.tool
+def create_customer(ctx: seahaven.Ctx, email: str, plan: str = "free") -> dict[str, Any]:
+    """Create a customer and return it."""
+    customer = {"id": ctx.ids.uuid(), "email": email, "plan": plan, "created_at": ctx.clock.iso()}
+    ctx.db.execute(
+        "INSERT INTO customers (id, email, plan, created_at) VALUES (?, ?, ?, ?)",
+        customer["id"],
+        customer["email"],
+        customer["plan"],
+        customer["created_at"],
+    )
+    return customer
+
+
+@world.tool
+def get_customer(ctx: seahaven.Ctx, customer_id: str) -> dict[str, Any]:
+    """Fetch one customer by id."""
+    row = ctx.db.one("SELECT * FROM customers WHERE id = ?", customer_id)
+    if row is None:
+        raise NotFound("customer", customer_id)
+    return row
+```
+
+Fixtures are frozen from a generator function, so every one is reproducible from source:
+
+```py
+# crm/fixtures_src/generate.py
+import seahaven
+
+
+def small_saas(inst: seahaven.Instance) -> None:
+    """Two customers, one of them paying."""
+    inst.call("create_customer", email="ada@example.com", plan="pro")
+    inst.call("create_customer", email="grace@example.com")
+```
+
+```sh
+uv run seahaven fixture freeze small_saas \
+    --now 2026-06-01T09:00:00.000Z \
+    --run fixtures_src.generate:small_saas \
+    --description "Two customers, one of them paying." \
+    --world crm:world
+```
+
+Tests come from the pytest plugin. Name a fixture, and every test gets a fresh instance of it:
+
+```py
+# crm/tests/test_customers.py
+import pytest
+
+import seahaven
+
+pytestmark = pytest.mark.seahaven(fixture="small_saas")
+
+
+def test_a_missing_customer_is_not_found(instance: seahaven.Instance) -> None:
+    with pytest.raises(seahaven.ToolError) as raised:
+        instance.call("get_customer", customer_id="nope")
+    assert raised.value.code == "NOT_FOUND"
+```
+
+Then serve it. One command, one world, as many sessions as your evals need:
+
+```sh
+uv run seahaven serve --world crm:world
+```
+
+## Driving a world
+
+**In process**, from Python, an instance is a context manager. This drives the reference world,
+ProjectTracker, and grades the result on state:
+
+```python
+import projecttracker
+
+with projecttracker.world.instance("agency", seed=7) as tracker:
+    issue = tracker.call("get_issue", key="ENG-12")
+    tracker.call("transition_issue", issue_id=issue["id"], status="done")
+
+    # What did the agent change? The net diff against the fixture.
+    assert ("issues", "update") in {(c.table, c.op) for c in tracker.changes()}
+
+    # Or ask the database directly, read-only.
+    row = tracker.inspect().one("SELECT status FROM issues WHERE key = ?", "ENG-12")
+    assert row == {"status": "done"}
+```
+
+**Over the wire**, a world is an OpenEnv environment. `seahaven serve` runs one world, and every
+session gets its own instance. `SeahavenClient` is one client for every Seahaven world, and the
+stock OpenEnv client works too:
+
+```py
+from seahaven.openenv import SeahavenClient
+
+with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
+    env.reset(fixture="agency", seed=7)
+    tools = env.list_tools()  # [{"name", "description", "input_schema"}, ...]
+    observation = env.call("get_issue", key="ENG-12")
+    print(observation.result["title"])
+```
+
+Pass `--include-control-tools` to `serve` and an eval can read changesets and run inspection SQL
+over the same connection.
+
+## The reference world
+
+[`worlds/projecttracker/`](worlds/projecttracker/) is ProjectTracker, a fictional Linear/Jira-shaped
+issue tracker: nine tables, 25 tools, full-text search, an audit trail, and three fixtures (`empty`,
+`small_startup`, `agency`). It is the pattern a new world copies and the world the docs are written
+against.
 
 ```sh
 cd worlds/projecttracker
 uv run seahaven fixture list
 uv run seahaven check
-uv run python - <<'PY'
-import projecttracker
-
-with projecttracker.world.instance("small_startup") as tracker:
-    print(tracker.call("get_issue", key="ENG-12")["title"])
-PY
+uv run pytest
 ```
 
-One environment note, and it is the only one: **the interpreter has to be a final 3.14, not a
-release candidate.** `uv run python -V` should print `3.14.0` or higher with no `rc` in it. On
-3.14.0rc2 the locked `pydantic` cannot evaluate this project's forward references, so `import
-seahaven` itself raises `AssertionError` inside `eval_type_backport` and every suite gives nothing
-before a test runs; `collections.abc.ByteString` is absent there too, so `import beartype.typing`,
-which the `serve` extra needs, raises `ImportError` there as well. Neither needed a change here:
-`ByteString` is back in 3.14.0 final, and the locked closure imports and runs green on it with no
-patching.
+## Status
 
-Nothing enforces the interpreter for you, which is why the check is by hand: uv matches an
-interpreter against `requires-python` ignoring the pre-release segment, and syncs this project onto
-`3.14.0rc2` with no warning. What you get is whatever your uv knows how to install — uv 0.8.17's
-download list has `cpython-3.14.0rc2` and no final 3.14 at all, 0.9.7's has `cpython-3.14.0` —
-which is why `uv self update` comes first above.
+**Early development.** The framework, the reference world, the example extension and the benchmark
+are complete and tested in this repository, but nothing is published yet and names may still move.
+The `seahaven` name on PyPI holds a placeholder, so `pip install seahaven` gets you a stub. Install
+from a checkout as above.
 
-## Building a world
-
-From the repository root, staying inside this repository's environment — which is the only
-environment that has the framework until Seahaven is published:
-
-```sh
-uv run seahaven new mytracker
-uv pip install -e ./mytracker --no-deps
-uv run pytest mytracker
-uv run seahaven check --world mytracker:world
-```
-
-That scaffold is a working world: one table, two tools, an error handler, three passing tests and
-the generator script every fixture will be built by. Fill in the schema, write the tools, freeze a
-fixture, and serve it.
-
-Two of those lines are shaped by the framework being unpublished, and both go away when it is.
-`--no-deps` stops uv resolving the scaffold's `seahaven~=0.0` dependency at all: it resolves — to the
-placeholder release described above — and while the editable install in this environment happens to
-satisfy it too, relying on that coincidence is not advice. `--world` is needed because the world is
-not this repository's own project, so the convention that finds a world from the nearest
-`pyproject.toml` finds Seahaven instead.
-
-**Do not follow the next steps `seahaven new` prints** (`cd mytracker`, `uv sync`, `uv run pytest`,
-`uv run seahaven check`) until then. Leaving this directory leaves the environment that has the
-framework, and `uv sync` there succeeds — installing the scaffold and the placeholder, whose whole
-`__init__.py` says *"This release reserves the package name. The API is not implemented yet."* and
-exports `__version__`.
-
-What follows is not one clean error, which is the point. The scaffold declares no test dependency,
-so `uv run pytest` runs whatever pytest it can find: here that was a system Python 3.11 outside the
-new environment, reporting `ModuleNotFoundError: No module named 'seahaven'` from the test's own
-`import seahaven`. Put a pytest inside that environment (`uv run --with pytest pytest`) and
-collection succeeds instead — and all three tests error with `fixture 'instance' not found` and
-`fixture 'world' not found`, under a `PytestUnknownMarkWarning: Unknown pytest.mark.seahaven`,
-because the placeholder ships no pytest plugin. `uv run seahaven check` never starts at all:
-`error: Failed to spawn: seahaven`, the placeholder having no console script. The world's own
-failure — `ModuleNotFoundError: No module named 'seahaven.world'`, from the error handler's import —
-waits until something imports the package, which the scaffold's tests never do.
-
-The alternative, if you want the world in an environment of its own, is to put the framework there
-from this checkout with `uv pip install -e /path/to/Seahaven`.
-
-## Contributing
-
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first: setup, the checks that have to pass, and the
-guidelines.
+Python 3.14 has to be a final release: on the 3.14 release candidates two locked dependencies break
+and `import seahaven` fails, and uv will sync onto a release candidate without warning. `uv run
+python -V` should print `3.14.0` or higher with no `rc` in it.
 
 ## Documentation
 
-The framework's docs ship **inside the installed package**, so they always match the version
-installed, and `seahaven docs` prints the directory. In this repository they are
+The docs ship **inside the installed package**, so they always match the version you have, and
+`seahaven docs` prints where they are. In this repository they are
 [`src/seahaven/docs/`](src/seahaven/docs/):
 
-- [`index.md`](src/seahaven/docs/index.md) — what Seahaven is, the reading order, the commands
-- [`concepts.md`](src/seahaven/docs/concepts.md) — world, fixture, instance, tool, clock, changesets
-- [`authoring.md`](src/seahaven/docs/authoring.md) — writing tools, errors, middleware, startup hooks, the schema
-- [`fixtures.md`](src/seahaven/docs/fixtures.md) — freezing, forking, generators
-- [`testing.md`](src/seahaven/docs/testing.md) — the pytest plugin, what to test
-- [`serving.md`](src/seahaven/docs/serving.md) — `seahaven serve`, the client, control tools
-- [`extensions.md`](src/seahaven/docs/extensions.md) — the extension contract
-- [`projecttracker.md`](src/seahaven/docs/projecttracker.md) — a walkthrough of the reference world
-- [`reference/`](src/seahaven/docs/reference/) — the API, every lint code, every CLI option
+- [`index.md`](src/seahaven/docs/index.md): what Seahaven is, the reading order, the commands
+- [`concepts.md`](src/seahaven/docs/concepts.md): world, fixture, instance, tool, clock, changesets
+- [`authoring.md`](src/seahaven/docs/authoring.md): writing tools, errors, middleware, startup hooks, the schema
+- [`fixtures.md`](src/seahaven/docs/fixtures.md): freezing, forking, generators
+- [`testing.md`](src/seahaven/docs/testing.md): the pytest plugin, what to test
+- [`serving.md`](src/seahaven/docs/serving.md): `seahaven serve`, the client, control tools, publishing to a hub
+- [`extensions.md`](src/seahaven/docs/extensions.md): the extension contract
+- [`projecttracker.md`](src/seahaven/docs/projecttracker.md): a walkthrough of the reference world
+- [`reference/`](src/seahaven/docs/reference/): the API, every lint code, every CLI option
 
-Every example on those pages is executed by the test suite (`tests/test_docs_examples.py`), because
-an example that does not work is worse than no example.
+Every example on those pages, and on this one, is executed by the test suite.
 
-## Performance
+## Contributing
 
-There is a benchmark, in `bench/`, with its results committed at `bench/results/latest.md`. Read the
-caveats at the top of that file before quoting anything from it: the numbers are one machine, one
-afternoon, in a shared sandbox, from a closed loop with no think time. They are useful for the order
-of magnitude of a call and for comparison against another run of the same harness on the same
-machine, which is how a regression is found. They are not a capacity model, not a service-level
-objective, and not a comparison with anyone else's framework. Nothing in CI fails on a number.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md): setup, the checks that have to pass, and the guidelines.
+Seahaven is early and the API is still moving, so open an issue before starting anything larger
+than a bug fix.
+
+## License
+
+MIT.
+
+## Created by Kiln AI
+
+Seahaven was created by [Kiln AI](https://github.com/Kiln-AI/Kiln). Kiln works with Seahaven to
+[evaluate](https://kiln.tech/features/evals) and [optimize](https://kiln.tech/features/evals)
+agents.
