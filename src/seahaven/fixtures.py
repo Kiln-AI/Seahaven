@@ -21,6 +21,7 @@ byte for byte what it wrote before composition existed, and `load` reads both.
 import hashlib
 import os
 import shutil
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -110,10 +111,10 @@ class NodeMeta(pydantic.BaseModel, frozen=True, extra="forbid"):
         it does not contain. The sidecar supplies the hash as well, so
         `file_sha256` is no defence: both halves come from the same text.
 
-        What this constrains is the name. Both readers resolve it as an ordinary
-        path, so a symlink planted inside the fixture directory is still
-        followed to wherever it points -- a property `fixture.state_path` has
-        had since version 1, and not one this check undertakes to close.
+        What this constrains is the name, and only the name. The other half of
+        the same threat -- a name inside the directory that is a symlink out of
+        it -- is `_verify_file`'s, which refuses one before it hashes it, for the
+        root's `state.sqlite` as much as for this.
 
         This is `check_id`'s rule for a fixture id, for the same reason, made
         stricter than either that or `world._check_name`: both platforms'
@@ -297,6 +298,10 @@ def verify(fixture: Fixture) -> None:
 
     Every node's file, not only the root's: a composite fixture is N files, and
     one of them edited in place is exactly the damage this exists to catch.
+
+    Instance creation verifies before it copies (`instances.World._fixture`), so
+    every refusal here is a refusal to create as well -- which is why the symlink
+    rule lives in `_verify_file` rather than being repeated beside each copy.
     """
     _verify_file(f"fixture {fixture.id!r}", fixture.state_path, fixture.meta.file_sha256)
     for node in fixture.meta.nodes:
@@ -308,12 +313,45 @@ def verify(fixture: Fixture) -> None:
 
 
 def _verify_file(subject: str, path: Path, expected: str) -> None:
-    """One frozen file against the hash its sidecar recorded, memoised per process."""
+    """One frozen file against the hash its sidecar recorded, memoised per process.
+
+    A symlink is refused before it is hashed, and named. Every reader of a
+    fixture's files would otherwise resolve them as ordinary paths, so a link
+    planted at one of these names would be followed to a database the fixture
+    does not contain -- and the hash would be taken from the same file the link
+    reached, so `file_sha256` agreed and every check reported green while the
+    instance came up on the outside file's contents.
+    `NodeMeta._a_name_inside_the_fixture_directory` refuses a
+    `file` that *spells* its way out of the directory; this refuses one that
+    points its way out. The two halves are one rule.
+
+    Refused outright rather than resolved and required to land inside the
+    directory: a fixture that points outside itself is a fixture plus an
+    invisible dependency, and nothing has asked to share one database between
+    two fixtures.
+
+    `lstat`, so the link is seen rather than what it points at. For a regular
+    file it is the `stat` this always took, so the memo key is unchanged.
+
+    What this does not reach, so that the claim matches the code: a **hard** link
+    to a database outside the directory is a second name for one inode and is
+    indistinguishable from an ordinary file here. It is the weaker variant --
+    one filesystem only, and an edit through the other name changes the size and
+    mtime this hashes against -- but "a fixture's files are the files in its own
+    directory" holds against symlinks, not against every way two names can reach
+    one file.
+    """
     try:
-        stat = path.stat()
+        entry = path.lstat()
     except OSError as error:
         raise WorldBug(f"{subject} has no {path.name}: {error}") from error
-    key = (str(path), stat.st_mtime_ns, stat.st_size, expected)
+    if stat.S_ISLNK(entry.st_mode):
+        raise WorldBug(
+            f"{subject} at {path} is a symbolic link, and a fixture's files are the files in "
+            f"its own directory; a link is followed to a database the fixture does not contain. "
+            f"Replace it with the file itself, or freeze the fixture again."
+        )
+    key = (str(path), entry.st_mtime_ns, entry.st_size, expected)
     if key in _verified:
         return
     if _sha256(path) != expected:

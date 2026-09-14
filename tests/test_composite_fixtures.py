@@ -8,6 +8,7 @@ assertions use.
 """
 
 import copy
+import hashlib
 import logging
 import stat as stat_module
 from pathlib import Path
@@ -18,7 +19,7 @@ import pytest
 import yaml
 
 from seahaven.errors import WorldBug
-from seahaven.fixtures import SIDECAR_NAME, STATE_NAME, load
+from seahaven.fixtures import SIDECAR_NAME, STATE_NAME, load, verify
 from seahaven.world import World
 from tests.conftest import INSTANT_ISO, composable_world
 
@@ -235,6 +236,33 @@ def test_a_sidecar_naming_a_file_outside_its_directory_is_refused(
     with pytest.raises(WorldBug, match="not a file name inside the fixture directory"):
         load(fixture.dir)
     with pytest.raises(WorldBug, match="not a file name inside the fixture directory"):
+        host.instance("start")
+
+
+def test_an_added_nodes_file_planted_as_a_symlink_is_refused_by_its_path(tmp_path: Path) -> None:
+    """The other half of `file`'s rule: a name inside the directory that points out of it.
+
+    The sidecar carries the *target's* digest, so nothing the fixture says about
+    itself disagrees -- and without the refusal `verify` passes, the copy follows
+    the link, and the instance comes up on a store the fixture does not contain.
+    """
+    host = host_over(tmp_path, composable_world("child"))
+    fixture = frozen_from(host)
+    with host.instance(None, now=INSTANT_ISO) as live:
+        live.call("child_write", value="outside the fixture")
+        outside = live.freeze("outside", "a store of its own")
+
+    planted = fixture.dir / "state.child.sqlite"
+    planted.unlink()
+    planted.symlink_to(outside.dir / "state.child.sqlite")
+    sidecar = fixture.dir / SIDECAR_NAME
+    data = yaml.safe_load(sidecar.read_text())
+    data["nodes"][0]["file_sha256"] = hashlib.sha256(planted.read_bytes()).hexdigest()
+    sidecar.write_text(yaml.safe_dump(data, sort_keys=True))
+
+    with pytest.raises(WorldBug, match=r"fixture 'start' node 'child' at .* is a symbolic link"):
+        verify(load(fixture.dir))
+    with pytest.raises(WorldBug, match=r"node 'child' at .* is a symbolic link"):
         host.instance("start")
 
 

@@ -36,6 +36,12 @@ holds for it; the extra rules are in [composition.md](composition.md).
 **A fixture is never opened, only copied.** The first time a process copies a fixture it verifies
 `file_sha256` and refuses on a mismatch, naming the fixture.
 
+**A fixture's files are the files in its own directory.** A state file that is a symbolic link is
+refused by name before it is hashed — the root's `state.sqlite` and every added node's file alike,
+and `seahaven check` reports it as SH402. Everything that reads a fixture would otherwise follow the
+link, `file_sha256` included, so one planted here would leave every check green while the instance
+ran on a database the fixture does not contain. Copy the file in, or freeze the fixture again.
+
 **Freeze is the only way to mint one.** `inst.freeze(id, description)` checks the instance's schema
 against the world's, checkpoints, vacuums, copies the file into `fixtures/<id>/`, writes the sidecar
 with the instance's clock as `now` and the source fixture as `parent_id`, and seals the file
@@ -208,7 +214,7 @@ keeping it in step with the package's schema hash. Read
 | Code | What it catches |
 |---|---|
 | `SH401` | a sidecar that does not validate |
-| `SH402` | a state file that does not match its `file_sha256` — it has been edited since it was frozen |
+| `SH402` | a state file that does not match its `file_sha256` — it has been edited since it was frozen, or it is a symbolic link |
 | `SH403` | a fixture frozen from a different schema than the world declares |
 | `SH404` | a `now` that is not a canonical timestamp |
 | `SH405` | a `-wal` or `-shm` file beside the state, so it was opened for writing after freezing |

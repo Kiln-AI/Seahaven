@@ -1122,6 +1122,11 @@ def _copy_fixture(fixture: Fixture, composition: Composition, directory: Path) -
     and reading the source from the sidecar is what keeps the fixture, rather
     than a rule repeated here, the description of what is in the directory.
     `check_composition` has already established that the two sets of paths match.
+
+    Every source here is a file of the fixture's own directory rather than a link
+    out of it, because `_fixture` runs `verify` first and `fixtures._verify_file`
+    refuses a symlink by name. The rule is stated once, where the file is hashed,
+    rather than twice.
     """
     shutil.copyfile(fixture.state_path, directory / composition.root.file_name)
     by_path = {node.path: node for node in composition.nodes}

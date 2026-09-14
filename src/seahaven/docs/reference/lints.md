@@ -252,16 +252,20 @@ hand-edited: everything in it is derived from the instance that was frozen.
 
 ## SH402 — a fixture's `file_sha256` does not match its state file
 
-**Rule.** `state.sqlite` exists and hashes to what the sidecar says.
+**Rule.** `state.sqlite` exists, is a real file rather than a symbolic link, and hashes to what the
+sidecar says.
 
 **Why.** A fixture is immutable, and this is how that is enforced against the file rather than
 against a convention. A mismatch means the file was changed after it was frozen — usually by opening
-it and writing to it — and every eval that used it since started from state nobody meant. The
-framework makes the same check the first time it copies a fixture in a process; this rule finds it
-before a commit rather than in a run.
+it and writing to it — and every eval that used it since started from state nobody meant. A link is
+the same defect by another route: everything that reads a fixture would otherwise follow it, the
+hash included, so a link out of the directory with the target's digest in the sidecar would agree
+with itself while the instance ran on a database the fixture does not contain. The framework makes
+the same checks when it copies a fixture; this rule finds them before a commit rather than in a
+run.
 
 **Fix.** `fixtures are immutable: fork it, change the fork, and freeze that`. If the file is simply
-missing, the fix is to regenerate it.
+missing, or is a link, the fix is to regenerate it.
 
 **Per node.** A composite fixture holds one state file per store, and each is checked against its
 own `file_sha256` with the node's path in the message.

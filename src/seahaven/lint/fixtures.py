@@ -255,6 +255,24 @@ def _composition_findings(
 
 def _state_findings(subject: str, expected: str, state: Path) -> list[Finding]:
     findings: list[Finding] = []
+    # Judged before `is_file`, which follows a link, and reported instead of the
+    # hash: `_sha256` would open through the link and agree with a sidecar whose
+    # `file_sha256` is the target's, so a fixture the runtime refuses
+    # (`fixtures._verify_file`) would pass here. Same rule, same code -- a link
+    # is a state file that is not the file the sidecar describes.
+    if state.is_symlink():
+        return [
+            Finding(
+                code="SH402",
+                severity="error",
+                path=state,
+                message=(
+                    f"{subject} has a {state.name} that is a symbolic link, and a fixture's "
+                    f"files are the files in its own directory"
+                ),
+                fix=_REGENERATE,
+            )
+        ]
     if not state.is_file():
         return [
             Finding(

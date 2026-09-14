@@ -17,6 +17,7 @@ SH405 is the journal companions only, and `test_a_writable_state_file_is_not_a_f
 is why: see the module docstring of `seahaven/lint/fixtures.py`.
 """
 
+import hashlib
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -87,6 +88,18 @@ def damage(world: World, edit: Callable[[dict[str, Any]], object]) -> None:
     sidecar.write_text(yaml.safe_dump(data, sort_keys=True), encoding="utf-8")
 
 
+def link_out(state: Path, target: Path) -> str:
+    """Replace a fixture's state file with a link to `target`; answer the target's digest.
+
+    The digest is what the sidecar has to carry for this to be the case the
+    runtime refuses and a hash check cannot see: `_sha256` opens through the
+    link, so the two agree.
+    """
+    state.unlink()
+    state.symlink_to(target)
+    return hashlib.sha256(target.read_bytes()).hexdigest()
+
+
 def test_a_freshly_frozen_fixture_is_clean(frozen: World) -> None:
     assert run(frozen) == []
 
@@ -149,6 +162,27 @@ def test_a_missing_state_file_is_sh402(frozen: World) -> None:
     (finding,) = run(frozen)
     assert finding.code == "SH402"
     assert f"no {STATE_NAME}" in finding.message
+
+
+def test_a_state_file_that_is_a_symlink_is_sh402(frozen: World) -> None:
+    """The check `world.instance` makes, made before a commit rather than in a run.
+
+    The sidecar carries the digest of the file the link reaches, so the hash
+    agrees with itself: without the link being judged first, `check` reports a
+    fixture green that the framework then refuses outright.
+    """
+    with frozen.instance(None, now=CANONICAL) as instance:
+        instance.call("execute", sql="INSERT INTO notes VALUES ('n1', 'outside', 0)")
+        outside = instance.freeze("outside", "A database of its own.")
+    state = frozen.fixtures_dir / "empty" / STATE_NAME
+    digest = link_out(state, outside.state_path)
+    damage(frozen, lambda data: data.__setitem__("file_sha256", digest))
+
+    (finding,) = run(frozen)
+
+    assert finding.code == "SH402"
+    assert f"{STATE_NAME} that is a symbolic link" in finding.message
+    assert finding.path == state
 
 
 def test_a_schema_hash_from_another_world_is_sh403(frozen: World) -> None:
@@ -237,6 +271,19 @@ def test_a_modified_node_file_is_sh402_naming_the_node(composite: World) -> None
     assert finding.code == "SH402"
     assert "node 'child'" in finding.message
     assert finding.path.name == CHILD_STATE
+
+
+def test_a_node_file_that_is_a_symlink_is_sh402_naming_the_node(composite: World) -> None:
+    with composite.instance(None, now=CANONICAL) as instance:
+        instance.call("child_write", value="outside")
+        outside = instance.freeze("outside", "A store of its own.")
+    digest = link_out(node_state(composite), outside.dir / CHILD_STATE)
+    damage(composite, lambda data: data["nodes"][0].__setitem__("file_sha256", digest))
+
+    (finding,) = run(composite)
+
+    assert finding.code == "SH402"
+    assert f"node 'child' has a {CHILD_STATE} that is a symbolic link" in finding.message
 
 
 def test_a_missing_node_file_is_sh402_naming_the_node(composite: World) -> None:

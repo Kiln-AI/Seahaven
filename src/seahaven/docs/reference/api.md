@@ -344,9 +344,10 @@ def freeze(
 The fixture directory read directly, for tooling that works on fixtures rather than on a world:
 `load` reads one sidecar without opening the state file, `load_all` returns every fixture in a
 directory by id (an empty directory is not an error and dot-directories are skipped, a `.pending-*`
-freeze in flight among them; two fixtures claiming one id is an error), `verify` raises unless the
-state file is the one its sidecar's `file_sha256` describes, and `freeze` is what `Instance.freeze`
-delegates to.
+freeze in flight among them; two fixtures claiming one id is an error), `verify` raises unless every
+state file is a real file in the fixture's own directory rather than a symbolic link of any kind and
+is the one its sidecar's `file_sha256` describes, and `freeze` is what `Instance.freeze` delegates
+to.
 
 A world does not need these — `world.fixtures()`, `world.instance(id)` and `inst.freeze(...)` are
 the ordinary path, and `world.instance(id)` verifies for you. Listing deliberately does not:

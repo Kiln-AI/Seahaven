@@ -31,6 +31,21 @@ def sidecar_of(fixture: Fixture) -> dict[str, Any]:
     return yaml.safe_load((fixture.dir / SIDECAR_NAME).read_text())
 
 
+def link_out(fixture: Fixture, target: Path) -> None:
+    """Make the fixture's state file a link to `target`, with the sidecar agreeing.
+
+    The whole of the attack, planted: `file_sha256` is the *target's* digest, so
+    every integrity check the sidecar supports reports green while the file the
+    fixture offers is one it does not contain.
+    """
+    fixture.state_path.unlink()
+    fixture.state_path.symlink_to(target)
+    sidecar = fixture.dir / SIDECAR_NAME
+    written = sidecar_of(fixture)
+    written["file_sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+    sidecar.write_text(yaml.safe_dump(written, sort_keys=True))
+
+
 def test_freeze_writes_a_directory_with_a_state_file_and_a_sidecar(world: World) -> None:
     with world.instance(None, now=INSTANT_ISO) as instance:
         add(instance, "n1")
@@ -285,6 +300,41 @@ def test_verify_refuses_a_fixture_with_no_state_file(world: World) -> None:
     frozen.state_path.unlink()
 
     with pytest.raises(WorldBug, match=STATE_NAME):
+        verify(frozen)
+
+
+def test_a_state_file_planted_as_a_symlink_is_refused_by_both_readers(world: World) -> None:
+    """A link out of the directory is followed by everything that reads a fixture.
+
+    Hashing follows it and the copy follows it, and the sidecar carries the
+    target's digest, so without this refusal the instance comes up on a database
+    the fixture does not contain with every check green.
+    """
+    with world.instance(None) as instance:
+        add(instance, "n1", "the note this fixture holds")
+        frozen = instance.freeze("start", "One note.")
+    with world.instance(None) as instance:
+        add(instance, "n2", "a note from outside the fixture")
+        elsewhere = instance.freeze("elsewhere", "A database of its own.")
+
+    link_out(frozen, elsewhere.state_path)
+
+    with pytest.raises(WorldBug) as raised:
+        verify(load(frozen.dir))
+    assert "is a symbolic link" in str(raised.value)
+    assert str(frozen.state_path) in str(raised.value)
+    with pytest.raises(WorldBug, match="is a symbolic link"):
+        world.instance("start")
+
+
+def test_a_state_file_that_is_a_link_to_nothing_is_refused_as_a_link(world: World) -> None:
+    """`lstat`: the link is judged, not the file it fails to reach."""
+    with world.instance(None) as instance:
+        frozen = instance.freeze("start", "Empty.")
+    frozen.state_path.unlink()
+    frozen.state_path.symlink_to(frozen.dir / "nothing.sqlite")
+
+    with pytest.raises(WorldBug, match="is a symbolic link"):
         verify(frozen)
 
 
