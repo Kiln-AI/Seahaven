@@ -790,9 +790,15 @@ fixture's id.
 class NodeReport:
     path: str; world: str; world_version: str; scope: str | None
     aliases: tuple[str, ...]; schema_hash: str
+    frozen_world_version: str | None = None   # what the fixture recorded, when it is not installed
 
 Instance.composition() -> tuple[NodeReport, ...]
 ```
+
+`world_version` is the version *installed*. `frozen_world_version` is what the fixture this instance
+was created from recorded for that node, and is `None` for a blank instance and wherever the two
+agree — which is what makes §11.3's "reported in the composition report" something an eval can read,
+rather than only a log line.
 
 `SeahavenState` gains `composition: list[dict] | None`, populated from the same tuple, so an eval
 over OpenEnv can tell what it is running against (§6.3). Nothing agent-facing carries it: `state` is

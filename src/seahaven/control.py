@@ -9,7 +9,10 @@ queue to get one.
 
 Both are thin wrappers: a read-only handle on the instance is what one reads
 through and `Instance.changes()` is the changeset the other renders. Nothing here
-writes SQL of its own or decides what a `Change` looks like.
+writes SQL of its own or decides what a `Change` looks like. Both therefore cover
+a composite instance's every node without a line here that knows it: the handle
+carries each added node attached under its own schema, and the changeset is one
+list over every session.
 
 A control call takes the instance lock like any call, so it never interleaves
 with a step on the same instance, and it asks the instance for what it needs with
@@ -51,11 +54,17 @@ def controller_run_sql(
 ) -> dict[str, Any]:
     """Read the instance with one SQL statement, through its own read-only handle.
 
-    Every table, including the ones the framework knows nothing about -- FTS5's
-    shadow tables, a world's untracked tables, SQLite's own -- and the
-    introspection pragmas a read-only connection allows. No table allowlist, no
-    row or byte caps, and SQLite's own error text as the message, because an eval
-    grading a run wants the real one.
+    Every table of every node: the root's store is `main` and each added node's
+    file is attached under the schema its path derives, so one statement can join
+    across two worlds. Every table on each of them, including the ones the
+    framework knows nothing about -- FTS5's shadow tables, a world's untracked
+    tables, SQLite's own -- and the introspection pragmas a read-only connection
+    allows. No table allowlist, no row or byte caps, and SQLite's own error text
+    as the message, because an eval grading a run wants the real one.
+
+    A world's own `run_sql` helper runs on `ctx.db`, which is one node's
+    connection with nothing attached to it, so isolation between nodes is
+    structural and this door is the only one that crosses them.
 
     The one bound left is that connection's permanent write denial, which is
     mirrored for the length of the statement rather than replaced: a control read
@@ -84,7 +93,11 @@ def controller_run_sql(
 
 
 def controller_changes(instance: Instance, ctx: Ctx) -> list[dict[str, Any]]:
-    """Every row the instance has changed since it was created, as an eval grades them."""
+    """Every row the instance has changed since it was created, as an eval grades them.
+
+    Every node's, in the composition's canonical order, each record saying which
+    node it belongs to in `world`.
+    """
     return [change.to_dict() for change in instance.changes()]
 
 

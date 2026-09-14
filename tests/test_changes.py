@@ -29,6 +29,7 @@ def test_an_insert_is_one_change(instance: Instance) -> None:
 
     assert instance.changes() == [
         Change(
+            world="main",
             table="notes",
             op="insert",
             key={"id": "n1"},
@@ -44,6 +45,7 @@ def test_a_change_renders_to_a_dict(instance: Instance) -> None:
     (change,) = instance.changes()
 
     assert change.to_dict() == {
+        "world": "main",
         "table": "notes",
         "op": "insert",
         "key": {"id": "n1"},
@@ -63,6 +65,7 @@ def test_an_update_carries_the_changed_columns_and_the_key(world: World) -> None
 
         assert instance.changes() == [
             Change(
+                world="main",
                 table="notes",
                 op="update",
                 key={"id": "n1"},
@@ -82,6 +85,7 @@ def test_a_delete_carries_the_whole_row(world: World) -> None:
 
         assert instance.changes() == [
             Change(
+                world="main",
                 table="notes",
                 op="delete",
                 key={"id": "n1"},

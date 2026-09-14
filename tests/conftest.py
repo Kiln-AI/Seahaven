@@ -204,19 +204,22 @@ def register_test_tools(world: World) -> None:
         return {"python": ctx.clock.iso(), "sql": str(row["sql_now"])}
 
 
-def composable_world(name: str, **options: Any) -> World:
+def composable_world(
+    name: str, *, version: str = "1.0.0", extra_schema: str = "", **options: Any
+) -> World:
     """A world with a table of its own and the two tools that read and write it.
 
     Everything is named after the world -- the table, the tools -- so several of
     these compose into one flat surface with no prefix, and a test can tell which
     node's store a row landed in by which table holds it.
+
+    `version` and `extra_schema` are what a fixture test varies: two worlds of one
+    name at two versions with one schema, or at one version with two schemas, are
+    the two halves of "the schema hash is the invalidation signal, not the
+    version".
     """
-    world = World(
-        name,
-        "1.0.0",
-        f"CREATE TABLE {name}_rows (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;",
-        **options,
-    )
+    own = f"CREATE TABLE {name}_rows (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;"
+    world = World(name, version, own + extra_schema, **options)
 
     @world.tool(name=f"{name}_write")
     def write(ctx: Ctx, value: str) -> dict[str, str]:

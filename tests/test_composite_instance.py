@@ -380,30 +380,6 @@ def test_a_bulk_block_that_raises_rolls_every_node_back(tmp_path: Path) -> None:
         assert (live.call("host_read"), live.call("child_read")) == ([], [])
 
 
-# ------------------------------------------------------------ fixtures, so far
-
-
-def test_a_fixture_of_a_composite_world_is_refused(tmp_path: Path) -> None:
-    host = two_levels(tmp_path)
-    with pytest.raises(WorldBug, match="carries the root's store alone"):
-        host.instance("anything")
-
-
-def test_freezing_a_composite_instance_is_refused(tmp_path: Path) -> None:
-    host = two_levels(tmp_path)
-    with host.instance(None) as live, pytest.raises(WorldBug, match="carries the root's store"):
-        live.freeze("f1", "a fixture")
-
-
-def test_a_leaf_world_still_freezes_and_loads(tmp_path: Path) -> None:
-    host = rooted("solo", tmp_path)
-    with host.instance(None) as live:
-        live.call("solo_write", value="kept")
-        live.freeze("f1", "one node")
-    with host.instance("f1") as live:
-        assert live.call("solo_read") == ["kept"]
-
-
 # ---------------------------------------------------------- the committed tree
 
 

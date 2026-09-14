@@ -82,9 +82,9 @@ def test_a_sidecar_missing_a_field_lists_pydantics_error(frozen: World) -> None:
     assert "world_version" in finding.message
 
 
-def test_a_format_version_that_is_not_one_is_sh401(frozen: World) -> None:
+def test_a_format_version_this_seahaven_does_not_write_is_sh401(frozen: World) -> None:
     """The field that says this fixture was written by another Seahaven."""
-    damage(frozen, lambda data: data.__setitem__("format_version", 2))
+    damage(frozen, lambda data: data.__setitem__("format_version", 3))
     (finding,) = run(frozen)
     assert finding.code == "SH401"
     assert "format_version" in finding.message

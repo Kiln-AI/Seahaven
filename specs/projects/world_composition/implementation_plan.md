@@ -37,7 +37,7 @@ three pytest suites, the licence check) before it is committed.
       typing base (§8.3); `invoke` returns the tool's original object after proving it serialises,
       and `control.dispatch` serialises its own (§8.4). The `ty` gate on `Concatenate` +
       `ParamSpec` overloads in CI (§16, last row). `test_typed_call.py`. Needs phase 2.
-- [ ] **Phase 4: fixtures, inspection, changes, the report.** `NodeMeta`, `FixtureMeta` version 2,
+- [x] **Phase 4: fixtures, inspection, changes, the report.** `NodeMeta`, `FixtureMeta` version 2,
       per-node freeze, verify and `check_composition` (§11); `open_inspection(attachments=)` with
       the attach-before-authorizer order and `Instance.inspect()` over every node (§9);
       `Change.world` and per-node rendering (§10); `Instance.composition()` (§12); control tools
@@ -54,8 +54,9 @@ three pytest suites, the licence check) before it is committed.
       requirements of FS §13 in `authoring.md` (prefer an added world's tools over direct SQL;
       prefixes and lists match the client's real surface; never assume sole writership; return
       models, not dicts); `reference/api.md` for `add_world`, `Worlds`, `WorldHandle`, `Ctx[X]` and
-      the `call` overloads; the new codes in `reference/lints.md`; the scaffold's `AGENTS.md`
-      template. Needs phase 5.
+      the `call` overloads; `Change.world` in `reference/api.md`'s `## Change` block and in
+      `concepts.md`'s description of a change's fields; the new codes in `reference/lints.md`; the
+      scaffold's `AGENTS.md` template. Needs phase 5.
 - [ ] **Phase 7: benchmark.** A composite workload in `bench/` over the test composite world —
       one-row read and write mix against a three-node tree — run beside the existing ProjectTracker
       workloads, with results in `bench/results/latest.md` so the per-node floor §15 assumes is a

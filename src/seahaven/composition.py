@@ -48,6 +48,7 @@ __all__ = [
     "Contributed",
     "Node",
     "NodeKey",
+    "NodeReport",
     "attached_limit",
     "build_route_chain",
     "bump",
@@ -171,6 +172,41 @@ class Node:
 
     def __repr__(self) -> str:
         return f"<Node {self.path} of {self.world.name} scope={self.scope!r}>"
+
+
+@dataclass(frozen=True)
+class NodeReport:
+    """One node of a live instance, as an eval asks what it is running against.
+
+    Data and not a `Node`: a `Node` reaches its children, its world and the
+    chains its calls descend, and what an eval wants is a description it can
+    print, compare and serialise. Nothing agent-facing carries any of it.
+    """
+
+    path: str
+    world: str
+    world_version: str
+    scope: str | None
+    aliases: tuple[str, ...]
+    schema_hash: str
+    # What the fixture this instance was created from recorded for this node,
+    # when that is not the version installed: `None` for a blank instance, and
+    # `None` where the two agree. A version difference under a matching schema
+    # hash is reported and never refused (architecture 11.3), and this is where
+    # an eval reads it; `instances.py` logs the same fact at INFO at create.
+    frozen_world_version: str | None = None
+
+    @classmethod
+    def of(cls, node: Node, frozen_world_version: str | None = None) -> NodeReport:
+        return cls(
+            path=node.path,
+            world=node.world.name,
+            world_version=node.world.version,
+            scope=node.scope,
+            aliases=node.aliases,
+            schema_hash=node.world.schema_hash,
+            frozen_world_version=frozen_world_version,
+        )
 
 
 @dataclass(frozen=True, eq=False)

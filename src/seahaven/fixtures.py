@@ -10,14 +10,21 @@ by using it and two instances of one fixture cannot see each other.
 is vacuumed into a `.pending-` sibling, hashed, described and sealed, and only
 then renamed into place, so a fixture directory either does not exist or is
 complete.
+
+A composite world has one store per node, so its fixture has one *file* per node
+and a sidecar that describes all of them: `format_version: 2`, the version-1
+fields still describing the root and a `nodes` list for everything the root adds.
+A world that adds nothing has one node and keeps writing `format_version: 1`,
+byte for byte what it wrote before composition existed, and `load` reads both.
 """
 
 import hashlib
 import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 import apsw
 import pydantic
@@ -27,8 +34,11 @@ from seahaven import conformance
 from seahaven.clock import Clock
 from seahaven.errors import WorldBug
 
-if TYPE_CHECKING:  # `instances.py` imports this module; the annotation is all that is needed here
-    from seahaven.instances import Instance
+if TYPE_CHECKING:
+    # `instances.py` and `composition.py` both import this module, so the arrow
+    # runs that way round and an annotation is all that is needed here.
+    from seahaven.composition import Composition, Node
+    from seahaven.instances import Instance, NodeRuntime
 
 __all__ = [
     "PENDING_PREFIX",
@@ -36,6 +46,8 @@ __all__ = [
     "STATE_NAME",
     "Fixture",
     "FixtureMeta",
+    "NodeMeta",
+    "check_composition",
     "check_id",
     "freeze",
     "load",
@@ -59,15 +71,82 @@ STATE_MODE = 0o444
 _verified: set[tuple[str, int, int, str]] = set()
 
 
+# The sidecar shapes this Seahaven writes and reads. A fixture outlives the
+# process that wrote it, so anything else is refused by name rather than by a
+# validation error about a field.
+FORMAT_VERSIONS = (1, 2)
+
+
+class NodeMeta(pydantic.BaseModel, frozen=True, extra="forbid"):
+    """One added node of a composite fixture: which store this file is, and whose.
+
+    `path` is the node's canonical path and `file` is the name of its state file
+    inside the fixture directory. `scope` and `aliases` are what make the fixture
+    describe the *shape* of the composition rather than only its contents: a
+    `store=` that moved, or an edge that was redirected, changes one of them even
+    when every path still exists, and `check_composition` refuses on either.
+    """
+
+    path: str
+    world: str
+    world_version: str
+    schema_hash: str
+    scope: str | None
+    file: str
+    file_sha256: str
+    # The `<parent path>/<name>` routes that reach this node and are not its path.
+    aliases: tuple[str, ...] = ()
+
+    @pydantic.field_validator("file")
+    @classmethod
+    def _a_name_inside_the_fixture_directory(cls, value: str) -> str:
+        """A sidecar's `file` is a name, and is checked as one.
+
+        `Fixture.file_of` joins this onto the fixture directory, and `verify` and
+        instance creation both follow the result. `Path` does not normalise `..`
+        and lets an absolute component win outright, so an unchecked spelling
+        here would have a fixture read -- and copy into a new instance -- a file
+        it does not contain. The sidecar supplies the hash as well, so
+        `file_sha256` is no defence: both halves come from the same text.
+
+        What this constrains is the name. Both readers resolve it as an ordinary
+        path, so a symlink planted inside the fixture directory is still
+        followed to wherever it points -- a property `fixture.state_path` has
+        had since version 1, and not one this check undertakes to close.
+
+        This is `check_id`'s rule for a fixture id, for the same reason, made
+        stricter than either that or `world._check_name`: both platforms'
+        separators *and* their drive letters, rather than the running one's --
+        `_check_name` refuses both separators but not a drive letter, and
+        `check_id` refuses only the running platform's. A fixture is an artifact
+        that moves between machines, and a name that escapes the directory on
+        Windows must be refused when it is read on Linux.
+        """
+        if (
+            value in {"", ".", ".."}
+            or "\x00" in value
+            or value != PurePosixPath(value).name
+            or value != PureWindowsPath(value).name
+        ):
+            raise ValueError(
+                f"file is {value!r}, which is not a file name inside the fixture directory"
+            )
+        return value
+
+
 class FixtureMeta(pydantic.BaseModel, frozen=True, extra="forbid"):
     """`fixture.yaml`: where this state came from and what it is.
 
     `format_version` is on every YAML file Seahaven writes, and `load` refuses
-    any value but the one it knows: a fixture is an artifact that outlives the
+    any value but the ones it knows: a fixture is an artifact that outlives the
     process that wrote it.
+
+    The version-1 fields describe the **root** node and keep their meaning
+    exactly; `nodes` lists the added nodes, and only them. A world that adds
+    nothing writes version 1 with no `nodes` key at all.
     """
 
-    format_version: Literal[1]
+    format_version: Literal[1, 2]
     id: str
     world: str
     world_version: str
@@ -77,6 +156,22 @@ class FixtureMeta(pydantic.BaseModel, frozen=True, extra="forbid"):
     file_sha256: str
     created_at: str
     description: str
+    nodes: tuple[NodeMeta, ...] = ()
+
+    @pydantic.model_validator(mode="after")
+    def _the_version_is_the_shape(self) -> Self:
+        """The two ways of saying "this is a composite" have to agree.
+
+        Neither field is derived from the other on disk, so a hand-edited sidecar
+        can claim one and carry the other, and every reader below assumes they
+        match.
+        """
+        if (self.format_version == 2) != bool(self.nodes):
+            raise ValueError(
+                "format_version 2 describes a composite fixture and lists its added nodes in "
+                "nodes; format_version 1 describes one store and lists none"
+            )
+        return self
 
 
 @dataclass(frozen=True)
@@ -106,7 +201,17 @@ class Fixture:
 
     @property
     def state_path(self) -> Path:
+        """The root node's state file."""
         return self.dir / STATE_NAME
+
+    @property
+    def nodes(self) -> tuple[NodeMeta, ...]:
+        """The added nodes this fixture carries. Empty for a world that adds nothing."""
+        return self.meta.nodes
+
+    def file_of(self, node: NodeMeta) -> Path:
+        """Where one added node's state file is, inside this fixture's directory."""
+        return self.dir / node.file
 
 
 def check_id(fixture_id: str) -> None:
@@ -150,13 +255,13 @@ def load(fixture_dir: Path) -> Fixture:
         raise WorldBug(f"{sidecar}: is not valid YAML: {error}") from error
     if not isinstance(data, dict):
         raise WorldBug(f"{sidecar}: is not a mapping")
-    # Named before the model is built, because the model can only say that `1`
-    # was expected, and what a reader needs to know is that this fixture was
-    # written by a different version of Seahaven.
-    if data.get("format_version") != 1:
+    # Named before the model is built, because the model can only say which
+    # literals were expected, and what a reader needs to know is that this
+    # fixture was written by a different version of Seahaven.
+    if data.get("format_version") not in FORMAT_VERSIONS:
         raise WorldBug(
-            f"{sidecar}: format_version is {data.get('format_version')!r}, not 1; this fixture was "
-            f"written by a different version of Seahaven"
+            f"{sidecar}: format_version is {data.get('format_version')!r}, not 1 or 2; this "
+            f"fixture was written by a different version of Seahaven"
         )
     try:
         meta = FixtureMeta.model_validate(data)
@@ -187,18 +292,32 @@ def load_all(fixtures_dir: Path) -> dict[str, Fixture]:
 
 
 def verify(fixture: Fixture) -> None:
-    """Refuse a fixture whose state file is not the one its sidecar describes."""
-    path = fixture.state_path
+    """Refuse a fixture whose state files are not the ones its sidecar describes.
+
+    Every node's file, not only the root's: a composite fixture is N files, and
+    one of them edited in place is exactly the damage this exists to catch.
+    """
+    _verify_file(f"fixture {fixture.id!r}", fixture.state_path, fixture.meta.file_sha256)
+    for node in fixture.meta.nodes:
+        _verify_file(
+            f"fixture {fixture.id!r} node {node.path!r}",
+            fixture.file_of(node),
+            node.file_sha256,
+        )
+
+
+def _verify_file(subject: str, path: Path, expected: str) -> None:
+    """One frozen file against the hash its sidecar recorded, memoised per process."""
     try:
         stat = path.stat()
     except OSError as error:
-        raise WorldBug(f"fixture {fixture.id!r} has no {STATE_NAME}: {error}") from error
-    key = (str(path), stat.st_mtime_ns, stat.st_size, fixture.meta.file_sha256)
+        raise WorldBug(f"{subject} has no {path.name}: {error}") from error
+    key = (str(path), stat.st_mtime_ns, stat.st_size, expected)
     if key in _verified:
         return
-    if _sha256(path) != fixture.meta.file_sha256:
+    if _sha256(path) != expected:
         raise WorldBug(
-            f"fixture {fixture.id!r} at {path} does not match its sidecar's file_sha256; it has "
+            f"{subject} at {path} does not match its sidecar's file_sha256; it has "
             f"been modified or truncated. Fixtures are immutable: fork it instead (create an "
             f"instance from it, change it, and freeze the result under a new id)."
         )
@@ -206,11 +325,16 @@ def verify(fixture: Fixture) -> None:
 
 
 def freeze(instance: Instance, fixture_id: str, description: str, *, fixtures_dir: Path) -> Fixture:
-    """Mint a fixture from a live instance. Called under the instance's lock.
+    """Mint a fixture from a live instance: one file per node, one sidecar. Under its lock.
 
     The instance is untouched: `VACUUM INTO` reads the database (the WAL
     included) and writes a new file, so a freeze is safe to take mid-authoring
     and the instance is usable afterwards.
+
+    All or nothing across the tree. Every node's store is checked against its own
+    world's DDL before anything at all is written, so a composite whose third
+    node has drifted mints nothing rather than a directory with two good files in
+    it, and the refusal names the node.
     """
     check_id(fixture_id)
     target = fixtures_dir / fixture_id
@@ -220,44 +344,249 @@ def freeze(instance: Instance, fixture_id: str, description: str, *, fixtures_di
             f"freeze under a new id"
         )
     world = instance.world
-    conformance.check(instance.db.conn, world)
+    # The instance's own half of this module, private for the same reason
+    # `control.py` reaches `_control_db()`: the node runtimes are the framework's
+    # internals, and freezing is the framework writing down what they hold.
+    nodes = instance._nodes()
+    for runtime in nodes:
+        _check_conformance(runtime)
     pending = fixtures_dir / f"{PENDING_PREFIX}{fixture_id}"
     try:
         shutil.rmtree(pending, ignore_errors=True)
         pending.mkdir(parents=True)
-        state = pending / STATE_NAME
-        # A compacted, rollback-journal file, and the live database untouched.
-        try:
-            instance.db.conn.execute("VACUUM INTO ?", (str(state),))
-        except apsw.Error as error:
-            # Freezing is an authoring step, not a tool call: a full disk or a
-            # fixtures directory this process cannot write to is the author's
-            # problem to read, in the same currency as every other refusal here.
-            raise WorldBug(f"could not write fixture {fixture_id!r} to {state}: {error}") from error
+        frozen = [(runtime.node, _vacuum_into(runtime, pending, fixture_id)) for runtime in nodes]
+        # By depth and not by position: `Node.depth` states the invariant the
+        # order only implies, and `_fixture_file` already reads it.
+        root_sha256 = next(digest for node, digest in frozen if node.depth == 0)
+        added = tuple(_node_meta(node, digest) for node, digest in frozen if node.depth > 0)
         meta = FixtureMeta(
-            format_version=1,
+            # Version 1 whenever there is nothing but the root to describe, so a
+            # world that adds nothing writes the directory it always wrote.
+            format_version=2 if added else 1,
             id=fixture_id,
             world=world.name,
             world_version=world.version,
             schema_hash=world.schema_hash,
             now=instance.clock.iso(),
             parent_id=instance.fixture,
-            file_sha256=_sha256(state),
+            file_sha256=root_sha256,
             # The wall clock, and one of the two places in a world that reads it:
             # this says when the fixture was made, not what time it is inside.
             created_at=Clock.wall().iso(),
             description=description,
+            nodes=added,
         )
         (pending / SIDECAR_NAME).write_text(
-            yaml.safe_dump(meta.model_dump(), sort_keys=True), encoding="utf-8"
+            yaml.safe_dump(_sidecar(meta), sort_keys=True), encoding="utf-8"
         )
-        state.chmod(STATE_MODE)
+        for node, _digest in frozen:
+            (pending / _fixture_file(node)).chmod(STATE_MODE)
         # The publish: a fixture directory either does not exist or is whole.
         os.rename(pending, target)
     except BaseException:
         shutil.rmtree(pending, ignore_errors=True)
         raise
     return Fixture(meta=meta, dir=target)
+
+
+def _check_conformance(runtime: NodeRuntime) -> None:
+    """One node's store against its own world's DDL, with the node named on failure.
+
+    Each world checks its own: a composite's nodes are separate databases with
+    separate schemas, and the one that drifted is the one an author has to fix.
+    """
+    try:
+        conformance.check(runtime.db.conn, runtime.node.world)
+    except WorldBug as error:
+        raise WorldBug(f"{runtime.node.path}: {error}") from error
+
+
+def _fixture_file(node: Node) -> str:
+    """The name one node's state file takes inside a *fixture* directory.
+
+    The two arms return the same string today, and the branch is not redundant:
+    they are different facts that happen to agree.
+
+    The root's file in a fixture is `STATE_NAME` **by definition of the
+    artifact**. It is what `Fixture.state_path` reads, what `lint/fixtures.py`
+    looks for, and what is on disk in every fixture ever frozen, including by
+    Seahavens that had no `Node`. This module owns that name, so the writer
+    spells it from the same constant its three readers do. `node.file_name` is
+    the name a node's file takes in an *instance* directory, which is
+    `composition.py`'s business (and a separate binding of `STATE_NAME`, taken at
+    import); it has no obligation to an artifact already on disk. An added node's
+    name is that one, because a fixture had no opinion about it until now -- and
+    it is recorded in the sidecar besides, so the artifact still describes
+    itself.
+    """
+    return STATE_NAME if node.depth == 0 else node.file_name
+
+
+def _vacuum_into(runtime: NodeRuntime, pending: Path, fixture_id: str) -> str:
+    """Write one node's compacted file into the pending directory; answer its hash."""
+    state = pending / _fixture_file(runtime.node)
+    # A compacted, rollback-journal file, and the live database untouched.
+    try:
+        runtime.db.conn.execute("VACUUM INTO ?", (str(state),))
+    except apsw.Error as error:
+        # Freezing is an authoring step, not a tool call: a full disk or a
+        # fixtures directory this process cannot write to is the author's
+        # problem to read, in the same currency as every other refusal here.
+        raise WorldBug(f"could not write fixture {fixture_id!r} to {state}: {error}") from error
+    return _sha256(state)
+
+
+def _node_meta(node: Node, file_sha256: str) -> NodeMeta:
+    """One added node, as the sidecar records it.
+
+    `world` is written and **not checked at create**, and that is deliberate:
+    architecture 11.3 lists what a mismatch refuses -- the node set, the scopes,
+    the alias edges, the schema hashes -- and a name is not on it, because
+    functional spec 7 makes the schema hash the invalidation signal and a world
+    renamed between releases invalidates nothing. It is recorded so the report
+    and the log can say which world a store came from, and so a substitution
+    that kept the DDL is visible rather than silent: `_version_differences`
+    names both sides.
+    """
+    return NodeMeta(
+        path=node.path,
+        world=node.world.name,
+        world_version=node.world.version,
+        schema_hash=node.world.schema_hash,
+        scope=node.scope,
+        file=_fixture_file(node),
+        file_sha256=file_sha256,
+        aliases=node.aliases,
+    )
+
+
+def _sidecar(meta: FixtureMeta) -> dict[str, Any]:
+    """The sidecar as YAML carries it.
+
+    `mode="json"` because the nested nodes and their alias tuples have to come
+    out as plain lists and mappings; and a version-1 sidecar drops `nodes`
+    entirely rather than writing an empty list, so a world that adds nothing
+    keeps producing the file it produced before composition existed.
+    """
+    data = meta.model_dump(mode="json")
+    if not meta.nodes:
+        del data["nodes"]
+    return data
+
+
+def check_composition(meta: FixtureMeta, composition: Composition) -> list[str]:
+    """Refuse a fixture that does not describe the composition about to load it.
+
+    Called at create, after the root's file hash is verified and before anything
+    is copied. What it compares is the *shape*: which nodes there are, which
+    scope each resolved into, which alias edges reach them, and each node's
+    schema hash. A `store=` moved on one edge changes every node beneath it, so
+    the refusal reports the whole set that moved.
+
+    What comes back is the differences that are **reported and not refused**: a
+    node whose installed world is a different version from the one frozen, where
+    the schema hash still matches. One package cannot be installed at two
+    versions in one environment, so the framework has no version check of its own
+    to make; the schema hash is the real invalidation signal and it is checked
+    here per node.
+    """
+    current = {node.path: node for node in composition.nodes}
+    _check_shape(meta, composition)
+    _check_node_set(meta, current)
+    _check_aliases(meta, current)
+    _check_schema_hashes(meta, current)
+    return _version_differences(meta, composition)
+
+
+def _check_shape(meta: FixtureMeta, composition: Composition) -> None:
+    """The sidecar's shape against the tree's: a composite fixture, or one store."""
+    stores = len(composition.nodes)
+    if bool(meta.nodes) == (stores > 1):
+        return
+    raise WorldBug(
+        f"fixture {meta.id!r} is a format_version {meta.format_version} sidecar describing "
+        f"{_stores(len(meta.nodes) + 1)}, and world {composition.root.world.name!r} now resolves "
+        f"to {_stores(stores)}; regenerate it"
+    )
+
+
+def _stores(count: int) -> str:
+    return "one store" if count == 1 else f"{count} stores"
+
+
+def _check_node_set(meta: FixtureMeta, current: Mapping[str, Node]) -> None:
+    frozen_scopes = {node.path: node.scope for node in meta.nodes}
+    # Every node but the root, which the version-1 fields already describe.
+    live_scopes = {path: node.scope for path, node in current.items() if node.depth > 0}
+    added = sorted(set(live_scopes) - set(frozen_scopes))
+    removed = sorted(set(frozen_scopes) - set(live_scopes))
+    shared = sorted(
+        path
+        for path in set(frozen_scopes) & set(live_scopes)
+        if frozen_scopes[path] != live_scopes[path]
+    )
+    reported = [
+        *(f"node added: {path}" for path in added),
+        *(f"node removed: {path}" for path in removed),
+        # A scope propagates, so one `store=` changing on one edge moves every
+        # node beneath it, and all of them are named.
+        *(
+            f"sharing changed: {path} was frozen in store {frozen_scopes[path]!r} and now "
+            f"resolves into {live_scopes[path]!r}"
+            for path in shared
+        ),
+    ]
+    if reported:
+        raise WorldBug(
+            f"fixture {meta.id!r} does not describe the composition of world "
+            f"{meta.world!r}: " + "; ".join(reported) + "; regenerate it"
+        )
+
+
+def _check_aliases(meta: FixtureMeta, current: Mapping[str, Node]) -> None:
+    frozen = {(node.path, alias) for node in meta.nodes for alias in node.aliases}
+    live = {(node.path, alias) for node in current.values() for alias in node.aliases}
+    if frozen == live:
+        return
+    raise WorldBug(
+        f"fixture {meta.id!r} does not describe the composition of world {meta.world!r}: the "
+        f"alias edges changed, from {sorted(_route(edge) for edge in frozen)} to "
+        f"{sorted(_route(edge) for edge in live)}; regenerate it"
+    )
+
+
+def _check_schema_hashes(meta: FixtureMeta, current: Mapping[str, Node]) -> None:
+    for node in meta.nodes:
+        if node.schema_hash != current[node.path].world.schema_hash:
+            raise WorldBug(
+                f"{node.path}: fixture {meta.id!r} was frozen from a different schema; "
+                f"regenerate it"
+            )
+
+
+def _version_differences(meta: FixtureMeta, composition: Composition) -> list[str]:
+    """What a node was frozen from against what is installed, where the two differ.
+
+    The world's *name* as well as its version, because a sidecar's `world` is not
+    checked at create (`_node_meta`): a store frozen from one world and loaded
+    under a differently-named world with identical DDL is reported here rather
+    than passing as a version bump.
+    """
+    frozen = [(composition.root.path, meta.world, meta.world_version)]
+    frozen += [(node.path, node.world, node.world_version) for node in meta.nodes]
+    by_path = {node.path: node for node in composition.nodes}
+    return [
+        f"{path}: frozen from world {world!r} at version {version}, running world "
+        f"{by_path[path].world.name!r} at version {by_path[path].world.version}; the schema is "
+        f"unchanged, so the fixture still loads"
+        for path, world, version in frozen
+        if (world, version) != (by_path[path].world.name, by_path[path].world.version)
+    ]
+
+
+def _route(edge: tuple[str, str]) -> str:
+    path, alias = edge
+    return f"{alias} -> {path}"
 
 
 def _children(directory: Path) -> list[Path]:

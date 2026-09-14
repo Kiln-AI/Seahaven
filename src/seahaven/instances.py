@@ -64,12 +64,13 @@ from seahaven.composition import (
     Composition,
     Node,
     NodeKey,
+    NodeReport,
     canonical_tree,
 )
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, build_blank, open_inspection, open_instance
 from seahaven.errors import ToolError, UnknownTool, WorldBug
-from seahaven.fixtures import Fixture, check_id, freeze, load, verify
+from seahaven.fixtures import Fixture, check_composition, check_id, freeze, load, verify
 from seahaven.handles import Frame, unbound
 from seahaven.ids import Ids, instance_seed
 from seahaven.tool import Tool
@@ -264,6 +265,7 @@ class Instance:
         clock: Clock,
         runtime: Mapping[NodeKey, NodeRuntime],
         node_keys: frozenset[NodeKey],
+        frozen_versions: Mapping[str, str],
         dir: Path,
         world: World,
         manager: InstanceManager,
@@ -289,6 +291,10 @@ class Instance:
         # instance; an `add_world` cannot, because no live instance holds the file
         # it asks for.
         self._node_keys = node_keys
+        # Per node path, the world version the fixture recorded where it is not
+        # the one installed. Empty for a blank instance. `composition()` is where
+        # an eval reads it (architecture 11.3).
+        self._frozen_versions = dict(frozen_versions)
         self._checked: Composition | None = None
         self._manager = manager
         self._inspection: Db | None = None
@@ -375,39 +381,72 @@ class Instance:
     def inspect(self) -> Db:
         """A read-only handle on this instance, opened once and kept.
 
-        Every table of the root node's store -- a handle over every node arrives
-        with the composite inspection work, as `changes()` does -- the instance's
-        clock, no authorizer beyond the connection's permanent write denial.
+        Every table of every node: the root's store is `main` and each added
+        node's file is attached under the schema its path derives, so "was the
+        invoice created and was the message posted" is one statement over
+        `main.invoices` and `messaging.posts`. The instance's clock, and no
+        authorizer beyond the connection's permanent write denial -- which was
+        installed after the attaches and therefore refuses a later `ATTACH` as
+        well as every write (`db.open_inspection`).
+
         Reads through it do not take the instance lock: a read-only connection on
         a WAL database sees a consistent snapshot per statement. Reading through
         it concurrently with `destroy()` is the one ordering the caller owns.
         """
         with self._held():
             if self._inspection is None:
-                self._inspection = open_inspection(self.state_path, self.clock)
+                self._inspection = open_inspection(self.state_path, self.clock, self._attachments())
             return self._inspection
 
-    def changes(self) -> list[Change]:
-        """Every row this instance has changed since it was created.
+    def composition(self) -> tuple[NodeReport, ...]:
+        """What this instance is running against: every node, root first.
 
-        The root node's, for now: a change list covering every node arrives with
-        the composite inspection work, which is what gives a `Change` a node to
-        name.
+        Paths, world names and versions, the scope each node resolved into and
+        the alias routes that reach it. The set the instance was created with, so
+        it describes the files on disk rather than whatever the world's seal says
+        now. Nothing agent-facing carries any of it.
+
+        A node whose fixture was frozen from another version of its world, with
+        the schema unchanged, also carries `frozen_world_version`: that is
+        reported and never refused, and this is where an eval reads it.
+        """
+        return tuple(
+            NodeReport.of(runtime.node, self._frozen_versions.get(runtime.node.path))
+            for runtime in self._runtime.values()
+        )
+
+    def changes(self) -> list[Change]:
+        """Every row this instance has changed since it was created, in every node.
+
+        One list: each node's changeset rendered against its own connection and
+        stamped with its own path, concatenated in the composition's canonical
+        order, root first. A world that adds nothing has one node, so its list is
+        what it always was with `main` on every record.
         """
         with self._held():
-            root = self._runtime[self._root_key]
-            return render(_session_of(root).changeset(), self.db.conn)
+            return [
+                change
+                for runtime in self._runtime.values()
+                for change in render(
+                    _session_of(runtime).changeset(), runtime.db.conn, runtime.node.path
+                )
+            ]
 
     def freeze(self, id: str, description: str) -> Fixture:
-        """Mint a fixture from this instance's current state."""
+        """Mint a fixture from this instance's current state: every node's store, together.
+
+        One frozen file per node and one sidecar describing all of them, at the
+        one clock this instance runs on. All or nothing: a node whose schema has
+        drifted mints nothing (`fixtures.freeze`).
+        """
         with self._held():
-            _refuse_a_composite_fixture(self.world, len(self._runtime))
-            if self.db.in_transaction:
+            if any(runtime.db.in_transaction for runtime in self._runtime.values()):
                 # The lock is an `RLock`, so a `freeze` inside `bulk()` gets this
                 # far and then reaches a `VACUUM` SQLite will not run inside a
                 # transaction. Said here instead, where what to do about it is
                 # obvious: the rows are not committed yet, and a fixture of
-                # uncommitted rows is not what the caller asked for either.
+                # uncommitted rows is not what the caller asked for either. Any
+                # node, because `bulk()` opens a transaction on every one of them.
                 raise WorldBug(
                     "freeze cannot run inside bulk(): leave the bulk() block first, so the "
                     "rows it wrote are committed and the fixture is what the instance holds"
@@ -531,8 +570,30 @@ class Instance:
         """
         with self._held():
             if self._control is None:
-                self._control = open_inspection(self.state_path, self.clock)
+                self._control = open_inspection(self.state_path, self.clock, self._attachments())
             return self._control
+
+    def _attachments(self) -> list[tuple[str, Path]]:
+        """Every node but the root, as `open_inspection` attaches them.
+
+        Built from the instance's own runtime, which is the set of files that
+        exist on disk, and not from the world's current seal. By depth rather
+        than by position, so the invariant is read off the node itself.
+        """
+        return [
+            (runtime.node.schema_name, self.dir / runtime.node.file_name)
+            for runtime in self._runtime.values()
+            if runtime.node.depth > 0
+        ]
+
+    def _nodes(self) -> tuple[NodeRuntime, ...]:
+        """Every node's runtime, root first, in the composition's canonical order.
+
+        Reached by `fixtures.freeze`, which writes down what they hold. Private
+        for the reason `_control_db` is: a node runtime is the framework's own
+        internals and no part of what a world or an eval is offered.
+        """
+        return tuple(self._runtime.values())
 
     @contextmanager
     def _bulk(self) -> Iterator[Ctx[Any]]:
@@ -677,7 +738,9 @@ class InstanceManager:
 
         One SQLite file, one connection, one `Ids` stream and one changeset
         session per node of the world's composition -- which for a world that
-        adds nothing is one of each, in the directory it has today.
+        adds nothing is one of each, in the directory it has today. A composite
+        fixture carries one frozen file per node and every one of them is copied;
+        a blank instance builds every node from its own world's DDL.
         """
         world = self._world
         kwargs = startup_kwargs or {}
@@ -702,11 +765,7 @@ class InstanceManager:
                     build_blank(directory / node.file_name, node.world.schema).close()
                 clock = _clock_from(now) if now is not None else Clock.wall()
             else:
-                # `copyfile` and not `copy`: the instance must not inherit the
-                # fixture's read-only mode, and its timestamps are its own. On
-                # Linux this is `copy_file_range`, so a reflink filesystem makes
-                # the copy nearly free.
-                shutil.copyfile(fixture.state_path, directory / composition.root.file_name)
+                _copy_fixture(fixture, composition, directory)
                 clock = Clock.from_iso(fixture.now)
             # The fixture id, or the world's name for a blank instance, so one
             # caller seed against two fixtures gives two streams.
@@ -720,6 +779,7 @@ class InstanceManager:
                 clock=clock,
                 runtime=runtime,
                 node_keys=frozenset(composition.by_key),
+                frozen_versions=_frozen_versions(fixture, composition),
                 dir=directory,
                 world=world,
                 manager=self,
@@ -837,7 +897,6 @@ class InstanceManager:
         thing that mints a fixture and it always names the directory after the
         id, so creating an instance does not have to parse every other sidecar.
         """
-        _refuse_a_composite_fixture(self._world, len(composition.nodes))
         # Applied before the filesystem is touched, so an id off the wire cannot
         # become a path.
         check_id(fixture_id)
@@ -854,6 +913,14 @@ class InstanceManager:
             raise WorldBug(
                 f"fixture {fixture_id!r} was frozen from a different schema; regenerate it"
             )
+        # Every node's schema and the shape of the tree itself, after the root's
+        # own two checks and before anything is copied. What comes back is the
+        # differences that are reported rather than refused: an added world
+        # installed at another version whose schema is unchanged still loads, and
+        # one package cannot be installed at two versions in one environment, so
+        # there is nothing here to act on beyond saying so.
+        for difference in check_composition(fixture.meta, composition):
+            _log.info("fixture %s of world %s: %s", fixture_id, self._world.name, difference)
         if now is not None:
             raise WorldBug("now= applies to blank instances only: a fixture carries its own clock")
         return fixture
@@ -985,19 +1052,49 @@ def _session_of(runtime: NodeRuntime) -> apsw.Session:
     return runtime.session
 
 
-def _refuse_a_composite_fixture(world: World, nodes: int) -> None:
-    """Fixtures cover the root's store only, so far.
+def _frozen_versions(fixture: Fixture | None, composition: Composition) -> dict[str, str]:
+    """Per node path, the world version its fixture recorded, where it is not the installed one.
 
-    A version-1 sidecar describes one file, and a composite instance is N. Saying
-    so is the honest half-step: building the added nodes blank from a fixture, or
-    freezing a fixture that silently holds none of them, would each be a wrong
-    answer rather than a missing one.
+    Empty for a blank instance, and empty for a fixture whose every node is at
+    the version it was frozen at, so a report only carries the field when there
+    is something to say. `check_composition` has already refused every node whose
+    *schema* moved, so what is left here is the difference that is reported and
+    never refused (architecture 11.3).
+
+    Version only, deliberately: `NodeReport.frozen_world_version` is the field
+    §12 gives the report, so a node frozen from a differently-named world with
+    the same version reads as unchanged here. The other half of that difference
+    is `fixtures._version_differences`, which compares world name and version
+    both and puts the name in the INFO log at create.
     """
-    if nodes > 1:
-        raise WorldBug(
-            f"world {world.name!r} resolves to {nodes} nodes, and a fixture carries the root's "
-            f"store alone; a composite world's instances are blank for now"
-        )
+    if fixture is None:
+        return {}
+    recorded = {composition.root.path: fixture.meta.world_version}
+    recorded |= {node.path: node.world_version for node in fixture.meta.nodes}
+    return {
+        node.path: recorded[node.path]
+        for node in composition.nodes
+        if node.path in recorded and recorded[node.path] != node.world.version
+    }
+
+
+def _copy_fixture(fixture: Fixture, composition: Composition, directory: Path) -> None:
+    """Copy one frozen file per node into the new instance's directory.
+
+    `copyfile` and not `copy`: the instance must not inherit the fixture's
+    read-only mode, and its timestamps are its own. On Linux this is
+    `copy_file_range`, so a reflink filesystem makes the copy nearly free.
+
+    The source name is the one the sidecar recorded and the destination is the
+    one this composition derives. They agree -- both come from the node's path --
+    and reading the source from the sidecar is what keeps the fixture, rather
+    than a rule repeated here, the description of what is in the directory.
+    `check_composition` has already established that the two sets of paths match.
+    """
+    shutil.copyfile(fixture.state_path, directory / composition.root.file_name)
+    by_path = {node.path: node for node in composition.nodes}
+    for node in fixture.nodes:
+        shutil.copyfile(fixture.file_of(node), directory / by_path[node.path].file_name)
 
 
 def _check_startup_kwargs(composition: Composition, startup_kwargs: Mapping[str, Any]) -> None:

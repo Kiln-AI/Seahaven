@@ -207,7 +207,7 @@ def test_load_reads_a_sidecar_without_opening_the_state_file(world: World) -> No
         (None, "cannot be read"),
         ("{{{ not yaml", "not valid YAML"),
         ("- a list", "not a mapping"),
-        ("format_version: 2\nid: start\n", "format_version is 2"),
+        ("format_version: 3\nid: start\n", "format_version is 3"),
         ("id: start\n", "format_version is None"),
     ],
 )

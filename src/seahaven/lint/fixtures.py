@@ -95,9 +95,9 @@ def _violations(error: pydantic.ValidationError) -> list[str]:
     """Pydantic's errors, one per line of the message, field first.
 
     Every one of them, not the first: a sidecar hand-edited into the wrong shape
-    usually has several, and a `format_version` that is not `1` shows up here as
-    the field it is -- which is the whole of what a reader needs to know that the
-    fixture came from another version of Seahaven.
+    usually has several, and a `format_version` this Seahaven does not write
+    shows up here as the field it is -- which is the whole of what a reader needs
+    to know that the fixture came from another version of Seahaven.
     """
     return [
         f"{'.'.join(str(part) for part in violation['loc']) or 'sidecar'}: {violation['msg']}"
