@@ -202,14 +202,16 @@ of what was found and verified, so nobody re-derives it.
 
 ### B13. Two OpenEnv behaviours a Seahaven world cannot fix from its own side
 
-**Found:** Phase 6 code review, rounds 1 and 3. **Owner:** upstream —
-https://github.com/huggingface/OpenEnv/issues/1155, open against 0.4.2. **Risk:** silent rather than
-loud: a harness that reads state or schema over HTTP is told nothing about the world it is driving,
-and nothing anywhere says so.
+**Found:** Phase 6 code review, rounds 1 and 3. **Owner:** upstream — the `/schema` half is
+https://github.com/huggingface/OpenEnv/issues/1155, open against 0.4.2; the `/state` half is a
+second, separate upstream defect, drafted in `.upstream-issue-http-stateless.md` and not yet filed.
+**Risk:** silent rather than loud: a harness that reads schema over HTTP is told nothing about the
+world it is driving, and nothing upstream says so. The `/state` half is no longer silent on a
+Seahaven server — see its bullet — but it is still silent on every stock OpenEnv one.
 
-Both were reproduced against a real server; neither is in Seahaven's code, and neither has a fix
-that belongs inside this framework as it stands. They are one root cause at two endpoints:
-OpenEnv uses the base `State` type where the environment's own subclass was meant.
+Both were reproduced against a real server and neither is in Seahaven's code. Seahaven now
+intercepts the `/state` half rather than fixing it; the `/schema` half has no fix that belongs inside
+this framework as it stands.
 
 - **`GET /schema` publishes the base `State`, so a client never sees the state model it is
   driving.** `create_app` takes an action class and an observation class and no state class, and
@@ -221,17 +223,26 @@ OpenEnv uses the base `State` type where the environment's own subclass was mean
   that `SeahavenState`'s field descriptions reach a client; they cannot, so that half of the rule is
   asserted in process instead and `/schema`'s state block is deliberately not pinned — asserting it
   would make upstream's answer Seahaven's contract. A fix upstream is one parameter.
-- **`GET /state` strips every field the environment's state declares.** Over the websocket a state
-  frame carries `world`, `fixture`, `now`, `episode_id` and `step_count`; over HTTP the same server
-  answers `{"episode_id": null, "step_count": 0}`. OpenEnv's HTTP route is annotated
-  `response_model=State`, so FastAPI serialises the base model and drops every subclass field, and
-  the route is not session-bound in the first place, so the numbers it does answer are a fresh
-  environment's rather than any session's — confirmed against a live session that had reset and
-  stepped once: the websocket answered `step_count: 1` and a real episode id while HTTP answered
-  `null` and `0` at the same moment. A harness that reads state over HTTP therefore sees
-  nothing about the world it is driving. Nothing in Phase 6 pins this, deliberately: a test asserting
-  the two-key answer would pin upstream's defect as Seahaven's contract. The websocket path — which
-  is the path `SeahavenClient` and every eval use — is fully tested.
+- **`GET /state` cannot answer for a session, and Seahaven now refuses the route rather than let it
+  try.** Two defects meet at it. OpenEnv annotates the route `response_model=State`, so FastAPI
+  serialises the base model and drops every field `SeahavenState` declares; and the handler builds a
+  fresh environment from the factory and closes it before returning, so the route is not
+  session-bound in the first place and the numbers it does answer are a throwaway environment's.
+  Confirmed against a live session that had reset and stepped once: the websocket answered
+  `step_count: 1` and a real episode id while HTTP answered `null` and `0` at the same moment. The
+  second defect is shared with `POST /reset` and `POST /step`, whose handlers do exactly the same —
+  so the three routes cannot represent an episode between them, and every answer they give is a
+  plausible `200` about an environment that is already gone.
+
+  **Seahaven's served app now replaces all three handlers with a `501` that names the defect and
+  points at `/ws`** (`seahaven.openenv.app`, covered in `tests/test_server.py` and documented in
+  `src/seahaven/docs/serving.md`). The paths stay in the published OpenAPI schema, because
+  `openenv push` reads path names to decide whether a world is a simulation or a production
+  environment and deleting them would declare the wrong one. That is local protection and not a fix:
+  the defect is upstream's, is unfixed on upstream `main`, and any world served by a stock OpenEnv
+  server still has it. Nothing pins upstream's old two-key answer, deliberately — a test asserting it
+  would have made upstream's defect Seahaven's contract. The websocket path — which is the path
+  `SeahavenClient` and every eval use — is fully tested and untouched by the refusal.
 
 ---
 

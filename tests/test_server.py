@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Iterator, MutableMapping
 from contextlib import ExitStack, contextmanager
@@ -66,6 +67,9 @@ UNSOLICITED_TIMEOUT = 2.0
 # floored at that 5 seconds however small the timeout is.
 REAPED_AFTER = 1.0
 REAP_DEADLINE = 30.0
+
+# OpenEnv's episode-control routes over plain HTTP, and the verb each answers.
+HTTP_EPISODE_CONTROL = (("POST", "/reset"), ("POST", "/step"), ("GET", "/state"))
 
 
 def insert(id: str) -> str:
@@ -295,6 +299,106 @@ def test_a_tool_argument_called_tool_is_callable_through_the_client(tmp_path: Pa
             "tool": "rows",
             "self": "mine",
         }
+
+
+# --- the refused HTTP episode-control routes -------------------------------
+
+
+def test_the_http_episode_routes_refuse_rather_than_answer_a_throwaway_environment(
+    world: World,
+) -> None:
+    """The three routes OpenEnv cannot serve, refused here in words.
+
+    Upstream builds a fresh environment inside each of the `/reset`, `/step` and
+    `/state` handlers and closes it before replying, so the three never observe
+    one another and every answer is a plausible 200 about nothing. Seahaven
+    replaces the handlers. What is asserted is what a reader at 2am needs: the
+    status, the machine-readable code, which route they hit, where to go
+    instead, and enough of the upstream citation to check the claim.
+    """
+    with serving(world) as url:
+        for verb, path in HTTP_EPISODE_CONTROL:
+            status, body = _request(url + path, method=verb)
+            assert status == 501, (verb, path, body)
+            refusal = body["detail"]
+            assert refusal["code"] == "http_episode_control_unsupported"
+            assert refusal["details"]["route"] == f"{verb} {path}"
+            assert refusal["details"]["use_instead"] == "/ws"
+            assert refusal["details"]["upstream"]["regression"] == "86a222d"
+            assert "/ws" in refusal["message"]
+            assert "SeahavenClient" in refusal["message"]
+
+
+def test_a_well_formed_step_is_refused_in_the_same_words_as_a_malformed_one(world: World) -> None:
+    """The refusal answers a good request, not only a bad one.
+
+    A replacement handler that still declared OpenEnv's `StepRequest` would
+    answer 422 to a body that does not parse, and the caller would go off fixing
+    a payload that can never work. Both bodies have to reach the same 501.
+    """
+    step = json.dumps(
+        {"action": CallToolAction(tool_name="rows", arguments={"sql": "SELECT 1"}).model_dump()}
+    ).encode()
+    with serving(world) as url:
+        well_formed = _request(url + "/step", method="POST", data=step)
+        nonsense = _request(url + "/step", method="POST", data=b"not json at all")
+    assert well_formed[0] == 501
+    assert nonsense == well_formed
+
+
+def test_the_refused_routes_are_still_published_as_openapi_paths(world: World) -> None:
+    """Refused and not removed, because `openenv push` reads the paths.
+
+    `mode_endpoint_consistency` in `openenv/cli/_validation.py` calls an app that
+    publishes `/reset` a simulation environment and then requires `/step` and
+    `/state` beside it. It never calls the three, only names them, so deleting
+    them would not fail that criterion -- it would quietly reclassify a Seahaven
+    world as a *production* environment, which is a wrong declaration about what
+    the world is. The paths stay, and what the schema now promises at each of
+    them is the refusal and nothing else.
+    """
+    with serving(world) as url:
+        status, document = _request(url + "/openapi.json")
+    assert status == 200
+    paths = document["paths"]
+    for verb, path in HTTP_EPISODE_CONTROL:
+        assert path in paths, sorted(paths)
+        assert sorted(paths[path][verb.lower()]["responses"]) == ["501"]
+
+
+def test_refusing_the_episode_routes_leaves_the_rest_of_the_http_surface_alone(
+    world: World,
+) -> None:
+    """Three routes, and the neighbours they sit between are untouched.
+
+    `/metadata` builds a throwaway environment exactly as the refused three do,
+    and is deliberately still served: metadata is the world's and not an
+    episode's, so a fresh environment answers it correctly. This is the test
+    that fails if the refusal is ever widened to a path that did not need it.
+    """
+    with serving(world) as url:
+        assert _request(url + "/health") == (200, {"status": "healthy"})
+        metadata = _request(url + "/metadata")
+        assert metadata[0] == 200
+        assert metadata[1]["name"] == world.name
+        schema = _request(url + "/schema")
+        assert schema[0] == 200
+        assert sorted(schema[1]) == ["action", "observation", "state"]
+
+
+def test_a_websocket_session_is_untouched_by_the_refusal(world: World) -> None:
+    """The transport that is the product, on the same server at the same moment.
+
+    The `state` frame in particular: its HTTP namesake now answers 501, and the
+    session's own state has to keep arriving over the wire, whole and real.
+    """
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset()
+        assert _request(url + "/state")[0] == 501
+        env.call("execute", sql=insert("n1"))
+        state = env.state()
+        assert (state.world, state.step_count) == (world.name, 1)
+        assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n1"]
 
 
 # --- the published schema --------------------------------------------------
@@ -572,6 +676,22 @@ async def _unused_receive() -> MutableMapping[str, Any]:
 
 async def _unused_send(message: MutableMapping[str, Any]) -> None:
     raise AssertionError("the stub app never writes to the connection")
+
+
+def _request(url: str, *, method: str = "GET", data: bytes | None = None) -> tuple[int, Any]:
+    """Answer the status and decoded body, for the statuses urllib calls errors.
+
+    `urlopen` raises on anything from 400 up, and the body of a refusal is the
+    whole point of these tests, so both halves are read the same way.
+    """
+    request = urllib.request.Request(url, data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as refused:
+        return refused.code, json.loads(refused.read())
 
 
 def _freeze(world: World, fixture_id: str = "start") -> str:

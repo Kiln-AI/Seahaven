@@ -277,9 +277,42 @@ sign-off and has not happened.
 These are real, reproduced, and recorded in the Seahaven repository's `BACKLOG.md`. None of them is
 in the WebSocket path an eval and `SeahavenClient` use.
 
-- **`GET /state` over HTTP answers the base model.** OpenEnv annotates that route with its own
-  `State` type, so `fixture`, `now` and `world` are stripped, and the route is not session-bound
-  either — the numbers it does return are a fresh environment's. Read state over the WebSocket.
-  (B13.)
-- **`GET /schema` publishes the base state model** for the same reason, so a client never sees the
-  state shape it is driving. (B13.)
+- **`POST /reset`, `POST /step` and `GET /state` over plain HTTP are refused, with a `501`.**
+  OpenEnv builds a brand-new environment inside each of those three handlers and closes it again
+  before replying, so no two requests ever share one: `/reset` resets one instance, `/step` steps a
+  different one, `/state` reads a third, and none of them observes the others. Nothing errors —
+  upstream answers a well-formed `200` describing an environment that is already gone, which is the
+  worst way for an endpoint to be wrong. Seahaven replaces those three handlers with one that says
+  so. The body is FastAPI's `{"detail": ...}` envelope wrapped around the `{"code", "message",
+  "details"}` triple the rest of the framework uses:
+
+  ```json
+  {
+    "detail": {
+      "code": "http_episode_control_unsupported",
+      "message": "GET /state cannot hold an episode, so Seahaven refuses it ...",
+      "details": {
+        "route": "GET /state",
+        "use_instead": "/ws",
+        "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
+        "upstream": {
+          "package": "openenv 0.4.2",
+          "file": "openenv/core/env_server/http_server.py",
+          "regression": "86a222d",
+          "defect": "each handler builds an Environment from the factory and closes it ..."
+        }
+      }
+    }
+  }
+  ```
+
+  The three paths stay in the published OpenAPI schema on purpose. `openenv push` decides what kind
+  of environment a world is by reading path *names*: an app that publishes `/reset` is a simulation
+  environment and must publish `/step` and `/state` beside it, and an app that publishes none of the
+  three is a production environment. Deleting them would pass that check while declaring a Seahaven
+  world to be something it is not, so only the behaviour changes. This is local protection and not a
+  fix: the defect is upstream's, is unfixed there, and a world built on a stock OpenEnv server still
+  has it. Drive episodes over `/ws`. (B13.)
+- **`GET /schema` publishes the base state model**, so a client never sees the state shape it is
+  driving: `create_app` takes an action class and an observation class and no state class, and the
+  route answers `State.model_json_schema()` for every environment. (B13.)
