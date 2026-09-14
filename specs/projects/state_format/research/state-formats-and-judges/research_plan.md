@@ -27,7 +27,7 @@ be superseded by `state()`.
 
 ## Subtopics
 
-- [ ] Benchmarks with stateful backends — how tau-bench, AppWorld, AgentDojo, ToolSandbox,
+- [x] Benchmarks with stateful backends — how tau-bench, AppWorld, AgentDojo, ToolSandbox,
   WorkArena, OSWorld and peers expose final state and write per-task judges
 - [x] OpenEnv and RL-framework consumers — what OpenEnv and the RL/eval frameworks that consume
   environments expect from `state`, rewards and saved episodes
