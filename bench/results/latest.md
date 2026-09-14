@@ -380,10 +380,10 @@ not an outcome a tuning sweep can reach. The phase plan says this explicitly rat
 it implied. What the sweep can say, and does, is that on this machine the gate costs throughput and
 costs tail latency, and buys p50 and p95.
 
-`architecture.md` §5.2's throughput-optimum sentence was recorded in `BACKLOG.md` (B21) rather than
-edited by the phase that measured it, because editing a `status: complete` artifact is a
-maintainer's call in this repository and not a phase's. That call has since been made: §5.2 now
-states what this run found, with a dated note pointing back here, and B21 is closed.
+`architecture.md` §5.2's throughput-optimum sentence was left to the maintainer rather than edited
+by the phase that measured it, because editing a `status: complete` artifact is a maintainer's call
+in this repository and not a phase's. That call has since been made: §5.2 now states what this run
+found, with a dated note pointing back here.
 
 ### The finding the sweep was not looking for
 
@@ -400,11 +400,11 @@ thread that releases a slot and immediately asks for another usually wins the ra
 waiter that was just woken, because the waiter needs the GIL to run and the barging thread already
 has it. The gate never rejects a call -- `functional_spec.md` §13.1's promise that "calls queue and
 nothing is rejected" is kept -- but a call that queues for seconds behind a thread barging in front
-of it is not the service that sentence implies. Recorded as `BACKLOG.md` B20. A closed loop with no
-think time is the worst case for it: a scouting run before this harness existed, with a millisecond
-of think time per session, did not reproduce it, because a session that has gone away to do
-something else is not barging. That observation is not one of the measurements above and is offered
-as a hint for whoever takes B20, not as a result.
+of it is not the service that sentence implies. A closed loop with no think time is the worst case
+for it: a scouting run before this harness existed, with a millisecond of think time per session,
+did not reproduce it, because a session that has gone away to do something else is not barging. That
+observation is not one of the measurements above and is offered as a hint for whoever looks into it,
+not as a result.
 
 ### For an operator
 
@@ -424,8 +424,9 @@ as a hint for whoever takes B20, not as a result.
   section 4; at gate 1 that statement itself waits, which is why its Slow p50 reads 3.1 s).
 - `--concurrency 0` -- no gate -- was the most even setting measured, and at 32 sessions it cost
   nothing in throughput to get there. It pays in p50 and p95 under saturation.
-- The default is the middle of these and the best at neither. Until B20 is fixed, a gate that binds
-  on your offered load will leave somebody waiting, whatever number you give it.
+- The default is the middle of these and the best at neither. Until slots are handed out in
+  arrival order, a gate that binds on your offered load will leave somebody waiting, whatever
+  number you give it.
 
 ### What this run cannot tell you
 

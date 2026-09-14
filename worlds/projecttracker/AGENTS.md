@@ -45,7 +45,7 @@ applies here too.
   that — a keyset cursor carries its tiebreaker as a value and `rowid` is not a projected column —
   so it orders by `(created_at, id)` and says so: oldest first across a fixture's history, id order
   among the comments one episode wrote. Do not write an eval that grades on the order of comments an
-  agent added; grade on the rows. The framework-level question this raises is `BACKLOG.md` B23.
+  agent added; grade on the rows.
 - **The closed-issue rule.** A `done` or `canceled` issue has no assignee: transitioning to one
   drops the assignee and records the drop, and assigning a closed issue is a `CONFLICT`. An eval may
   rely on `status IN ('done','canceled') AND assignee_id IS NOT NULL` being a state this world
