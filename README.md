@@ -102,7 +102,7 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     changes = env.state()  # the final state, as a diff
 ```
 
-For a full-size example, see [ProjectTracker](worlds/projecttracker/), the reference world: a
+**Example World:** see [ProjectTracker](worlds/projecttracker/), the reference world: a
 fictional issue tracker with nine tables, 25 tools, search and three fixtures.
 
 ## Serving (OpenEnv)
