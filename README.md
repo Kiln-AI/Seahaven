@@ -20,20 +20,21 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
 
 ## Features
 
-- **Stateful.** Every write changes every later read. Each instance is its own SQLite database,
-  exposed as REST-shaped tools, a sandboxed SQL tool, full-text search, or a protocol of your own.
-- **Fixtures.** Freeze known starting states like `empty`, `small_startup` or `agency`, and reuse
-  them across evals. Immutable, hash-verified, and built from committed source.
-- **Hosting.** Hundreds of instances per process, one private copy per session, thousands of tool
-  calls a second. An instance is a file copy to create and a delete to destroy.
-- **Time is first class.** Every instance has a clock, frozen at its fixture's `now`. Tools read
-  it, and so does every SQLite date function. The same fixture, seed and calls give the same run.
-- **Changesets.** `inst.changes()` is the net diff between the fixture and what the agent left
-  behind. Grade on state, not on transcripts.
-- **Composable worlds** *(coming soon)*. YourWorld imports StripeWorld and ShopifyWorld. Reuse
-  worlds others built, and write only your own domain.
-- **OpenEnv compatible.** `seahaven serve` is an OpenEnv environment. Drive it with any OpenEnv
-  client, or publish it to Hugging Face.
+- **Stateful.** Writes change every later read. Each instance is its own SQLite database.
+- **Fixtures.** Freeze known starting states like `small_startup`, `agency` or `big_co`, and reuse
+  them across evals. Immutable and hash-verified.
+- **Any interface.** Expose tools that match REST APIs, sandboxed SQL, search, or any custom
+  protocol.
+- **Serving.** Hundreds of instances per process, one private instance per session, thousands of
+  tool calls per second.
+- **Reproducible.** Same fixture, same frozen clock, same seeded ids: the same run, every time. The
+  clock is frozen in Python and in SQL.
+- **Changesets.** The net diff between the fixture and what the agent left behind. Grade on state,
+  not on transcripts.
+- **Composable worlds.** Add sub-worlds to your world, like a full Stripe or Shopify API. Compose,
+  reuse and share worlds.
+- **[OpenEnv](https://huggingface.co/docs/openenv/index).** `seahaven serve` is an OpenEnv
+  environment. Drive it with any OpenEnv client, or publish it to Hugging Face.
 
 ## Quickstart
 
