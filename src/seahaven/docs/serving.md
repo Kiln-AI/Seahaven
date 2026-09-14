@@ -198,6 +198,18 @@ socket, a harness that dies mid-session. An absorbed disconnect is one `DEBUG` l
 that a `WebSocketDisconnect` reaching the top of a WebSocket connection is never reported as a server
 error, which is the right trade: it only ever means the peer went away.
 
+**A dropped connection is a lost episode, so `SeahavenClient` waits longer before calling one dead.**
+A session is one connection holding one instance, and there is no resume: any disconnect destroys
+the instance, and reconnecting builds a new one. So a server that stalls at the event-loop level for
+longer than the keepalive timeout loses every episode on the box at once, unrecoverably.
+`SeahavenClient` therefore defaults its WebSocket ping *timeout* to 120 seconds where OpenEnv
+defaults to 20, keeping the ping interval at OpenEnv's 20 — six times the tolerance for a stall,
+without pinging any less often. The price is the other direction: a genuinely dead server or a
+severed network takes up to two minutes to notice instead of twenty seconds. That is the right trade
+for an eval or an RL rollout and the wrong one for a short interactive session, which is why it is a
+default rather than a fixed value — pass `websocket_ping_timeout_s=` to choose your own. A client
+Seahaven does not ship keeps OpenEnv's 20 seconds.
+
 ### The concurrency gate, and what is wrong with it
 
 The gate bounds how many tool calls execute at once. It never bounds admission: calls queue, and
