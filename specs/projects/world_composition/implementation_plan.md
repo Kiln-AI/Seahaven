@@ -57,7 +57,7 @@ three pytest suites, the licence check) before it is committed.
       the `call` overloads; `Change.world` in `reference/api.md`'s `## Change` block and in
       `concepts.md`'s description of a change's fields; the new codes in `reference/lints.md`; the
       scaffold's `AGENTS.md` template. Needs phase 5.
-- [ ] **Phase 7: benchmark.** A composite workload in `bench/` over the test composite world —
+- [x] **Phase 7: benchmark.** A composite workload in `bench/` over the test composite world —
       one-row read and write mix against a three-node tree — run beside the existing ProjectTracker
       workloads, with results in `bench/results/latest.md` so the per-node floor §15 assumes is a
       number. Never a gate. Needs phase 4.

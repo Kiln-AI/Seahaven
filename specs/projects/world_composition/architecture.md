@@ -844,9 +844,13 @@ code rules and the rest of the fixture rules all still report.
 
 ## 15. Constraints and cost
 
-- An idle composite instance is N files, N connections and N sessions. The framework's benchmark
-  measures one node per instance and reads as a per-node floor; the design target (hundreds of
-  concurrent instances, minute-long lifetimes) holds for small N and is not re-derived here.
+- An idle composite instance is N stores, N connections and N sessions. The framework's benchmark
+  measured one node per instance until 2026-09-14, and that figure was read as a per-node floor; it
+  now stands the committed `tests/worlds/` tree up at one, two and four nodes, and the floor is a
+  measurement rather than an assumption: one store per node, about 3 ms and 44 KiB of idle disk per
+  added (empty) node, and no per-call cost by which a four-node tree can be told from a leaf
+  (`bench/results/latest.md` §7; never a gate). The design target (hundreds of concurrent instances,
+  minute-long lifetimes) holds for small N and is not re-derived here.
 - Scopes multiply nodes: a world added under three scopes, with four worlds beneath it, is twelve
   nodes rather than four (§4.5). This is the correct count, but it means the attach bound is reached
   by trees that look small in source. Where an author is told the count is SH504, which reports the
@@ -899,7 +903,7 @@ decision there.
 | `ctx.py` | `Ctx` generic in `W: Worlds`; `worlds` field; `with_call(..., worlds=)` | 6.3 |
 | `tool.py` | `Tool[**P, R]`; first-parameter check accepts `Ctx[X]`; `Tool.arguments` binds positional arguments and translates parameter names to the wire names the schema publishes | 8.1, 6.3 |
 | `call.py` | `Call.node: str = "main"`; `invoke` returns the original object after proving it serialises; `Handler` and `Middleware` take `Ctx[Any]`, since `Ctx` is invariant in `W`; `name_of` and `arguments_of`, the two "how did the caller spell it" rules; `build_chain` gains the per-layer node pairing used by `composition.build_route_chain` | 7.6, 8.1, 8.4 |
-| `instances.py` | `NodeRuntime` per node; N files, connections, sessions, `Ids`, `state`; `node_seed`; the pinned node set; `db`/`ctx`/`state_path` as the root's; tree startup hooks with merged bound kwargs and N transactions; node dispatch; `_held()` with the depth counter, `_epoch` and the `Frame`; the thread-local in-call flag; `bulk` over N transactions; `freeze` refusing inside `bulk` per node; both read-only handles opened with attachments; `composition()`; the node path and `internal` marker in the log line | 6, 7, 9, 12 |
+| `instances.py` | `NodeRuntime` per node; N stores, connections, sessions, `Ids`, `state`; `node_seed`; the pinned node set; `db`/`ctx`/`state_path` as the root's; tree startup hooks with merged bound kwargs and N transactions; node dispatch; `_held()` with the depth counter, `_epoch` and the `Frame`; the thread-local in-call flag; `bulk` over N transactions; `freeze` refusing inside `bulk` per node; both read-only handles opened with attachments; `composition()`; the node path and `internal` marker in the log line | 6, 7, 9, 12 |
 | `fixtures.py` | `NodeMeta`; `FixtureMeta` `format_version` 1 or 2 with `nodes`; per-node freeze, hash and verify; `check_composition` | 11 |
 | `db.py` | `open_inspection(..., attachments=)`, attaching before the authorizer is installed | 9 |
 | `changes.py` | `Change.world`; render per node | 10 |
