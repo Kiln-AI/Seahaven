@@ -126,6 +126,7 @@ connection. See [docs](src/seahaven/docs/composition.md).
 company.add_world(stripe_world.world, name="stripe", tool_prefix="stripe_")
 company.add_world(slack_world.world, name="slack", tool_prefix="slack_")
 
+
 @company.tool
 def refund_order(ctx: seahaven.Ctx, charge_id: str, channel: str) -> dict[str, object]:
     """Refund a charge and tell the support channel it is done."""
