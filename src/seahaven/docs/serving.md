@@ -1,6 +1,6 @@
 # Serving a world
 
-Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
+Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/huggingface/OpenEnv)
 (v0.4.x). There is no other remote API for the agent side: a world is either driven in process
 through `world.instance(...)`, or over OpenEnv.
 
