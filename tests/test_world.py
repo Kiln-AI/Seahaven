@@ -91,6 +91,17 @@ def test_a_world_is_its_name_its_version_and_its_schema(tmp_path: Path) -> None:
         ".hidden",
         "a/../b",
         "a\x00b",
+        # `names.why_not_a_name`'s clauses, one case each: the drive letter that
+        # only Windows reads as a path, a character outside the charset, the
+        # edges Windows strips, a device name, and the limit.
+        "C:x",
+        "café",
+        " leading",
+        "trailing ",
+        "trailing.",
+        "con",
+        "aux.sqlite",
+        "x" * 129,
     ],
 )
 def test_a_world_name_that_is_not_a_directory_name_is_refused(tmp_path: Path, bad: str) -> None:
@@ -102,6 +113,28 @@ def test_a_world_name_that_is_not_a_directory_name_is_refused(tmp_path: Path, ba
     """
     with pytest.raises(WorldBug, match="not a world name"):
         World(bad, "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+
+
+def test_a_refused_world_name_says_which_clause_it_broke_and_what_the_rule_is(
+    tmp_path: Path,
+) -> None:
+    """The report this rule generates is "my world name stopped working"; this answers it."""
+    with pytest.raises(WorldBug) as raised:
+        World("café", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+
+    message = str(raised.value)
+    assert "'é'" in message
+    assert "1 to 128 characters" in message
+    # The clause names what is wrong and the rule names the charset, each once: a
+    # refusal that spells the alphabet out twice is a refusal nobody finishes.
+    assert message.count("letters, digits") == 1
+
+
+@pytest.mark.parametrize(
+    "name", ["payments", "my-world", "my_world", "my world", "World2", "v1.2.3", "projecttracker"]
+)
+def test_the_names_people_use_are_world_names(tmp_path: Path, name: str) -> None:
+    assert World(name, "1.0.0", SCHEMA, fixtures_dir=tmp_path).name == name
 
 
 def test_a_world_name_is_refused_before_anything_is_built(tmp_path: Path) -> None:

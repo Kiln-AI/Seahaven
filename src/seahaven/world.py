@@ -47,6 +47,7 @@ from seahaven.db import build_blank
 from seahaven.errors import WorldBug
 from seahaven.fixtures import Fixture, load_all
 from seahaven.instances import Instance, InstanceManager, calling
+from seahaven.names import NAME_RULE, why_not_a_name
 from seahaven.tool import Tool
 
 __all__ = [
@@ -91,7 +92,8 @@ DDL_DOES_NOT_EXECUTE = "has DDL that does not execute"
 
 _POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 _WHITESPACE = re.compile(r"\s+")
-# Both separators, always: a world is spelled once and read on every platform.
+# Both separators, always: `sql_files` names a directory inside a package, and a
+# package is read on every platform whatever the one it was written on.
 _SEPARATOR = re.compile(r"[/\\]")
 
 
@@ -914,25 +916,17 @@ def _check_name(name: str) -> None:
     directories, and `World("../..")` put a live database outside the working root
     entirely, where the sweep never looks and the files stay for ever.
 
-    The rule is `fixtures.check_id`'s -- one path segment, no leading dot, no NUL
-    -- with both separators refused rather than the platform's, because a world is
-    spelled once and read on every platform. (That is the one place the two rules
-    differ, and deliberately: `check_id`'s is `components/fixtures_instances.md`
-    §1's, which names the platform's own separator.) A name is also headed for
-    more than a path -- a log line, a sidecar, a URL -- which is the other reason
-    it is checked here, where the name is accepted, rather than where a directory
-    is made from it.
+    The rule is `names.why_not_a_name`'s, which `fixtures.check_id` applies to a
+    fixture id for the same reasons; it is written down once there. A name is also
+    headed for more than a path -- a log line, a sidecar, a URL -- which is the
+    other reason it is checked here, where the name is accepted, rather than where
+    a directory is made from it.
     """
-    if (
-        not name
-        or "\x00" in name
-        or _SEPARATOR.search(name)
-        or name.startswith(".")
-        or name != Path(name).name
-    ):
+    reason = why_not_a_name(name)
+    if reason is not None:
         raise WorldBug(
-            f"not a world name: {name!r}; World(name=...) is one directory name, with no "
-            f"separator and no leading dot"
+            f"not a world name: {name!r}: {reason}. World(name=...) is one directory name: "
+            f"{NAME_RULE}."
         )
 
 

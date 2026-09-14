@@ -485,8 +485,10 @@ nodes:
 A world that adds nothing keeps writing `format_version: 1` with no `nodes` key at all, so its
 fixture directory is byte for byte what it was before composition existed, and every fixture already
 on disk keeps loading. There is exactly one `now`: no store has a clock of its own. A node's `file`
-is a plain file name and a sidecar that spells anything else — a separator, a `..`, a drive letter —
-is refused when it is read, because both readers join it onto the fixture directory and follow the
+is a plain file name, held to the same rule as a world's name and a fixture id but with no length
+limit, since Seahaven mints it from the node's path rather than accepting it. A sidecar that spells
+anything else — a separator, a `..`, a drive letter, a character outside the name charset — is
+refused when it is read, because both readers join it onto the fixture directory and follow the
 result, and the sidecar supplies the hash too.
 
 - **Genesis** yields a blank file per node, each with its own DDL, at one clock. Fill them through

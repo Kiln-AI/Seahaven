@@ -74,8 +74,13 @@ never swept. `untracked_tables` names tables the changeset session does not atta
 
 A `World` whose DDL does not execute cannot be constructed: the schema is built in memory to compute
 the schema hash, and SQLite's own message is reported. Nor is one whose `name` is not a single
-directory name — the name is a path component of the default working directory, so an empty name,
-a separator, a leading dot or a NUL is refused with `not a world name`.
+directory name that every platform carries unchanged — the name is a path component of the default
+working directory, and it travels with every fixture the world freezes. The rule is 1 to 128
+characters of letters, digits, space, `.`, `-` and `_`, not starting or ending with a space or a
+dot, and not a name Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1`–`com9`,
+`lpt1`–`lpt9`, with any extension). Anything else — an empty name, a separator, a drive letter, a
+NUL, an accent or a non-Latin script — is refused with `not a world name` and the clause it broke.
+A **fixture id** is the same rule, refused with `not a fixture id`.
 
 | Member | What it is |
 |---|---|

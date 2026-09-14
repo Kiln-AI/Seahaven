@@ -214,17 +214,31 @@ def test_an_added_nodes_modified_file_is_refused_by_its_path(tmp_path: Path) -> 
 
 @pytest.mark.parametrize(
     "spelling",
-    ["../elsewhere.sqlite", "/tmp/elsewhere.sqlite", "sub/state.sqlite", "..", "C:state.sqlite"],
+    [
+        "../elsewhere.sqlite",
+        "/tmp/elsewhere.sqlite",
+        "sub/state.sqlite",
+        "..",
+        "C:state.sqlite",
+        # The rest of `names.why_not_a_name`, which this validator now shares with
+        # a world's name and a fixture id: charset, the edges Windows strips, and
+        # a device name.
+        "state.café.sqlite",
+        "state.child.sqlite ",
+        "state.child.sqlite.",
+        "con.sqlite",
+    ],
 )
-def test_a_sidecar_naming_a_file_outside_its_directory_is_refused(
+def test_a_sidecar_whose_file_is_not_a_name_in_its_directory_is_refused(
     tmp_path: Path, spelling: str
 ) -> None:
     """`file` is joined onto the fixture directory, so it has to be a name in it.
 
     Refused when the sidecar is *read*, which is what puts it in front of both
     readers: `verify` hashes whatever `file` points at, and creation copies it
-    into the new instance. A Windows spelling is refused here too, because a
-    fixture is an artifact that moves between machines.
+    into the new instance. A Windows spelling is refused here too, and so is a
+    name the shared rule refuses on its charset, its edges or its device names,
+    because a fixture is an artifact that moves between machines.
     """
     host = host_over(tmp_path, composable_world("child"))
     fixture = frozen_from(host)
@@ -237,6 +251,29 @@ def test_a_sidecar_naming_a_file_outside_its_directory_is_refused(
         load(fixture.dir)
     with pytest.raises(WorldBug, match="not a file name inside the fixture directory"):
         host.instance("start")
+
+
+def test_a_file_longer_than_a_fixture_id_may_be_is_still_a_file_name(tmp_path: Path) -> None:
+    """`file` is the one part of the name rule that carries no length limit.
+
+    It is minted from the node's path rather than chosen, so a limit here would be
+    a limit on how deep a composition may nest -- and one applied where the
+    sidecar is read and not where it is written, which is `load` refusing a
+    fixture `freeze` had just produced.
+    """
+    host = host_over(tmp_path, composable_world("child"))
+    fixture = frozen_from(host)
+    deep = f"state.{'deep__' * 30}child.sqlite"
+    (fixture.dir / "state.child.sqlite").rename(fixture.dir / deep)
+    sidecar = fixture.dir / SIDECAR_NAME
+    data = yaml.safe_load(sidecar.read_text())
+    data["nodes"][0]["file"] = deep
+    sidecar.write_text(yaml.safe_dump(data, sort_keys=True))
+
+    assert len(deep) > 128
+    loaded = load(fixture.dir)
+    assert loaded.nodes[0].file == deep
+    verify(loaded)
 
 
 def test_an_added_nodes_file_planted_as_a_symlink_is_refused_by_its_path(tmp_path: Path) -> None:

@@ -24,7 +24,7 @@ import shutil
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import apsw
@@ -34,6 +34,7 @@ import yaml
 from seahaven import conformance
 from seahaven.clock import Clock
 from seahaven.errors import WorldBug
+from seahaven.names import CHARACTER_RULE, NAME_RULE, why_not_a_name
 
 if TYPE_CHECKING:
     # `instances.py` and `composition.py` both import this module, so the arrow
@@ -116,22 +117,23 @@ class NodeMeta(pydantic.BaseModel, frozen=True, extra="forbid"):
         it -- is `_verify_file`'s, which refuses one before it hashes it, for the
         root's `state.sqlite` as much as for this.
 
-        This is `check_id`'s rule for a fixture id, for the same reason, made
-        stricter than either that or `world._check_name`: both platforms'
-        separators *and* their drive letters, rather than the running one's --
-        `_check_name` refuses both separators but not a drive letter, and
-        `check_id` refuses only the running platform's. A fixture is an artifact
-        that moves between machines, and a name that escapes the directory on
-        Windows must be refused when it is read on Linux.
+        This is `names.why_not_a_name`, the one rule for a name that becomes a
+        path on an artifact that travels -- `check_id`'s rule for a fixture id and
+        `world._check_name`'s for a world's name -- with one difference, and only
+        one: no length limit. This name is not chosen by a person. `freeze` mints
+        it from the node's path (`composition._file_name`), so a limit here would
+        be a limit on how deep a composition may nest, applied when a fixture is
+        *read* and not when it is written -- which is `load` refusing a fixture
+        Seahaven itself wrote. It is also the only clause that could ever bite a
+        generated name: `state.<path with '/' as '__'>.sqlite` over node names of
+        `[a-z][a-z0-9_]*` can be long, but it cannot reach the charset, the edges
+        or a device name.
         """
-        if (
-            value in {"", ".", ".."}
-            or "\x00" in value
-            or value != PurePosixPath(value).name
-            or value != PureWindowsPath(value).name
-        ):
+        reason = why_not_a_name(value, max_length=None)
+        if reason is not None:
             raise ValueError(
-                f"file is {value!r}, which is not a file name inside the fixture directory"
+                f"file is {value!r}, which is not a file name inside the fixture directory: "
+                f"{reason}. A file name is {CHARACTER_RULE}."
             )
         return value
 
@@ -220,27 +222,19 @@ def check_id(fixture_id: str) -> None:
     """A fixture id is a directory name, so it has to be one.
 
     Ids arrive over the wire (`reset(fixture=...)`), and an id that is a path is
-    a path traversal. The rule is the same one `freeze` applies when it mints
-    one: a single path segment, no leading dot.
-
-    The NUL is part of the segment rule rather than an addition to it -- no
-    filename can hold one -- and it is named because `Path` does not refuse it:
-    `"a\\x00b" == Path("a\\x00b").name`, so without this clause the id reached
+    a path traversal. The rule is `names.why_not_a_name`'s, which `world` applies
+    to a world's name for the same reasons, and which refuses a NUL as part of the
+    charset: no filename can hold one, and `Path` does not refuse it
+    (`"a\\x00b" == Path("a\\x00b").name`), so without that clause the id reached
     `freeze`'s `rmtree` -- whose `ignore_errors=True` suppresses `OSError` and a
     `ValueError` is not one -- and came back as a bare `ValueError` about an
-    embedded null character instead of the refusal above. `world._check_name` applies the same
-    rule to a world's name, and refuses both separators rather than the
-    platform's; keep the two in step.
+    embedded null character instead of the refusal above.
     """
-    if (
-        not fixture_id
-        or "\x00" in fixture_id
-        or fixture_id != Path(fixture_id).name
-        or fixture_id.startswith(".")
-    ):
+    reason = why_not_a_name(fixture_id)
+    if reason is not None:
         raise WorldBug(
-            f"not a fixture id: {fixture_id!r}; a fixture id is one directory name, with no "
-            f"separator and no leading dot"
+            f"not a fixture id: {fixture_id!r}: {reason}. A fixture id is one directory name: "
+            f"{NAME_RULE}."
         )
 
 

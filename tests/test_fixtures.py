@@ -145,12 +145,59 @@ def test_freeze_refuses_an_id_that_already_exists(world: World) -> None:
     assert contents(world.fixtures_dir) == ["start"]
 
 
-@pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "/abs", ".hidden", "a/../b", "a\x00b"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        ".",
+        "..",
+        "a/b",
+        "/abs",
+        ".hidden",
+        "a/../b",
+        "a\x00b",
+        # `names.why_not_a_name`'s clauses, one case each. A fixture is the
+        # artifact that travels furthest, so the id it is addressed by has to be
+        # a name on the machine it is copied to as much as on this one.
+        "C:x",
+        "café",
+        " leading",
+        "trailing ",
+        "trailing.",
+        "con",
+        "aux.sqlite",
+        "x" * 129,
+    ],
+)
 def test_freeze_refuses_an_id_that_is_not_a_directory_name(world: World, bad: str) -> None:
     with world.instance(None) as instance, pytest.raises(WorldBug, match="not a fixture id"):
         instance.freeze(bad, "Empty.")
 
     assert contents(world.fixtures_dir) == []
+
+
+def test_a_refused_fixture_id_says_which_clause_it_broke_and_what_the_rule_is(world: World) -> None:
+    with world.instance(None) as instance, pytest.raises(WorldBug) as raised:
+        instance.freeze("café", "Empty.")
+
+    message = str(raised.value)
+    assert "'é'" in message
+    assert "1 to 128 characters" in message
+    # The clause names what is wrong and the rule names the charset, each once: a
+    # refusal that spells the alphabet out twice is a refusal nobody finishes.
+    assert message.count("letters, digits") == 1
+
+
+@pytest.mark.parametrize("id", ["payments", "my-world", "my_world", "my world", "World2", "v1.2.3"])
+def test_the_ids_people_use_round_trip_through_the_filesystem(world: World, id: str) -> None:
+    """Minted, listed and addressed again: the charset is legal on disk, not only to the rule."""
+    with world.instance(None, now=INSTANT_ISO) as instance:
+        instance.freeze(id, "Empty.")
+
+    assert contents(world.fixtures_dir) == [id]
+    assert sorted(load_all(world.fixtures_dir)) == [id]
+    with world.instance(id) as forked:
+        assert forked.fixture == id
 
 
 def test_freeze_refuses_an_instance_that_no_longer_holds_the_schema(world: World) -> None:

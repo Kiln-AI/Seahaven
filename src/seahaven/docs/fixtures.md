@@ -51,7 +51,12 @@ read-only. It refuses if the directory already exists.
 change it, freeze the result under a new id.
 
 **A fixture is addressed by id** everywhere: `world.instance("agency")`, `reset(fixture="agency")`,
-`@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture fork agency ...`.
+`@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture fork agency ...`. The id is the
+directory the fixture lives in and travels with it, so it is the same name rule a world's name is
+held to — 1 to 128 characters of letters, digits, space, `.`, `-` and `_`, no leading or trailing
+space or dot, and no Windows device name — and anything else is refused with `not a fixture id`.
+A fixture frozen under an id this rule now refuses still appears in `world.fixtures()` but no
+longer opens — rename its directory and its sidecar's `id` to reach it again.
 
 ## Building one
 
