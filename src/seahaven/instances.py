@@ -129,7 +129,7 @@ def default_concurrency() -> int:
 
     **Nor is it fair.** The same sweep found that a gate starves a waiting caller
     whenever it binds -- at this size exactly as at any other, because the cause is
-    the semaphore and not the number (`BACKLOG.md` B20).
+    the semaphore and not the number.
 
     One measured reason is left: no value the sweep tried was better than this one
     on every axis at once, everywhere it was measured. (`n = 1` is better on every
@@ -170,7 +170,7 @@ class _Gate(threading.BoundedSemaphore):
         return self._initial_value  # ty: ignore[unresolved-attribute]
 
 
-# Enhancement: a FIFO gate hands slots out in arrival order; this one starves (`BACKLOG.md` B20).
+# Enhancement: a FIFO gate hands slots out in arrival order; this one starves.
 _gate: _Gate | None = _Gate(default_concurrency())
 
 

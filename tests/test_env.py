@@ -571,7 +571,7 @@ def test_every_declared_field_publishes_a_description(model: type[BaseModel]) ->
     model without a description fails here. `test_server.py` asserts the
     observation's texts really reach a client over `GET /schema`; the state's
     cannot be checked that way, because that endpoint answers
-    `State.model_json_schema()` and never sees a subclass (`BACKLOG.md` B13).
+    `State.model_json_schema()` and never sees a subclass.
     """
     expected = DECLARED_DESCRIPTIONS[model]
     assert set(model.__annotations__) == set(expected)

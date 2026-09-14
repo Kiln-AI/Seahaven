@@ -13,7 +13,7 @@ Every connection an instance opens carries its clock and its own seeded
 there is no instant and no seed yet, and the database it writes is the world's
 schema rather than any one run of it. A world whose schema files draw randomness
 or read the clock while they run therefore writes a blank database that is not
-reproducible, which is the same gap on both and is `BACKLOG.md` B27.
+reproducible, which is the same gap on both.
 """
 
 import re

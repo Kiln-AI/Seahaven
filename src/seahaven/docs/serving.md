@@ -210,9 +210,8 @@ sessions and a gate of 16 is the ordinary case rather than an edge one.
 
 Nothing is dropped: the promise that calls queue is kept to the letter. But a call that queues for
 seconds behind a thread barging in front of it is not the service that promise implies, and an
-episode whose session is the unlucky one will time out. This is `BACKLOG.md` B20 in the Seahaven
-repository, and the fix is a gate that hands slots out in arrival order rather than a different
-number.
+episode whose session is the unlucky one will time out. The fix is a gate that hands slots out in
+arrival order rather than a different number.
 
 **The gate is not a serving feature.** It is process-wide and on by default in *any* process that
 calls a tool, an in-process eval harness driving instances on threads included; `serve` only gives it
@@ -265,15 +264,13 @@ sign-off and has not happened.
 
 ## Rough edges worth knowing before you meet them
 
-These are real, reproduced, and recorded in the Seahaven repository's `BACKLOG.md`. None of them is
+These are real and reproduced, and all three are OpenEnv's rather than Seahaven's. None of them is
 in the WebSocket path an eval and `SeahavenClient` use.
 
 - **`GET /state` over HTTP answers the base model.** OpenEnv annotates that route with its own
   `State` type, so `fixture`, `now` and `world` are stripped, and the route is not session-bound
   either — the numbers it does return are a fresh environment's. Read state over the WebSocket.
-  (B13.)
 - **`GET /schema` publishes the base state model** for the same reason, so a client never sees the
-  state shape it is driving. (B13.)
+  state shape it is driving.
 - **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
   OpenEnv closes a socket the client has already closed. The sessions are fine; the log is noisy.
-  (B13.)
