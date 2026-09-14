@@ -1,5 +1,5 @@
 ---
-status: complete
+status: draft
 ---
 
 # Functional Spec: World Composition
@@ -53,7 +53,9 @@ decisions taken in the rewrite, open to veto:
   is bookkeeping.
 - **Path**: an added world's fully qualified identity within the root, its own name under its
   host's path (`stripe`, `stripe/tax`). The root's path is `main`.
-- **Node**: one store in a composite instance. Identified by `(world object, store key)` (§2.3);
+- **Scope**: an account family. The root's is the unnamed scope; `add_world(store="eu")` opens the
+  scope `eu` for that world and its whole subtree; `store=None` keeps the adder's (§2.3).
+- **Node**: one store in a composite instance. Identified by `(world object, scope)` (§2.3);
   named by its canonical path. Every route to a node other than the canonical one is an **alias**.
 - **Composite instance**: an instance of a host that has added worlds. One store file per node, one
   clock, one id seed, one tool surface.
@@ -78,7 +80,7 @@ world.add_world(stripe_world.world, name="payments", tool_allow_list=[])
 |---|---|---|
 | first positional | The added world's `World` object, normally the module-level `world` its package exports | required |
 | `name` | Internal identity (§1). Identifier-like: lowercase letters, digits, underscores, starting with a letter; no `__`; not `main` or `temp` (SQLite's reserved schema names) | The added world's own `name` |
-| `store` | A store key. `None` is the world's default store, shared by every adder that leaves it default; a string names a separate store, shared by every adder that names the same string for the same world (§2.3) | `None` |
+| `store` | The **account scope** this world and everything it adds belongs to. `None` keeps the adder's own scope, which is what shares an account; a string opens the named scope, for this world and its whole subtree, shared by every adder that names the same scope for the same world (§2.3) | `None` |
 | `tool_prefix` | String prepended to every contributed tool name (`"stripe_"` turns `create_invoice` into `stripe_create_invoice`) | None; names pass through unchanged |
 | `tool_allow_list` | Only these tools are contributed | All |
 | `tool_block_list` | All tools except these are contributed | None |
@@ -137,15 +139,33 @@ a charge created through Shopify invisible to the agent's `stripe_list_charges`,
 world to learn in. Separate stores are also sometimes right (a marketplace whose Shopify carries the
 merchant's Stripe, not the company's).
 
-Decided (2026-09-13): **a node is `(world object, store key)`. The same pair anywhere in one root's
-tree is one store; a different pair is a different store.** This is ordinary Python plus one string.
-A package's module-level `world` object is shared by everything that imports it and adds it with the
-default store; a host that wants its own account adds the same object with `store="eu"`; two
-worlds that both name `store="eu"` for the same object share that store too. Shared is the default,
-and its failure mode is the benign one: an author who meant "private" and got "shared" sees two
-integrations writing to one account, which is visible and usually what reality is. The reverse
-default failed silently. The marketplace case is the host's call: it leaves `store` default where it
-wants to share and names one where it does not, without touching anyone else's declaration.
+Decided (2026-09-13, revised 2026-09-14): **a node is `(world object, scope)`. The same pair
+anywhere in one root's tree is one store; a different pair is a different store.** This is ordinary
+Python plus one string.
+
+A **scope** is an account family. The root's scope is the unnamed one. `add_world(..., store=None)`
+keeps the adder's own scope, which is what shares an account. `add_world(..., store="eu")` opens the
+named scope `eu` **for that world and everything it adds**, recursively. Scope names are flat and
+global: `store="eu"` means the scope `eu` wherever it is written, so two worlds that both name
+`store="eu"` for the same object share that store too.
+
+A package's module-level `world` object is therefore shared by everything that imports it and adds
+it with the default store; a host that wants its own account adds the same object with `store="eu"`.
+Shared is the default, and its failure mode is the benign one: an author who meant "private" and got
+"shared" sees two integrations writing to one account, which is visible and usually what reality is.
+The reverse default failed silently.
+
+**Why scopes are inherited rather than read per edge.** The first version of this rule keyed a node
+on `(world object, store key)`, reading the key only off that world's own `add_world` call. It did
+not survive its own two motivating cases. A host with two Stripe accounts got two Stripe nodes but
+**one** shared Tax node beneath them, since both routes reached `(tax, None)` — and it could not fix
+that, because a leaf world's author cannot know it will be added twice. The marketplace case in the
+paragraph above failed the same way: a host that adds Shopify with `store="merchant"` still found
+Shopify's `payments` resolving to `(stripe, None)`, the company's own account, with no way to
+separate them short of reaching into Shopify's declaration, which §12 forbids. Inheriting the scope
+fixes both without a new parameter and without a host ever touching another world's declaration: the
+marketplace's Shopify carries a merchant-scoped Stripe because everything under a `store="merchant"`
+edge is merchant-scoped.
 
 - **Canonical path.** A node has one path: the shallowest route to it, ties broken by registration
   order, depth-first. Every other route is an alias. A host that wants a particular name for a
@@ -160,10 +180,15 @@ wants to share and names one where it does not, without touching anyone else's d
   expose the same underlying tool under two names, that is two declarations, not a collision; the
   framework warns.
 - The composition-mismatch check at create (§5.3) covers sharing changes: adding or removing a
-  `store` key changes the set of nodes.
+  `store` key changes the set of nodes, for that world and for its whole subtree.
+- Node counts multiply with scopes: a world added under three scopes, with four worlds in its own
+  subtree, is twelve nodes and twelve stores. That is the honest count rather than an inflation, but
+  it makes the attach bound (§6.1) bind sooner, and a deep tree under several scopes should be
+  checked against it deliberately.
 
 **Resolution happens at world load, not at instance creation.** Load walks the tree, keys nodes by
-`(world object, store key)`, assigns each node its canonical path, and produces the set of nodes
+`(world object, scope)` — propagating each edge's scope to the subtree below it — assigns each node
+its canonical path, and produces the set of nodes
 plus, per node, a table from child name to node. Instance creation makes one store per node and
 nothing for aliases. Two rules make redirection possible and are in from the first version:
 **handlers reach added worlds by name through the context on every call and never hold a store
@@ -431,7 +456,7 @@ except to copy, hash-verified on first copy per process.
 The sidecar is the framework's `FixtureMeta` at **`format_version: 2`**: the version-1 fields for
 the root (`id`, `world`, `world_version`, `schema_hash`, `now`, `parent_id`, `file_sha256`,
 `created_at`, `description`), plus `nodes`, one entry per added node: path, world name, world
-version, schema hash, file name, file SHA-256, and the alias routes that reach it. A world with no
+version, scope, schema hash, file name, file SHA-256, and the alias routes that reach it. A world with no
 added worlds keeps writing version 1; `load` accepts both. There is exactly one `now`; no file has
 its own.
 
@@ -466,7 +491,8 @@ its own.
   against the loaded host's composition; and the sidecar's set of paths and aliases must equal the
   host's current composition exactly. Any mismatch refuses creation with a `WorldBug` naming the
   path and what changed (hash, node added, node removed, sharing changed): the framework's "this
-  fixture needs regenerating" behaviour, per node. A world version that differs from the sidecar's
+  fixture needs regenerating" behaviour, per node; a changed scope shows up as a changed node set. A
+  world version that differs from the sidecar's
   while its schema hash matches is reported, never refused (§7).
 - **Fork.** Create from a composite fixture, change, freeze. Unchanged. `parent_id` is the composite
   fixture's.
@@ -557,8 +583,8 @@ accepts or removes.
 - `tool_allow_list` and `tool_block_list` both given; a list naming a tool the added world does not
   have
 - Duplicate `name` on one host; an invalid or reserved `name`
-- A `startup` keyword the added world's hooks do not accept; two routes to one node with different
-  `startup` values
+- A `startup` keyword the added world's hooks do not accept; two routes to one node (same world,
+  same scope) with different `startup` values
 - A tool name collision after prefixing, including the framework's reserved names
 - A world appearing in its own subtree
 - More nodes than the inspection connection can attach
