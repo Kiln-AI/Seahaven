@@ -1,6 +1,8 @@
 """The connection wrapper, the two doors onto an instance, and schema reflection."""
 
+import gc
 import time
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,7 @@ import pytest
 from seahaven.clock import Clock
 from seahaven.db import Db, build_blank, open_inspection, open_instance, shadow_tables, world_tables
 from seahaven.errors import DbError, WorldBug
+from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, instance_seed
 
 NOTES = "CREATE TABLE notes (id TEXT NOT NULL PRIMARY KEY, body TEXT NOT NULL) STRICT"
 
@@ -203,7 +206,9 @@ def test_world_code_keeps_sqlites_own_limits(db: Db) -> None:
         plain.close()
 
 
-def test_closing_the_database_closes_the_clock_helper(db_path: Path, clock: Clock) -> None:
+def test_closing_the_database_closes_the_clock_helper(
+    db_path: Path, clock: Clock, seed: bytes
+) -> None:
     """The clock overrides evaluate on a private connection, and closing the `Db` closes it.
 
     Not hygiene that the collector would do anyway: every override in
@@ -213,7 +218,7 @@ def test_closing_the_database_closes_the_clock_helper(db_path: Path, clock: Cloc
     the world connection does. Left unclosed it is a live SQLite connection per
     instance, and an eval run makes thousands of instances.
     """
-    database = open_instance(db_path, clock)
+    database = open_instance(db_path, clock, seed)
     helper = database._helper
     assert helper is not None
 
@@ -223,7 +228,67 @@ def test_closing_the_database_closes_the_clock_helper(db_path: Path, clock: Cloc
         helper.execute("SELECT 1")
 
 
-def test_an_inspection_connection_is_hardened_too(notes: Db, db_path: Path, clock: Clock) -> None:
+def test_a_dropped_database_does_not_leak_its_connection(
+    db_path: Path, clock: Clock, seed: bytes
+) -> None:
+    """No override may capture the connection it is registered on.
+
+    The connection holds its function table and a captured connection closes the
+    loop, and it is not a loop the collector can break: APSW's connection does
+    not walk that table for it. A `Db` dropped without `close()` would then keep
+    a live SQLite connection for the life of the process, and an eval run makes
+    thousands of instances. `randomblob` reads the connection's length limit and
+    holds a weak reference to do it.
+    """
+    build_blank(db_path, NOTES).close()
+    database = open_instance(db_path, clock, seed)
+    # Drawn first: the reference has to be live where the override uses it, so a
+    # weak reference that is never resolvable would fail here rather than pass
+    # this test by leaking nothing.
+    assert database.one("SELECT length(randomblob(8)) AS drawn") == {"drawn": 8}
+    connection = weakref.ref(database.conn)
+
+    del database
+    gc.collect()
+
+    assert connection() is None
+
+
+def test_every_door_draws_from_a_stream_of_its_own(
+    notes: Db, db_path: Path, clock: Clock, seed: bytes
+) -> None:
+    """A read-only door gets `random()` and `randomblob()`, as it gets the clock.
+
+    A door that refused them would be a second SQL dialect on the one instance.
+    Each carries a stream of its own, so what an eval reads through `inspect()`
+    is never the bytes a world just wrote through `ctx.db`, and the control
+    tools' door does not echo either of them -- while a door reopened on the
+    same seed and label replays value for value.
+    """
+    dice = "SELECT random() AS roll, hex(randomblob(4)) AS token"
+    doors = {
+        "inspection": open_inspection(db_path, clock, seed, INSPECTION_STREAM),
+        "control": open_inspection(db_path, clock, seed, CONTROL_STREAM),
+        "reopened": open_inspection(db_path, clock, seed, INSPECTION_STREAM),
+        "elsewhere": open_inspection(db_path, clock, instance_seed("gone"), INSPECTION_STREAM),
+    }
+    try:
+        drawn = {name: door.one(dice) for name, door in doors.items()}
+        drawn["instance"] = notes.one(dice)
+
+        assert drawn["reopened"] == drawn["inspection"]
+        # The writable door, the two read-only ones and a second seed: four
+        # different draws, from one file and one instant.
+        distinct = ("instance", "inspection", "control", "elsewhere")
+        assert len({str(drawn[name]) for name in distinct}) == len(distinct)
+    finally:
+        for door in doors.values():
+            door.close()
+
+
+def test_an_inspection_connection_is_hardened_too(
+    notes: Db, db_path: Path, clock: Clock, seed: bytes
+) -> None:
     """Read-only is not hardened: `_harden` runs on this connection as well.
 
     Asked through `config`, which is a C-API call rather than a pragma, because
@@ -232,7 +297,7 @@ def test_an_inspection_connection_is_hardened_too(notes: Db, db_path: Path, cloc
     connection SQLite opened for itself, so a default that ever comes to agree
     with the hardened value fails here instead of quietly making the test vacuous.
     """
-    inspection = open_inspection(db_path, clock)
+    inspection = open_inspection(db_path, clock, seed, INSPECTION_STREAM)
     plain = apsw.Connection(":memory:")
     try:
         for setting, hardened in (
@@ -248,7 +313,7 @@ def test_an_inspection_connection_is_hardened_too(notes: Db, db_path: Path, cloc
 
 
 def test_an_inspection_connection_refuses_a_pragma_that_is_not_on_the_list(
-    notes: Db, db_path: Path, clock: Clock
+    notes: Db, db_path: Path, clock: Clock, seed: bytes
 ) -> None:
     """A pragma is judged by name, and nothing underneath the authorizer refuses these.
 
@@ -259,7 +324,7 @@ def test_an_inspection_connection_refuses_a_pragma_that_is_not_on_the_list(
     `SQLITE_PRAGMA` clause and by nothing else, which is what separates this from
     the writes `test_inspection_reads_but_does_not_write` covers.
     """
-    inspection = open_inspection(db_path, clock)
+    inspection = open_inspection(db_path, clock, seed, INSPECTION_STREAM)
     try:
         for refused in ("PRAGMA cache_size = 100", "PRAGMA secure_delete = ON", "PRAGMA page_size"):
             with pytest.raises(DbError) as raised:
@@ -277,7 +342,7 @@ def test_extensions_cannot_be_loaded(db: Db) -> None:
 
 
 def test_hardening_turns_extension_loading_off_where_it_was_on(
-    db_path: Path, clock: Clock, monkeypatch: pytest.MonkeyPatch
+    db_path: Path, clock: Clock, seed: bytes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every door this module opens refuses an extension, on purpose and not by default.
 
@@ -298,7 +363,10 @@ def test_hardening_turns_extension_loading_off_where_it_was_on(
 
     monkeypatch.setattr(apsw, "Connection", already_loading)
 
-    for database in (open_instance(db_path, clock), open_inspection(db_path, clock)):
+    for database in (
+        open_instance(db_path, clock, seed),
+        open_inspection(db_path, clock, seed, INSPECTION_STREAM),
+    ):
         try:
             with pytest.raises(DbError) as raised:
                 database.rows("SELECT load_extension('anything')")
@@ -321,8 +389,10 @@ def test_a_second_writer_fails_instead_of_waiting(notes: Db, db_path: Path) -> N
         other.close()
 
 
-def test_inspection_reads_but_does_not_write(notes: Db, db_path: Path, clock: Clock) -> None:
-    inspection = open_inspection(db_path, clock)
+def test_inspection_reads_but_does_not_write(
+    notes: Db, db_path: Path, clock: Clock, seed: bytes
+) -> None:
+    inspection = open_inspection(db_path, clock, seed, INSPECTION_STREAM)
     try:
         assert inspection.one("SELECT body FROM notes WHERE id = 'a'") == {"body": "first"}
         assert inspection.one("SELECT current_timestamp AS now") == {"now": clock.iso()}
@@ -414,11 +484,11 @@ def test_fts5_shadow_tables_are_found_by_prefix(tmp_path: Path) -> None:
 
 
 def test_world_tables_keep_the_virtual_table_and_drop_the_rest(
-    tmp_path: Path, clock: Clock
+    tmp_path: Path, clock: Clock, seed: bytes
 ) -> None:
     path = tmp_path / "state.sqlite"
     build_blank(path, SEARCHABLE).close()
-    db = open_instance(path, clock)
+    db = open_instance(path, clock, seed)
     try:
         assert world_tables(db.conn) == ["memos_fts", "notes", "notes_fts"]
     finally:

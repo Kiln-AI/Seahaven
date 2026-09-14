@@ -49,7 +49,7 @@ from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, build_blank, open_inspection, open_instance
 from seahaven.errors import ToolError, UnknownTool, WorldBug
 from seahaven.fixtures import STATE_NAME, Fixture, check_id, freeze, load, verify
-from seahaven.ids import Ids, instance_seed
+from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, Ids, instance_seed
 
 if TYPE_CHECKING:  # `world.py` imports this module; the annotation is all that is needed here
     from seahaven.world import World
@@ -269,7 +269,9 @@ class Instance:
         """
         with self._held():
             if self._inspection is None:
-                self._inspection = open_inspection(self.state_path, self.clock)
+                self._inspection = open_inspection(
+                    self.state_path, self.clock, self.ctx.instance.seed, INSPECTION_STREAM
+                )
             return self._inspection
 
     def changes(self) -> list[Change]:
@@ -366,7 +368,9 @@ class Instance:
         """
         with self._held():
             if self._control is None:
-                self._control = open_inspection(self.state_path, self.clock)
+                self._control = open_inspection(
+                    self.state_path, self.clock, self.ctx.instance.seed, CONTROL_STREAM
+                )
             return self._control
 
     @contextmanager
@@ -478,10 +482,12 @@ class InstanceManager:
                 # the copy nearly free.
                 shutil.copyfile(fixture.state_path, state)
                 clock = Clock.from_iso(fixture.now)
-            db = open_instance(state, clock)
             # The fixture id, or the world's name for a blank instance, so one
-            # caller seed against two fixtures gives two streams.
+            # caller seed against two fixtures gives two streams. Derived before
+            # the connection is opened, because the connection carries it too:
+            # `random()` and `randomblob()` are registered on it from this seed.
             seed_bytes = instance_seed(fixture_id if fixture_id is not None else world.name, seed)
+            db = open_instance(state, clock, seed_bytes)
             ctx = Ctx(
                 db=db,
                 clock=clock,

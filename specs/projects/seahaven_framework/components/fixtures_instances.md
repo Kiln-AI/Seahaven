@@ -105,8 +105,9 @@ try:
         if now is not None: raise WorldBug("now= applies to blank instances only")   # reset(now=) is post-V1
         copy(fixture.state_path, dir/STATE)               # shutil.copyfile; os.copy_file_range on Linux, transparently
         clock = Clock.from_iso(fixture.now); seed_source = fixture_id
-    db = open_instance(dir/STATE, clock)
-    ctx = Ctx(db, clock, Ids(instance_seed(seed_source, seed)), {}, InstanceInfo(...))
+    seed_bytes = instance_seed(seed_source, seed)     # before the open: the connection carries it too
+    db = open_instance(dir/STATE, clock, seed_bytes)  # its random() and randomblob() draw from it
+    ctx = Ctx(db, clock, Ids(seed_bytes), {}, InstanceInfo(...))
     instance = Instance(..., world=world)                 # the chain and registry are read from the world at call time
     with instance.lock:
         run_startup_hooks(world, ctx, startup_kwargs)     # 2.2
@@ -158,11 +159,11 @@ refuses them when `serve` was started without `--include-control-tools`.
 
 ### 2.4 `inspect`, `_control_db`, `changes`, `bulk`, `freeze`, `destroy`
 
-- `inspect()`: opens `open_inspection(path, clock)` once and caches it; returns the `Db`. The
-  handle is closed on destroy. Under the lock for the open; reads afterwards are the caller's and
-  do not take the instance lock (a read-only connection on a WAL database sees a consistent
-  snapshot per statement). Reading through the handle concurrently with `destroy()` is the caller's
-  ordering to get right.
+- `inspect()`: opens `open_inspection(path, clock, seed, INSPECTION_STREAM)` once and caches it;
+  returns the `Db`. The handle is closed on destroy. Under the lock for the open; reads afterwards
+  are the caller's and do not take the instance lock (a read-only connection on a WAL database sees
+  a consistent snapshot per statement). Reading through the handle concurrently with `destroy()` is
+  the caller's ordering to get right.
 - `changes()`: under the lock, `session.changeset()` rendered (section 3).
 - `bulk()`: under the lock and one transaction, yields the instance's own `Ctx` (with `call=None`);
   on exit it commits, or rolls back if the block raised. Nothing is disabled and nothing is wrapped.
@@ -173,12 +174,14 @@ refuses them when `serve` was started without `--include-control-tools`.
   either of which may never have been opened), session, db`, then `rmtree(dir,
   ignore_errors=True)`. Idempotent.
 - `_control_db()`: a **second** read-only handle, opened once under the lock by the same
-  `open_inspection(path, clock)` and closed on destroy, reached only by the control tools. Not the
-  `inspect()` handle: a control read goes through `sandbox.run_statement`, which sets the
-  connection's authorizer and its value limit for the length of one statement, and `inspect()` is
-  the handle a caller reads through *without* the instance lock. Two threads on one connection, one
-  changing its authorizer while the other steps a cursor, wedge inside SQLite and take the
-  interpreter with them, because the thread waiting on the connection holds the GIL.
+  `open_inspection(path, clock, seed, CONTROL_STREAM)` and closed on destroy, reached only by the
+  control tools. The stream label is what stops this door and `inspect()`'s handing out the same
+  `random()` values from the one instance seed. Not the `inspect()` handle: a control read goes
+  through `sandbox.run_statement`, which sets the connection's authorizer and its value limit for
+  the length of one statement, and `inspect()` is the handle a caller reads through *without* the
+  instance lock. Two threads on one connection, one changing its authorizer while the other steps a
+  cursor, wedge inside SQLite and take the interpreter with them, because the thread waiting on the
+  connection holds the GIL.
 - Control dispatch: `control.dispatch(instance, ctx)` validates the arguments like any tool's, runs
   the control function and serialises the result. `controller_run_sql` and `controller_changes` are
   thin wrappers over `_control_db()` and `changes()` and own no SQL or rendering of their own. A

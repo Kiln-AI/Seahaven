@@ -91,9 +91,15 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def db(db_path: Path, clock: Clock) -> Iterator[Db]:
+def seed() -> bytes:
+    """The instance seed a connection's `random()` and `randomblob()` draw from."""
+    return instance_seed("test")
+
+
+@pytest.fixture
+def db(db_path: Path, clock: Clock, seed: bytes) -> Iterator[Db]:
     """A writable instance connection, hardened the way a real instance is."""
-    database = open_instance(db_path, clock)
+    database = open_instance(db_path, clock, seed)
     try:
         yield database
     finally:
@@ -101,7 +107,7 @@ def db(db_path: Path, clock: Clock) -> Iterator[Db]:
 
 
 @pytest.fixture
-def ctx(db: Db, clock: Clock) -> Ctx:
+def ctx(db: Db, clock: Clock, seed: bytes) -> Ctx:
     """An instance context as a call receives it, without an instance behind it.
 
     Everything in the call path takes a `Ctx` and nothing else, which is what
@@ -110,9 +116,9 @@ def ctx(db: Db, clock: Clock) -> Ctx:
     return Ctx(
         db=db,
         clock=clock,
-        ids=Ids(instance_seed("test")),
+        ids=Ids(seed),
         state={},
-        instance=InstanceInfo(id="i_test", fixture=None, seed=instance_seed("test")),
+        instance=InstanceInfo(id="i_test", fixture=None, seed=seed),
     )
 
 

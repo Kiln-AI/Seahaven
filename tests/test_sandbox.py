@@ -80,7 +80,6 @@ DENIED = [
     # The SQLITE_IGNORE regression: ignoring would leave the true count in place,
     # which is the data being refused.
     ("SELECT count(*) FROM secrets", "read of table 'secrets'"),
-    ("SELECT random()", "function 'random'"),
     ("SELECT load_extension('libsneaky.so')", "function 'load_extension'"),
     ("SELECT sqlite_version()", "function 'sqlite_version'"),
     ("SELECT last_insert_rowid()", "function 'last_insert_rowid'"),
@@ -401,6 +400,32 @@ def test_the_function_allowlist_is_the_whole_vocabulary(world: Db) -> None:
     assert run(world, "SELECT upper(body) FROM notes ORDER BY id LIMIT 1").rows == [["NOTE 0"]]
     assert run(world, "SELECT json_extract('{\"a\": 1}', '$.a')").rows == [[1]]
     assert run(world, "SELECT current_timestamp").rows[0][0].endswith("Z")
+    # Allowed rather than refused because it is seeded: `ids.py`'s override, not
+    # SQLite's own function. `test_ids.py` is where the seeding is pinned.
+    assert isinstance(run(world, "SELECT random()").rows[0][0], int)
+
+
+def test_a_random_blob_cannot_grow_past_the_value_cap(world: Db) -> None:
+    """The override reads the cap `run_statement` borrowed, before it draws a byte.
+
+    `randomblob` is the one allowed function that allocates a value of the size
+    it is given, and the allocation happens in Python rather than inside SQLite.
+    Left to SQLite's own 1 GB limit it would be a gigabyte drawn before the
+    statement could be stopped, which is exactly what `MAX_VALUE_BYTES` exists to
+    prevent; refusing at the cap is what `test_one_value_cannot_grow_without_bound`
+    asserts for `printf`.
+    """
+    assert refusals(world, "SELECT randomblob(1000000000)") == (
+        f"value larger than {MAX_VALUE_BYTES} bytes",
+    )
+    # The refusal is read off the length before a byte is drawn: a draw this
+    # size is a `MemoryError` out of Python, which is not a refusal and not a
+    # `DbError` either, whatever SQLite would have said about the value after.
+    assert refusals(world, "SELECT randomblob(9223372036854775807)") == (
+        f"value larger than {MAX_VALUE_BYTES} bytes",
+    )
+    # The cap and not the function: a blob at the cap is drawn as asked.
+    assert run(world, f"SELECT length(randomblob({MAX_VALUE_BYTES}))").rows == [[MAX_VALUE_BYTES]]
 
 
 def test_a_caller_can_replace_the_function_allowlist(world: Db) -> None:
