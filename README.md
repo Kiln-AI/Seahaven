@@ -57,14 +57,12 @@ world = seahaven.World(
     schema="CREATE TABLE contacts (id TEXT PRIMARY KEY, email TEXT NOT NULL, stage TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;",
 )
 
-
 @world.tool
 def create_contact(ctx: seahaven.Ctx, email: str) -> dict[str, str]:
     """Add a contact to the pipeline as a lead."""
     contact = {"id": ctx.ids.uuid(), "email": email, "stage": "lead", "updated_at": ctx.clock.iso()}
     ctx.db.execute("INSERT INTO contacts VALUES (?, ?, ?, ?)", *contact.values())
     return contact
-
 
 @world.tool
 def move_contact(ctx: seahaven.Ctx, contact_id: str, stage: str) -> dict[str, str]:
