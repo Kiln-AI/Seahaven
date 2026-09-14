@@ -35,7 +35,7 @@ be superseded by `state()`.
   long-lived structured outputs are versioned
 - [ ] Declarative assertion languages over JSON — Jinja2, JMESPath, jq, JSONPath, CEL, JSONLogic,
   SQL-over-JSON and how eval tools express assertions
-- [ ] Tool-call and trajectory records — conventional shapes for a tool call record and a
+- [x] Tool-call and trajectory records — conventional shapes for a tool call record and a
   trajectory, and how they cope with size
 
 ## Focus Details
