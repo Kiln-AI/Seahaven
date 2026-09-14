@@ -1,0 +1,613 @@
+"""`SeahavenEnv`, in process and with no server: the whole session contract.
+
+Nothing here starts uvicorn. The environment class is what OpenEnv calls, so
+these tests call it the same way -- `reset`, `step`, `state`, `close`, one
+environment object standing for one session -- and `test_server.py` proves the
+same behaviour arrives over a real socket.
+"""
+
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from seahaven.ctx import Ctx
+from seahaven.errors import SeahavenError, ToolError, WorldBug
+from seahaven.world import World
+from tests.conftest import INSTANT_ISO, build_world
+
+# The subpackage and not `openenv`: what this module imports is
+# `seahaven.openenv`, so that is what has to import for the tests below to mean
+# anything. Only an `ImportError` skips -- an extra that is absent, or installed
+# and unimportable. Anything else raises, and CI asserts this import separately,
+# because an installed extra that skips quietly is a green run that tested none
+# of this.
+pytest.importorskip(
+    "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
+)
+
+from openenv.core.env_server.mcp_types import (
+    CallToolAction,
+    ListToolsAction,
+    ListToolsObservation,
+)
+from openenv.core.env_server.types import Action, EnvironmentMetadata
+from pydantic import BaseModel
+
+from seahaven.openenv.env import SeahavenEnv, SeahavenObservation, SeahavenState
+
+CONTROL_SQL = "SELECT count(*) AS n FROM notes"
+
+
+@pytest.fixture
+def env(world: World) -> SeahavenEnv:
+    """A session on the shared notes world, with the control tools off."""
+    return SeahavenEnv(world, include_control_tools=False)
+
+
+def make_fixture(world: World, fixture_id: str = "start") -> str:
+    """One fixture of a world, made the only way a fixture is ever made."""
+    with world.instance(None, now=INSTANT_ISO) as instance:
+        instance.call("execute", sql="INSERT INTO notes VALUES ('n0', 'a body', 0)")
+        instance.freeze(fixture_id, "One note.")
+    return fixture_id
+
+
+def call(env: SeahavenEnv, tool: str, **arguments: Any) -> SeahavenObservation:
+    """One tool call through `step`, typed as the observation it answers."""
+    observation = env.step(CallToolAction(tool_name=tool, arguments=arguments))
+    assert isinstance(observation, SeahavenObservation)
+    return observation
+
+
+def listing(env: SeahavenEnv) -> ListToolsObservation:
+    observation = env.step(ListToolsAction())
+    assert isinstance(observation, ListToolsObservation)
+    return observation
+
+
+# --- construction ----------------------------------------------------------
+
+
+def test_the_environment_is_initialised_as_an_openenv_environment(env: SeahavenEnv) -> None:
+    """`__init__` chains to the base's, which is the only thing that sets these.
+
+    `Environment.__init__` binds `transform` and `rubric`. Nothing on Seahaven's
+    own path reads either, so an `__init__` that did not chain would look
+    perfectly healthy here and raise `AttributeError` on whichever OpenEnv path
+    does -- which is the kind of omission that is found in a training run rather
+    than in a suite.
+    """
+    assert env.transform is None
+    assert env.rubric is None
+
+
+# --- reset -----------------------------------------------------------------
+
+
+def test_reset_makes_an_instance_and_describes_it(env: SeahavenEnv, world: World) -> None:
+    fixture_id = make_fixture(world)
+    observation = env.reset(fixture=fixture_id)
+    instance = env.instance
+    assert instance is not None
+    assert instance.fixture == fixture_id
+    assert observation.result == {
+        "fixture": fixture_id,
+        "now": INSTANT_ISO,
+        "tools": len(instance.tools()),
+    }
+    assert observation.error is None
+    assert observation.done is False
+    assert observation.reward is None
+
+
+def test_a_second_reset_destroys_the_first_instance(env: SeahavenEnv) -> None:
+    env.reset()
+    first = env.instance
+    assert first is not None
+    assert first.state_path.exists()
+    env.reset()
+    assert env.instance is not None
+    assert env.instance is not first
+    assert not first.dir.exists(), "the first instance's working directory is still there"
+    assert first.closed
+
+
+def test_reset_without_a_fixture_is_a_blank_instance_at_the_wall_clock(env: SeahavenEnv) -> None:
+    before = datetime.now(UTC)
+    env.reset()
+    instance = env.instance
+    assert instance is not None
+    assert instance.fixture is None
+    assert before <= instance.clock.now() <= datetime.now(UTC)
+    assert instance.call("rows", sql="SELECT * FROM notes") == []
+
+
+def test_reset_with_now_puts_a_blank_instance_at_that_time(env: SeahavenEnv) -> None:
+    observation = env.reset(now=INSTANT_ISO)
+    assert observation.result == {"fixture": None, "now": INSTANT_ISO, "tools": 6}
+    assert env.instance is not None
+    assert env.instance.clock.iso() == INSTANT_ISO
+
+
+def test_reset_refuses_now_with_a_fixture(env: SeahavenEnv, world: World) -> None:
+    fixture_id = make_fixture(world)
+    with pytest.raises(WorldBug, match="now= applies to blank instances only"):
+        env.reset(fixture=fixture_id, now=INSTANT_ISO)
+    assert env.instance is None
+
+
+def test_reset_passes_the_seed_through(env: SeahavenEnv) -> None:
+    env.reset(seed=7)
+    seeded = env.instance
+    assert seeded is not None
+    minted = seeded.call("mint")
+    env.reset(seed=7)
+    again = env.instance
+    assert again is not None
+    assert again.call("mint") == minted
+
+
+def test_reset_passes_startup_kwargs_to_the_hooks(tmp_path: Path) -> None:
+    world = build_world(tmp_path)
+    seen: list[str] = []
+
+    @world.instance_startup
+    def seed_notes(ctx: Ctx, *, tenant: str = "acme") -> None:
+        seen.append(tenant)
+
+    SeahavenEnv(world, include_control_tools=False).reset(tenant="globex")
+    assert seen == ["globex"]
+
+
+def test_an_unknown_startup_kwarg_raises_before_any_directory_exists(
+    env: SeahavenEnv, tmp_path: Path
+) -> None:
+    with pytest.raises(WorldBug, match=r"unknown reset argument\(s\): \['nonsense'\]"):
+        env.reset(nonsense=1)
+    assert env.instance is None
+    work = tmp_path / "work"
+    assert not work.exists() or list(work.iterdir()) == []
+
+
+def test_a_failed_reset_leaves_the_session_as_a_fresh_one(env: SeahavenEnv) -> None:
+    """The old instance is destroyed first, so a reset that then fails leaves nothing."""
+    env.reset(episode_id="first")
+    call(env, "rows", sql="SELECT * FROM notes")
+    first = env.instance
+    assert first is not None
+    with pytest.raises(WorldBug):
+        env.reset(nonsense=1)
+    assert env.instance is None
+    assert not first.dir.exists()
+    state = env.state
+    assert (state.episode_id, state.step_count, state.fixture, state.now) == (None, 0, None, None)
+    # And the session is still usable: another reset is all it takes.
+    env.reset(episode_id="second")
+    assert env.state.episode_id == "second"
+
+
+def test_reset_keeps_the_episode_id_it_is_given_and_mints_one_otherwise(env: SeahavenEnv) -> None:
+    env.reset(episode_id="ep-1")
+    assert env.state.episode_id == "ep-1"
+    env.reset()
+    minted = env.state.episode_id
+    assert minted is not None and minted != "ep-1"
+    env.reset()
+    assert env.state.episode_id != minted
+
+
+# --- step: listing ---------------------------------------------------------
+
+
+def test_list_tools_never_lists_a_control_tool(world: World) -> None:
+    for include in (False, True):
+        env = SeahavenEnv(world, include_control_tools=include)
+        env.reset()
+        names = [tool.name for tool in listing(env).tools]
+        assert "controller_run_sql" not in names
+        assert "controller_changes" not in names
+        assert "rows" in names
+
+
+def test_list_tools_answers_before_a_reset_and_agrees_with_the_instance(env: SeahavenEnv) -> None:
+    """Discovery does not need an episode, and the two spellings are one list."""
+    before = [tool.model_dump() for tool in listing(env).tools]
+    env.reset()
+    instance = env.instance
+    assert instance is not None
+    after = [tool.model_dump() for tool in listing(env).tools]
+    assert before == after == instance.tools()
+    assert before[0]["description"]
+
+
+def test_a_listed_tool_carries_its_json_schema(env: SeahavenEnv) -> None:
+    env.reset()
+    rows = next(tool for tool in listing(env).tools if tool.name == "rows")
+    assert rows.input_schema["properties"]["sql"]["type"] == "string"
+    assert rows.input_schema["additionalProperties"] is False
+
+
+# --- step: calling ---------------------------------------------------------
+
+
+def test_a_call_before_reset_raises(env: SeahavenEnv) -> None:
+    with pytest.raises(WorldBug, match="reset first"):
+        call(env, "rows", sql="SELECT 1")
+
+
+def test_a_call_answers_the_tools_result(env: SeahavenEnv) -> None:
+    env.reset(now=INSTANT_ISO)
+    observation = call(env, "execute", sql="INSERT INTO notes VALUES ('n1', 'body', 0)")
+    assert observation.tool_name == "execute"
+    assert observation.result == {"rowcount": 1}
+    assert observation.error is None
+    assert call(env, "rows", sql="SELECT id FROM notes").result == [{"id": "n1"}]
+
+
+def test_timeout_s_is_accepted_and_ignored(env: SeahavenEnv) -> None:
+    env.reset()
+    action = CallToolAction(tool_name="rows", arguments={"sql": "SELECT 1 AS n"})
+    observation = env.step(action, 0.0)
+    assert isinstance(observation, SeahavenObservation)
+    assert observation.result == [{"n": 1}]
+
+
+def test_a_tool_error_is_rendered_onto_the_observation(env: SeahavenEnv) -> None:
+    env.reset()
+    observation = call(env, "write_then_fail", sql="INSERT INTO notes VALUES ('n1', 'b', 0)")
+    assert observation.result is None
+    assert observation.error == {"code": "boom", "message": "it did not work out", "details": None}
+    assert observation.tool_name == "write_then_fail"
+    # The call's transaction rolled back with it, over the wire as in process.
+    assert call(env, "rows", sql="SELECT * FROM notes").result == []
+
+
+def test_an_unknown_tool_is_rendered_like_any_tool_error(env: SeahavenEnv) -> None:
+    env.reset()
+    observation = call(env, "no_such_tool")
+    assert observation.error == {
+        "code": "unknown_tool",
+        "message": "unknown tool: no_such_tool",
+        "details": {"name": "no_such_tool"},
+    }
+
+
+def test_bad_arguments_are_rendered_as_invalid_arguments(env: SeahavenEnv) -> None:
+    env.reset()
+    observation = call(env, "rows", sql=7)
+    assert observation.error is not None
+    assert observation.error["code"] == "invalid_arguments"
+    assert observation.error["details"]["tool"] == "rows"
+
+
+# --- step: control tools ---------------------------------------------------
+
+
+def test_a_control_tool_is_unknown_without_the_flag(env: SeahavenEnv) -> None:
+    env.reset()
+    observation = call(env, "controller_run_sql", sql=CONTROL_SQL)
+    assert observation.error == {
+        "code": "unknown_tool",
+        "message": "unknown tool: controller_run_sql",
+        "details": {"name": "controller_run_sql"},
+    }
+
+
+def test_a_control_tool_is_callable_with_the_flag(world: World) -> None:
+    env = SeahavenEnv(world, include_control_tools=True)
+    env.reset()
+    call(env, "execute", sql="INSERT INTO notes VALUES ('n1', 'body', 0)")
+    assert call(env, "controller_run_sql", sql=CONTROL_SQL).result == {
+        "columns": ["n"],
+        "rows": [[1]],
+        "row_count": 1,
+        "truncated": False,
+    }
+    changes = call(env, "controller_changes").result
+    assert isinstance(changes, list)
+    assert [change["table"] for change in changes] == ["notes"]
+
+
+def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World) -> None:
+    """The flag admits the control tools and nothing else."""
+    env = SeahavenEnv(world, include_control_tools=True)
+    env.reset()
+    assert call(env, "controller_nonsense").error == {
+        "code": "unknown_tool",
+        "message": "unknown tool: controller_nonsense",
+        "details": {"name": "controller_nonsense"},
+    }
+
+
+# --- step: what is not a tool error ---------------------------------------
+
+
+def test_an_unexpected_exception_becomes_the_generic_error_and_is_logged(
+    env: SeahavenEnv, caplog: pytest.LogCaptureFixture
+) -> None:
+    env.reset()
+    with caplog.at_level(logging.ERROR, logger="seahaven.openenv.env"):
+        observation = call(env, "crash")
+    assert observation.error == {"code": "internal", "message": "internal error", "details": None}
+    assert observation.result is None
+    record = next(r for r in caplog.records if r.name == "seahaven.openenv.env")
+    assert record.levelno == logging.ERROR
+    assert record.exc_info is not None
+    assert "ValueError" in caplog.text and "a bug in world code" in caplog.text
+    # Nothing of the engine's reaches the agent.
+    assert "a bug in world code" not in str(observation.error)
+
+
+def test_a_world_bug_propagates_out_of_step(tmp_path: Path) -> None:
+    world = build_world(tmp_path)
+
+    @world.tool
+    def misuse(ctx: Ctx) -> None:
+        """Fail the way a broken world fails."""
+        raise WorldBug("the world is wrong")
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset()
+    with pytest.raises(WorldBug, match="the world is wrong"):
+        call(env, "misuse")
+
+
+def test_a_seahaven_error_that_is_neither_propagates(tmp_path: Path) -> None:
+    """Caught is `ToolError`; every other `SeahavenError` is the author's, not the agent's."""
+    world = build_world(tmp_path)
+
+    @world.tool
+    def odd(ctx: Ctx) -> None:
+        """Raise the root of the hierarchy, which is neither of the two kinds."""
+        raise SeahavenError("neither kind")
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset()
+    with pytest.raises(SeahavenError, match="neither kind"):
+        call(env, "odd")
+
+
+def test_a_world_error_subclass_is_rendered_with_its_own_code(tmp_path: Path) -> None:
+    world = build_world(tmp_path)
+
+    class NotFound(ToolError):
+        def __init__(self, key: str) -> None:
+            super().__init__("not_found", f"no note {key}", {"key": key})
+
+    @world.tool
+    def fetch(ctx: Ctx, key: str) -> None:
+        """Fail the way a world's own error does."""
+        raise NotFound(key)
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset()
+    assert call(env, "fetch", key="n9").error == {
+        "code": "not_found",
+        "message": "no note n9",
+        "details": {"key": "n9"},
+    }
+
+
+def test_an_action_of_neither_kind_is_a_world_bug(env: SeahavenEnv) -> None:
+    env.reset()
+    with pytest.raises(WorldBug, match="not on Action"):
+        env.step(Action())
+
+
+# --- state -----------------------------------------------------------------
+
+
+def test_state_before_reset_names_the_world_and_nothing_else(
+    env: SeahavenEnv, world: World
+) -> None:
+    state = env.state
+    assert state.world == world.name
+    assert state.fixture is None
+    assert state.now is None
+    assert state.episode_id is None
+    assert state.step_count == 0
+
+
+def test_state_after_reset_carries_the_fixture_and_the_clock(
+    env: SeahavenEnv, world: World
+) -> None:
+    fixture_id = make_fixture(world)
+    env.reset(fixture=fixture_id, episode_id="ep-9")
+    state = env.state
+    assert (state.world, state.fixture, state.now) == (world.name, fixture_id, INSTANT_ISO)
+    assert state.episode_id == "ep-9"
+
+
+def test_every_step_counts_and_reset_starts_again_from_zero(env: SeahavenEnv) -> None:
+    env.reset()
+    assert env.state.step_count == 0
+    call(env, "rows", sql="SELECT 1")
+    listing(env)
+    call(env, "no_such_tool")
+    assert env.state.step_count == 3
+    env.reset()
+    assert env.state.step_count == 0
+
+
+# --- close -----------------------------------------------------------------
+
+
+def test_close_destroys_the_instance_and_is_idempotent(env: SeahavenEnv) -> None:
+    env.reset()
+    instance = env.instance
+    assert instance is not None
+    directory = instance.dir
+    env.close()
+    assert env.instance is None
+    assert instance.closed
+    assert not directory.exists()
+    env.close()
+    assert env.instance is None
+
+
+def test_close_before_reset_does_nothing(env: SeahavenEnv) -> None:
+    env.close()
+    assert env.instance is None
+
+
+def test_a_closed_session_resets_again(env: SeahavenEnv) -> None:
+    env.reset()
+    env.close()
+    env.reset()
+    assert env.instance is not None
+    assert call(env, "rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+
+
+# --- what the models publish about themselves ------------------------------
+
+# Every field the two models declare *themselves*, and the description each one
+# must carry. Declared, not inherited: OpenEnv describes its own fields, and
+# these are the ones Seahaven is answerable for.
+DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
+    SeahavenObservation: {
+        "tool_name": "The tool that was called.",
+        "result": "The tool's result. A tool error travels in `error`, never here.",
+        "error": (
+            "The tool's own error, as `{code, message, details}`, or null when the call "
+            "succeeded. A tool error is data the agent reads: it never ends the session."
+        ),
+    },
+    SeahavenState: {
+        "fixture": "The fixture the instance was made from, or null for a blank one.",
+        "now": "The instance's clock as an ISO-8601 instant, or null before the first reset.",
+        "world": "The world this session is connected to. Known before any reset.",
+    },
+}
+
+
+@pytest.mark.parametrize("model", list(DECLARED_DESCRIPTIONS))
+def test_every_declared_field_publishes_a_description(model: type[BaseModel]) -> None:
+    """The rule three review rounds asked for, asserted over the set rather than a field.
+
+    Redeclaring an inherited field *replaces* its schema entry, so a
+    redeclaration with no `description` publishes none at all. Round 1 found
+    that on `SeahavenObservation.result`, round 2 found the fix had closed that
+    one field and left `tool_name` and `error`, and round 3 found
+    `SeahavenState`'s three declared fields had never had one either. Three
+    findings, one defect, three times "the fix closed the demonstrated case".
+
+    So this asserts over the set: the fields are read off the class, every one
+    of them must publish exactly the text above, and a field added to either
+    model without a description fails here. `test_server.py` asserts the
+    observation's texts really reach a client over `GET /schema`; the state's
+    cannot be checked that way, because that endpoint answers
+    `State.model_json_schema()` and never sees a subclass (`BACKLOG.md` B13).
+    """
+    expected = DECLARED_DESCRIPTIONS[model]
+    assert set(model.__annotations__) == set(expected)
+    published = model.model_json_schema()["properties"]
+    assert {name: published[name].get("description") for name in expected} == expected
+
+
+# --- metadata --------------------------------------------------------------
+
+
+def test_get_metadata_reads_the_readme(env: SeahavenEnv, world: World, tmp_path: Path) -> None:
+    """The README is published whole, and nothing is derived from it.
+
+    `readme_content` is the card a hub shows, character for character. The
+    one-line description is the world's own `description=` and is unaffected by
+    what the README says -- here the world gives none, so the fallback stands
+    even though the README opens with a perfectly good sentence.
+    """
+    readme = "# Notes\n\nA world of notes, and nothing else.\n\nMore prose.\n"
+    (tmp_path / "README.md").write_text(readme, encoding="utf-8")
+    metadata = env.get_metadata()
+    assert isinstance(metadata, EnvironmentMetadata)
+    assert metadata.name == world.name
+    assert metadata.version == world.version
+    assert metadata.readme_content == readme
+    assert metadata.description == f"Seahaven world {world.name}"
+
+
+def test_get_metadata_publishes_the_worlds_description(tmp_path: Path) -> None:
+    """`World(description=...)` is the one-line description, verbatim.
+
+    Verbatim includes the spaces around it: the fallback is chosen by looking at
+    the stripped string, and what is published is the string itself. A world
+    whose description has content in it gets that content on its card exactly as
+    it was written, and nothing here tidies it.
+    """
+    world = build_world(tmp_path, description="A world of notes, and nothing else.")
+    env = SeahavenEnv(world, include_control_tools=False)
+    assert env.get_metadata().description == "A world of notes, and nothing else."
+
+    spaced = build_world(tmp_path, description="  A world.  ")
+    assert SeahavenEnv(spaced, include_control_tools=False).get_metadata().description == (
+        "  A world.  "
+    )
+
+
+def test_get_metadata_falls_back_when_the_world_gives_no_description(
+    env: SeahavenEnv, world: World
+) -> None:
+    assert world.description is None
+    assert env.get_metadata().description == f"Seahaven world {world.name}"
+
+
+def test_get_metadata_falls_back_on_a_blank_description(tmp_path: Path) -> None:
+    """A blank string falls back exactly as `None` does, and on purpose.
+
+    A world that computed its description from something and got `""` publishes
+    the fallback rather than a blank line on its card: the fallback is never a
+    wrong sentence, and a blank description is not a description.
+
+    Whitespace is the same case and not a lesser one. `description="   "` is a
+    string, so it is truthy, and publishing it puts a line on the card that looks
+    empty and says nothing -- the one outcome the fallback exists to prevent. It
+    is spelled out here because the plain `or` that used to stand in this place
+    caught `""` and let this through.
+    """
+    for blank in ("", "   ", "\n", " \t\n "):
+        world = build_world(tmp_path, description=blank)
+        env = SeahavenEnv(world, include_control_tools=False)
+        assert env.get_metadata().description == f"Seahaven world {world.name}"
+
+
+def test_get_metadata_without_a_readme_falls_back(env: SeahavenEnv, world: World) -> None:
+    metadata = env.get_metadata()
+    assert metadata.readme_content == ""
+    assert metadata.description == f"Seahaven world {world.name}"
+
+
+def test_get_metadata_survives_a_readme_that_is_not_text(
+    env: SeahavenEnv, world: World, tmp_path: Path
+) -> None:
+    """Metadata is not where a world fails: unreadable is the same as absent."""
+    (tmp_path / "README.md").write_bytes(b"\xff\xfe not utf-8")
+    metadata = env.get_metadata()
+    assert metadata.readme_content == ""
+    assert metadata.description == f"Seahaven world {world.name}"
+
+
+def test_get_metadata_reads_a_readme_that_begins_with_a_byte_order_mark(
+    env: SeahavenEnv, world: World, tmp_path: Path
+) -> None:
+    """`utf-8-sig`, not `utf-8`: the mark must not land on the front of the card.
+
+    Read as plain UTF-8 the mark becomes the first character of
+    `readme_content`, in front of the card's opening fence. Written here as the
+    bytes an editor actually writes, so the codec is what is under test.
+    """
+    (tmp_path / "README.md").write_bytes(
+        "\ufeff---\ntitle: Notes\n---\n\nA card an editor saved with a mark.\n".encode()
+    )
+    assert (
+        env.get_metadata().readme_content
+        == "---\ntitle: Notes\n---\n\nA card an editor saved with a mark.\n"
+    )
+
+
+def test_get_metadata_survives_a_readme_that_is_a_directory(
+    env: SeahavenEnv, world: World, tmp_path: Path
+) -> None:
+    (tmp_path / "README.md").mkdir()
+    assert env.get_metadata().readme_content == ""
