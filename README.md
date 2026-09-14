@@ -1,10 +1,9 @@
 # Seahaven
 
-[Docs](src/seahaven/docs/index.md) · [PyPI](https://pypi.org/project/seahaven/) ·
-[OpenEnv](https://huggingface.co/docs/openenv/index) · [Kiln AI](https://kiln.tech)
-
 **Synthetic worlds for AI agents.** Fake, stateful replicas of the systems your agent works
 against, for RL and evals.
+
+[Docs](src/seahaven/docs/index.md) · [PyPI](https://pypi.org/project/seahaven/) · [Kiln AI](https://kiln.tech)
 
 > **Seahaven** *(noun)*
 >
@@ -15,7 +14,7 @@ against, for RL and evals.
 RL and evals need thousands of rollouts, in parallel, each from a known state, each inspectable
 afterwards. No real system or staging copy can do that.
 
-A Seahaven world can. Clone the tools your agent uses in production, fork hundreds of private
+Seahaven worlds can: clone the tools your agent uses in production, fork hundreds of private
 copies in milliseconds, run an agent in each, see exactly what it changed, then throw them away.
 
 ## Features
@@ -79,9 +78,7 @@ def search_stale_leads(ctx: seahaven.Ctx, query: str) -> list[dict[str, str]]:
     )
 ```
 
-Each tool's signature is the JSON schema an agent sees, and its docstring is the description. Time
-comes from the instance's clock, in Python and in SQL: `search_stale_leads` gives the same answer in
-every rollout, this year and next.
+Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
 
 Run your agent against it. Every rollout gets a private copy of a fixture, the same seed replays the
 same run, and what the agent changed is a diff:
@@ -93,19 +90,21 @@ for rollout in range(100):
         reward = grade(world_instance.changes())                     # the net diff the agent left behind
 ```
 
-Serve it. Every session gets its own instance, and any OpenEnv client can drive it:
+Serve it. Every session gets its own instance, any OpenEnv client can drive it, and with the control
+tools on your harness can read the final state:
 
 ```sh
-seahaven serve
+seahaven serve --include-control-tools
 ```
 
 ```py
 from seahaven.openenv import SeahavenClient
 
 with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
-    env.reset(fixture="big_co", seed=7)
+    env.reset(fixture="big_co", seed=42)
     env.call("create_contact", email="ada@example.com", notes="asked about pricing for 50 seats")
     stale = env.call("search_stale_leads", query="pricing").result
+    changes = env.call("controller_changes").result  # the final state, as a diff
 ```
 
 For a full-size example, see [ProjectTracker](worlds/projecttracker/), the reference world: a
@@ -114,23 +113,20 @@ fictional issue tracker with nine tables, 25 tools, search and three fixtures.
 Building a world with an agent? Point it at `seahaven docs`. The docs ship inside the package and
 always match the installed version.
 
-## Serving
+## Serving (OpenEnv)
 
-Seahaven's remote lifecycle and transport are [OpenEnv](https://huggingface.co/docs/openenv/index).
-`seahaven serve` runs one world and hundreds of sessions per process, each with its own instance.
-`SeahavenClient` is one client for every Seahaven world, and the stock OpenEnv client works too.
-
-An eval reads the instance over the same connection: `seahaven serve --include-control-tools`
-exposes the changeset and read-only inspection SQL as two control tools, never listed to the agent.
-`seahaven new --hub` adds the files a hub expects, so a world publishes with `openenv push`.
+Seahaven's remote lifecycle and transport are [OpenEnv](https://huggingface.co/docs/openenv/index),
+an open standard for connecting to RL environments. `seahaven serve` runs one world, creating a
+unique instance and episode for each connection. Serve over 100 instances per process. Connect with
+any OpenEnv client or tool, like [Kiln](https://kiln.tech).
 
 ## License
 
-MIT.
+Licensed under [MIT](LICENSE).
 
 ## Created by Kiln AI
 
 Seahaven was created by [Kiln AI](https://github.com/Kiln-AI/Kiln). Kiln is an open-source
-platform for building, evaluating and optimizing AI systems, and uses Seahaven worlds as the
+platform for building, evaluating and optimizing AI systems, and supports Seahaven worlds as the
 environments its [evals](https://kiln.tech/features/evals) and
 [optimizers](https://kiln.tech/features/auto-optimize) run against.
