@@ -29,7 +29,7 @@ be superseded by `state()`.
 
 - [ ] Benchmarks with stateful backends — how tau-bench, AppWorld, AgentDojo, ToolSandbox,
   WorkArena, OSWorld and peers expose final state and write per-task judges
-- [ ] OpenEnv and RL-framework consumers — what OpenEnv and the RL/eval frameworks that consume
+- [x] OpenEnv and RL-framework consumers — what OpenEnv and the RL/eval frameworks that consume
   environments expect from `state`, rewards and saved episodes
 - [x] Diff formats and versioned data contracts — row-level change representations and how
   long-lived structured outputs are versioned
