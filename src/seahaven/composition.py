@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 import apsw
 
-from seahaven.call import Call, Handler, Middleware, build_chain, invoke
+from seahaven.call import Call, Handler, Middleware, build_chain, invoke, name_of
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
 from seahaven.fixtures import STATE_NAME
@@ -200,6 +200,34 @@ class Composition:
     # edge set identifies the composition exactly and is bounded by nodes x
     # children; enumerating alias *routes* is exponential in a diamond.
     edges: tuple[tuple[str, str, str], ...]
+
+    def entry_for(self, fn: Callable[..., Any]) -> Contributed:
+        """The one contributed tool built from `fn`, for a call by function reference.
+
+        A function reaches more than one entry when its world is a node of this
+        tree twice -- two accounts of one payments world -- or when that world
+        registered it as two tools; either way it does not name one store and one
+        surface name, so the caller is sent to the handle or the name that does.
+        It reaches none when the function is not a tool at all, or is one of a
+        world this tree does not contain, or is filtered off the surface by an
+        allow or block list: `ctx.worlds.<name>.call(fn)` is the way to the last
+        of those, and this list is the agent's.
+        """
+        entries = self.by_fn.get(fn, ())
+        if len(entries) == 1:
+            return entries[0]
+        if not entries:
+            raise WorldBug(
+                f"{name_of(fn)} is not a tool of world {self.root.world.name!r} or anything it "
+                f"adds, or is one an allow or block list keeps off this surface; reach that one "
+                f"with ctx.worlds.<name>.call(...)"
+            )
+        where = ", ".join(f"{entry.name} at {entry.node.path}" for entry in entries)
+        raise WorldBug(
+            f"{name_of(fn)} names more than one tool of world {self.root.world.name!r} and "
+            f"what it adds ({where}); name the one you mean, with ctx.worlds.<name>.call(...) "
+            f"or with its exposed name"
+        )
 
 
 def resolve(root: World) -> Composition:

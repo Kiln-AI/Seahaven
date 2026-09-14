@@ -11,7 +11,7 @@ been, and nothing in the runtime reads the parameter.
 """
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self, overload
 
 from seahaven.clock import Clock
 from seahaven.db import Db
@@ -56,6 +56,15 @@ class Ctx[W: Worlds = Worlds]:
     # activation gets `handles.unbound()`, whose every access raises.
     worlds: W
     call: Call | None = None
+
+    # Two overloads because only one of the two answers widens. Binding a call
+    # leaves `worlds` -- and so the parameter -- exactly as it was, which is what
+    # keeps `Ctx[CompanyWorlds]` a `Ctx[CompanyWorlds]` inside that world's own
+    # middleware; handing in another activation's `Worlds` is what loses it.
+    @overload
+    def with_call(self, call: Call | None) -> Self: ...
+    @overload
+    def with_call(self, call: Call | None, *, worlds: Worlds) -> Ctx[Any]: ...
 
     def with_call(self, call: Call | None, *, worlds: Worlds | None = None) -> Ctx[Any]:
         """A copy of this context bound to one call, and optionally to one activation.

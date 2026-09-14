@@ -47,16 +47,16 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Concatenate, Self, overload
 
 import apsw
 
-from seahaven.call import Call
+from seahaven.call import Call, arguments_of, name_of
 from seahaven.changes import Change, render, start_session
 from seahaven.clock import Clock
 from seahaven.composition import (
@@ -315,8 +315,26 @@ class Instance:
         """The root node's database file."""
         return self.dir / self._runtime[self._root_key].node.file_name
 
-    def call(self, name: str, /, **arguments: Any) -> Any:
+    @overload
+    def call[**P, R](
+        self,
+        tool: Callable[Concatenate[Ctx[Any], P], R],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+    @overload
+    def call(self, tool: str, /, **arguments: Any) -> Any: ...
+
+    def call(self, tool: str | Callable[..., Any], /, *args: Any, **arguments: Any) -> Any:
         """Run one tool, with its arguments validated, on the calling thread.
+
+        By the name an agent would use, or by the function itself -- which is the
+        typed way in, with the arguments checked and the result the tool's own
+        object rather than its rendering (architecture section 8). A function
+        resolves against the composite surface, so it names a tool of this world
+        or of one it adds, and unambiguously: a world that is a node of this tree
+        twice does not name one store, and the answer says which handle does.
 
         The tool may belong to this world or to any world it adds: the composite
         surface is flat, and the call runs against the store of whichever node
@@ -324,11 +342,15 @@ class Instance:
         over OpenEnv the same error is rendered onto the observation instead.
         """
         started = time.perf_counter()
+        # The exposed name once there is one, so an eval grouping the log on it
+        # cannot tell the two ways in apart; the function's qualified name until
+        # then, which is all a resolution failure has to name.
+        name = name_of(tool)
         node: str | None = None
         try:
-            target = self._target(name)
-            node = target.node.path
-            result = self._dispatch(target, arguments)
+            target = self._target(tool)
+            name, node = target.name, target.node.path
+            result = self._dispatch(target, arguments_of(target.tool, tool, args, arguments))
         except BaseException as error:
             self._log_failure(name, started, error, node)
             raise
@@ -429,9 +451,15 @@ class Instance:
     def __repr__(self) -> str:
         return f"<Instance {self.id} of {self.world.name} from {self.fixture or 'blank'}>"
 
-    def _target(self, name: str) -> _Target:
-        """Which node owns the tool an agent named, in the tree as it stands now."""
+    def _target(self, tool: str | Callable[..., Any]) -> _Target:
+        """Which node owns the tool a caller named, in the tree as it stands now."""
         composition = self._current_composition()
+        if not isinstance(tool, str):
+            # A function names the entry, and the entry names the node: the two
+            # ways in meet here, and everything below this line is one path.
+            entry = composition.entry_for(tool)
+            return _Target(entry.name, entry.tool, entry.node)
+        name = tool
         entry = composition.tools.get(name)
         if entry is not None:
             return _Target(name, entry.tool, entry.node)
@@ -439,12 +467,12 @@ class Instance:
         # world's surface -- so the composite list cannot hold them and the root's
         # own registry is where they are. Every other name the root registers is
         # in that list already.
-        tool = self.world.tools.get(name)
-        if tool is None or not tool.control:
+        registered = self.world.tools.get(name)
+        if registered is None or not registered.control:
             # An agent naming a tool that does not exist reads the answer: it is
             # a tool error, not a framework one.
             raise UnknownTool(name)
-        return _Target(name, tool, composition.root)
+        return _Target(name, registered, composition.root)
 
     def _dispatch(self, target: _Target, arguments: Mapping[str, Any]) -> Any:
         tool = target.tool

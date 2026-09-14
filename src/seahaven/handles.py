@@ -18,10 +18,12 @@ whole of the lifetime rule.
 """
 
 import time
+from collections import deque
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Concatenate, overload
 
-from seahaven.call import Call, rebind
+from seahaven.call import Call, arguments_of, name_of, rebind
 from seahaven.errors import UnknownTool, WorldBug
 
 if TYPE_CHECKING:  # every one of these modules sits above this one at run time
@@ -29,6 +31,7 @@ if TYPE_CHECKING:  # every one of these modules sits above this one at run time
     from seahaven.ctx import Ctx
     from seahaven.db import Db
     from seahaven.instances import Instance, NodeRuntime
+    from seahaven.tool import Tool
 
 __all__ = ["Frame", "WorldHandle", "Worlds", "ctx_for", "unbound"]
 
@@ -142,20 +145,37 @@ class WorldHandle:
         """That node's own children, for a host reaching a grandchild explicitly."""
         return Worlds(_live(self._frame), self._key)
 
-    def call(self, tool: str, /, **arguments: Any) -> Any:
-        """Run one of that node's tools, as part of the call already in flight.
+    @overload
+    def call[**P, R](
+        self,
+        tool: Callable[Concatenate[Ctx[Any], P], R],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R: ...
+    @overload
+    def call(self, tool: str, /, **arguments: Any) -> Any: ...
 
-        The node's *own* names, unprefixed and unfiltered: the allow and block
-        lists shape the agent's surface, and host code can call every tool of a
-        world it adds. Arguments are validated as if the agent had called it, only
-        the owning world's chain runs -- the host's is already wrapped around the
-        host tool making this call -- and the added world's own `ToolError`
-        subclasses propagate, for the host to decide what the agent sees.
+    def call(self, tool: str | Callable[..., Any], /, *args: Any, **arguments: Any) -> Any:
+        """Run one tool of that node, or of a world beneath it, as part of the call in flight.
+
+        By name, it is the node's *own* names, unprefixed and unfiltered: the
+        allow and block lists shape the agent's surface, and host code can call
+        every tool of a world it adds. By the function itself -- the typed way in
+        (architecture section 8.2) -- it is every world in this handle's subtree,
+        because a function names a tool exactly and what a handle is for is naming
+        the *store*: an account reached twice from the root is one account here.
+
+        Arguments are validated as if the agent had called it, only the owning
+        world's chain runs -- the host's is already wrapped around the host tool
+        making this call -- and the added world's own `ToolError` subclasses
+        propagate, for the host to decide what the agent sees.
 
         The concurrency gate is not taken: the outermost call holds it, and one
         instance runs one call at a time however many nodes that call touches.
         """
         started = time.perf_counter()
+        name = name_of(tool)
         # Outside the try, and so unlogged, deliberately: a handle whose activation
         # has ended, or one whose tree has grown a node since, is not a call that
         # reached a node -- there is nothing for a line to say it happened *to*.
@@ -167,24 +187,23 @@ class WorldHandle:
         frame = _live(self._frame)
         instance = frame.instance
         node = _node_of(frame, self._key)
+        owner = node
         try:
-            registered = node.world.tools.get(tool)
-            # Control tools are the eval harness's, dispatched around the chain
-            # with the instance itself in hand; no part of a world's own surface.
-            if registered is None or registered.control:
-                raise UnknownTool(tool)
+            owner, registered = _owner_of(node, tool)
+            name = registered.name
             with instance._held() as current:
                 if current is not frame:
                     # The lock was free because this handle's activation had
                     # already ended: only a handle carried to another thread gets
                     # here, and it is as stale as one used after its call.
                     raise WorldBug(_STALE)
-                call = Call(registered.name, arguments, registered, node=node.path)
-                result = node.internal_chain(frame.ctx(self._key, call), call)
+                given = arguments_of(registered, tool, args, arguments)
+                call = Call(name, given, registered, node=owner.path)
+                result = owner.internal_chain(frame.ctx(owner.key, call), call)
         except BaseException as error:
-            instance._log_failure(tool, started, error, node.path, internal=True)
+            instance._log_failure(name, started, error, owner.path, internal=True)
             raise
-        instance._log_call(tool, started, "ok", node.path, internal=True)
+        instance._log_call(name, started, "ok", owner.path, internal=True)
         return result
 
     def __repr__(self) -> str:
@@ -192,6 +211,65 @@ class WorldHandle:
 
     def _runtime(self) -> NodeRuntime:
         return _live(self._frame).instance._runtime[self._key]
+
+
+def _owner_of(node: Node, tool: str | Callable[..., Any]) -> tuple[Node, Tool]:
+    """Which node of `node`'s subtree owns the tool a host named, and the tool itself.
+
+    A name is looked up in `node`'s own registry and nowhere else: a host reaches
+    an added world's tools by the names that world gave them, and a name deeper in
+    the tree belongs to whichever world declared it (architecture section 8.2).
+
+    A function is looked up in every world of the subtree, because there is no
+    name to collide and a reference says exactly which tool is meant; what is left
+    for the handle to say is which *store*, and the subtree of an account is that
+    account all the way down. Two answers is the one thing this cannot resolve --
+    a world added twice beneath this one, or one that registered the function as
+    two tools -- and the caller is sent one level further in, or to a name.
+    """
+    if isinstance(tool, str):
+        registered = node.world.tools.get(tool)
+        # Control tools are the eval harness's, dispatched around the chain with
+        # the instance itself in hand; no part of a world's own surface. They are
+        # not in `tools_by_fn` either, so the reference path needs no such check.
+        if registered is None or registered.control:
+            raise UnknownTool(tool)
+        return node, registered
+    found = [
+        (owner, registered)
+        for owner in _subtree(node)
+        for registered in owner.world.tools_by_fn.get(tool, ())
+    ]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise WorldBug(
+            f"{name_of(tool)} is not a tool of world {node.world.name!r} or anything it adds"
+        )
+    where = ", ".join(f"{registered.name} at {owner.path}" for owner, registered in found)
+    raise WorldBug(
+        f"{name_of(tool)} names more than one tool of world {node.world.name!r} and what it "
+        f"adds ({where}); go one level in, to the handle of the world that owns the one you "
+        f"mean (ctx.worlds.<name>.worlds.<name>), or call it there by its own name"
+    )
+
+
+def _subtree(node: Node) -> Iterator[Node]:
+    """`node` and every node it adds, transitively, each once.
+
+    Breadth-first over a directed acyclic graph, so the seen set is what keeps a
+    node two routes reach from being visited twice. A `Node` is hashed by identity,
+    which is the identity the tree is built on.
+    """
+    seen = {node}
+    queue = deque([node])
+    while queue:
+        current = queue.popleft()
+        yield current
+        for child in current.added.values():
+            if child not in seen:
+                seen.add(child)
+                queue.append(child)
 
 
 def ctx_for(ctx: Ctx[Any], key: NodeKey, call: Call) -> Ctx[Any]:

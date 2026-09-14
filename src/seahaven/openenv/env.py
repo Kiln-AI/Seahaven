@@ -35,6 +35,7 @@ from openenv.core.env_server.mcp_types import (
 from openenv.core.env_server.types import Action, EnvironmentMetadata, State
 from pydantic import Field
 
+from seahaven.call import serialise
 from seahaven.errors import SeahavenError, ToolError, UnknownTool, WorldBug
 from seahaven.instances import Instance
 from seahaven.world import CONTROL_TOOL_NAMES, World
@@ -289,7 +290,16 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
                 # not have: whether this server was started with the flag is not
                 # something an agent gets to learn by calling.
                 raise UnknownTool(name)
-            result = instance.call(name, **action.arguments)
+            # `Instance.call` answers with the object the tool returned, so that
+            # a host tool handed a model is handed a model (architecture section
+            # 8.4); this is the layer that owes the wire its rendering. A world's
+            # tool has already been through `serialise` once, inside the call's
+            # own transaction, so that a result no wire carries rolled the call
+            # back rather than reaching here; a control tool bypasses `invoke`
+            # altogether and `control.dispatch` renders its own. Either way this
+            # renders an already-proved value, which is the redundancy section
+            # 8.4 chose over changing `Handler`.
+            result = serialise(instance.call(name, **action.arguments))
             return SeahavenObservation(tool_name=name, result=result)
         except ToolError as error:
             return SeahavenObservation(tool_name=name, error=error.to_dict())

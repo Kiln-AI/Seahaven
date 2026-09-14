@@ -31,7 +31,7 @@ three pytest suites, the licence check) before it is committed.
       dispatch, nested `handle.call`, `bulk` over N transactions (§7); the node path and `internal`
       marker in the log line. Blank composite instances only; fixtures are phase 4.
       `test_composite_instance.py`, `test_composite_dispatch.py`. Needs phase 1.
-- [ ] **Phase 3: typed access.** `Tool[**P, R]`; the `call` overloads on `Instance` and
+- [x] **Phase 3: typed access.** `Tool[**P, R]`; the `call` overloads on `Instance` and
       `WorldHandle`; `by_fn` resolution at the root and within a handle's subtree, with the
       ambiguity error (§8.1–8.2); `Ctx[X]` accepted by the registration check and the `Worlds`
       typing base (§8.3); `invoke` returns the tool's original object after proving it serialises,
@@ -43,8 +43,9 @@ three pytest suites, the licence check) before it is committed.
       `Change.world` and per-node rendering (§10); `Instance.composition()` (§12); control tools
       over the composition. `test_composite_fixtures.py`, `test_composite_inspection.py`,
       `test_composite_changes.py`. Needs phase 2.
-- [ ] **Phase 5: OpenEnv and `seahaven check`.** `openenv/env.py` serialises the observation's
-      result and `SeahavenState.composition` (§8.4, §12); `check` seals first and reports seal
+- [ ] **Phase 5: OpenEnv and `seahaven check`.** `SeahavenState.composition` (§12; `openenv/env.py`
+      serialising the observation's result landed in phase 3, with the `invoke` change that made it
+      necessary); `check` seals first and reports seal
       errors as SH504 (§4.3); SH206–SH209, SH406, SH502–SH504 and per-node SH401–SH405 (§14),
       `lint/world.py` new. Lint fixture pairs under `tests/worlds/`; the composite OpenEnv
       end-to-end test (§17). Needs phases 3 and 4.
@@ -59,6 +60,8 @@ three pytest suites, the licence check) before it is committed.
       one-row read and write mix against a three-node tree — run beside the existing ProjectTracker
       workloads, with results in `bench/results/latest.md` so the per-node floor §15 assumes is a
       number. Never a gate. Needs phase 4.
+- [ ] **Phase 8: Backlog.** Review open backlog items with the user, then close or dismiss each
+      through the standard phase flow.
 
 ## Order
 

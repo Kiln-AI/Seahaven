@@ -270,6 +270,29 @@ def test_a_call_answers_the_tools_result(env: SeahavenEnv) -> None:
     assert call(env, "rows", sql="SELECT id FROM notes").result == [{"id": "n1"}]
 
 
+def test_a_model_a_tool_returned_is_rendered_onto_the_observation(world: World) -> None:
+    """`invoke` answers with the tool's own object; this layer owes the wire its rendering.
+
+    Architecture section 8.4. In process a host tool receiving a model receives
+    the model; over OpenEnv the observation carries data, exactly as it did when
+    `invoke` rendered it.
+    """
+
+    class Note(BaseModel):
+        id: str
+        at: datetime
+
+    @world.tool
+    def note(ctx: Ctx) -> Note:
+        """A tool that answers with a model rather than a bare dict."""
+        return Note(id="n1", at=datetime(2024, 3, 5, 12, tzinfo=UTC))
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset(now=INSTANT_ISO)
+
+    assert call(env, "note").result == {"id": "n1", "at": "2024-03-05T12:00:00Z"}
+
+
 def test_timeout_s_is_accepted_and_ignored(env: SeahavenEnv) -> None:
     env.reset()
     action = CallToolAction(tool_name="rows", arguments={"sql": "SELECT 1 AS n"})

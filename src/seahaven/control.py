@@ -148,8 +148,12 @@ def dispatch(instance: Instance, ctx: Ctx) -> Any:
     call = dataclasses.replace(call, arguments=call.tool.validate(call.arguments))
     ctx = ctx.with_call(call)
     # The instance first: a control function is a wrapper over the instance, and
-    # `Ctx` carries an `InstanceInfo`, not the instance itself.
-    return serialise(call.tool.fn(instance, ctx, **call.arguments))
+    # `Ctx` carries an `InstanceInfo`, not the instance itself. `Tool.fn` is
+    # declared as a world's tool takes it -- the context, then the arguments --
+    # and these two are the framework's own, built by `_control_tool` around a
+    # function the field's type cannot describe.
+    fn: Any = call.tool.fn
+    return serialise(fn(instance, ctx, **call.arguments))
 
 
 def _control_tool(fn: FunctionType) -> Tool:

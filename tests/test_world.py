@@ -8,7 +8,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Any
 
@@ -19,7 +19,7 @@ from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
 from seahaven.tool import Tool
-from seahaven.world import World, sql_files
+from seahaven.world import CONTROL_TOOL_NAMES, World, sql_files
 
 # `src/`, for the one test that runs `seahaven` in a subprocess of its own: it
 # must import the tree under test, not whatever is installed.
@@ -302,6 +302,62 @@ def test_the_registry_is_ordered_and_read_only(world: World) -> None:
         world.tools["third"] = world.tools["echo"]  # ty: ignore[invalid-assignment]
 
 
+def test_the_registry_inverted_by_function_holds_every_tool_built_from_one(
+    world: World,
+) -> None:
+    """What `ctx.worlds.<name>.call(fn)` resolves through, and why it is multi-valued."""
+    world.tool(echo)
+    world.tool(Tool.from_function(echo, name="echo_twice"))
+
+    @world.tool
+    def second(ctx: Ctx) -> dict:
+        """Second."""
+        return {}
+
+    assert world.tools_by_fn[echo] == (world.tools["echo"], world.tools["echo_twice"])
+    assert world.tools_by_fn[second] == (world.tools["second"],)
+    with pytest.raises(TypeError):
+        world.tools_by_fn[echo] = ()  # ty: ignore[invalid-assignment]
+
+
+def test_the_inverted_registry_holds_no_control_tool(world: World) -> None:
+    """They are the framework's, not a world's surface, and no `call` serves them."""
+    control_tools = [world.tools[name] for name in CONTROL_TOOL_NAMES]
+
+    assert [tool for tools in world.tools_by_fn.values() for tool in tools] == []
+    assert all(tool.fn not in world.tools_by_fn for tool in control_tools)
+
+
+def test_a_function_that_cannot_be_a_dictionary_key_cannot_be_a_tool(world: World) -> None:
+    """The inverted registry keys on it, so the whole registration is refused, not half of it."""
+
+    @dataclass  # unhashable: dataclasses drop `__hash__` unless frozen or eq=False
+    class Callable_:
+        label: str
+
+        def __call__(self, ctx: Ctx, word: str) -> dict[str, str]:
+            """Echo."""
+            return {"word": word}
+
+    built = Tool.from_function(Callable_("one"), name="echo_object")
+
+    with pytest.raises(WorldBug, match="cannot be hashed"):
+        world.tool(built)
+
+    assert "echo_object" not in world.tools
+
+
+def test_a_copy_snapshots_the_inverted_registry_too(tmp_path: Path) -> None:
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world.tool(echo)
+    elsewhere = copy.copy(world)
+
+    world.tool(echo, name="echo_twice")
+
+    assert elsewhere.tools_by_fn[echo] == (elsewhere.tools["echo"],)
+    assert world.tools_by_fn[echo] == (world.tools["echo"], world.tools["echo_twice"])
+
+
 def test_a_name_can_only_be_registered_once(world: World) -> None:
     world.tool(echo)
 
@@ -346,7 +402,7 @@ def test_options_cannot_be_passed_with_a_tool_a_factory_built(
 
 def test_something_that_is_neither_a_function_nor_a_tool_is_refused(world: World) -> None:
     with pytest.raises(WorldBug, match="a function or a Tool"):
-        world.tool(42)  # ty: ignore[invalid-argument-type]
+        world.tool(42)  # ty: ignore[no-matching-overload]
 
 
 def test_the_decorator_forms_return_what_was_decorated(world: World, ctx: Ctx) -> None:

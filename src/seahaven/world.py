@@ -27,7 +27,7 @@ from importlib.resources.abc import Traversable
 from importlib.resources.readers import MultiplexedPath
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Concatenate, overload
 
 import apsw
 
@@ -152,6 +152,11 @@ class World:
         self.work_dir = Path(work_dir) if work_dir is not None else None
         self.untracked_tables = tuple(untracked_tables)
         self._tools: dict[str, Tool] = {}
+        # The registry inverted, for `ctx.worlds.<name>.call(fn)`. Multi-valued
+        # because one function may be registered as two tools -- a factory called
+        # twice with two names -- and a map that kept one of them would send a
+        # call by reference to whichever the registry happened to hold last.
+        self._tools_by_fn: dict[Callable[..., Any], tuple[Tool, ...]] = {}
         self._middlewares: list[Middleware] = []
         self._startup_hooks: list[RegisteredStartupHook] = []
         self._added_worlds: list[AddedWorld] = []
@@ -181,6 +186,21 @@ class World:
     def tools(self) -> Mapping[str, Tool]:
         """The registry, in registration order. Read-only: register through `tool`."""
         return MappingProxyType(self._tools)
+
+    @property
+    def tools_by_fn(self) -> Mapping[Callable[..., Any], tuple[Tool, ...]]:
+        """The registry by the function each tool was built from, in registration order.
+
+        What `ctx.worlds.<name>.call(fn)` resolves through, over every world in
+        the handle's subtree: *every* tool of this world, contributed to a host's
+        surface or filtered out of it, because the allow and block lists shape
+        what an agent sees and host code can call everything.
+
+        The framework's own control tools are not in it. They are no part of a
+        world's surface -- never contributed, and refused by name by both `call`
+        paths -- so there is nothing for a reference to them to reach.
+        """
+        return MappingProxyType(self._tools_by_fn)
 
     @property
     def middlewares(self) -> Sequence[Middleware]:
@@ -216,6 +236,39 @@ class World:
         `takes_var_kwargs` for that; this set is the named ones only.
         """
         return frozenset().union(*(hook.accepts for hook in self._startup_hooks))
+
+    # Three overloads, so that a registered tool keeps the type it was written
+    # with: `@world.tool` hands the function back as itself and a factory's `Tool`
+    # comes back parameterised, which is what `inst.call(fn, ...)` and
+    # `ctx.worlds.<name>.call(fn, ...)` read their arguments and their result from
+    # (architecture section 8.1). Without them every tool in every world is an
+    # untyped callable and `R` is `Any` everywhere.
+    # No options on this one: a factory built the tool's schema and argument model
+    # from the options *it* was given, and `_register_tool` refuses any passed
+    # here. Writing the overloads is where that becomes a checker error rather
+    # than a `WorldBug` at import.
+    @overload
+    def tool[**P, R](self, obj: Tool[P, R], /) -> Tool[P, R]: ...
+    @overload
+    def tool[**P, R](
+        self,
+        obj: Callable[Concatenate[Ctx[Any], P], R],
+        /,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        transaction: bool | None = None,
+    ) -> Callable[Concatenate[Ctx[Any], P], R]: ...
+    @overload
+    def tool[**P, R](
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        transaction: bool | None = None,
+    ) -> Callable[
+        [Callable[Concatenate[Ctx[Any], P], R]], Callable[Concatenate[Ctx[Any], P], R]
+    ]: ...
 
     def tool(
         self,
@@ -411,6 +464,7 @@ class World:
         twin = object.__new__(type(self))
         twin.__dict__.update(self.__dict__)
         twin._tools = dict(self._tools)
+        twin._tools_by_fn = dict(self._tools_by_fn)
         twin._middlewares = list(self._middlewares)
         twin._startup_hooks = list(self._startup_hooks)
         twin._added_worlds = list(self._added_worlds)
@@ -478,7 +532,12 @@ class World:
             raise WorldBug(f"tool {tool.name!r} uses the name of a control tool")
         if tool.name in self._tools:
             raise WorldBug(f"tool {tool.name!r} is registered twice")
+        # Everything that can refuse this tool has refused it by now: nothing
+        # below leaves a world half-registered.
+        _check_the_function_can_key_the_registry(tool)
         self._tools[tool.name] = tool
+        if not tool.control:
+            self._tools_by_fn[tool.fn] = (*self._tools_by_fn.get(tool.fn, ()), tool)
         if invalidates_seals:
             bump()
 
@@ -753,6 +812,26 @@ def _read_sql(path: Traversable, package: str, directory: str, name: str) -> str
         raise WorldBug(
             f"schema file {name!r} in directory {directory!r} of package {package!r} "
             f"could not be read as UTF-8 text: {error}"
+        ) from error
+
+
+def _check_the_function_can_key_the_registry(tool: Tool) -> None:
+    """A tool is keyed by its function as well as by its name.
+
+    `tools_by_fn` is what `ctx.worlds.<name>.call(fn)` resolves through, so a
+    function that cannot be a dictionary key cannot be a tool. Said here rather
+    than left as a bare `TypeError`: `from_function` accepts any callable, and an
+    ordinary `@dataclass` with a `__call__` is one.
+
+    Control tools are not in that map, and are checked all the same: they are the
+    framework's own, so one that could not be is a bug here and not in a world.
+    """
+    try:
+        hash(tool.fn)
+    except TypeError as error:
+        raise WorldBug(
+            f"tool {tool.name!r} is built from a callable that cannot be hashed, and a tool is "
+            f"keyed by the function it was built from as well as by its name"
         ) from error
 
 

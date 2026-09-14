@@ -1,9 +1,9 @@
 """One invocation, the middleware chain it descends, and the handler at the bottom.
 
 `invoke` is that bottom handler: it validates the arguments, runs the tool inside
-the call's transaction and serialises what comes back. It takes a context and a
-call and nothing else, which is what keeps the instance -- its lock, its files,
-its manager -- out of the call path entirely.
+the call's transaction and proves that what comes back would serialise. It takes a
+context and a call and nothing else, which is what keeps the instance -- its lock,
+its files, its manager -- out of the call path entirely.
 """
 
 import dataclasses
@@ -21,10 +21,24 @@ from seahaven.tool import Tool
 if TYPE_CHECKING:  # `ctx.py` is below this module; the annotation is all that is needed here
     from seahaven.ctx import Ctx
 
-__all__ = ["Call", "Handler", "Middleware", "build_chain", "invoke", "rebind", "serialise"]
+__all__ = [
+    "Call",
+    "Handler",
+    "Middleware",
+    "arguments_of",
+    "build_chain",
+    "invoke",
+    "name_of",
+    "rebind",
+    "serialise",
+]
 
-type Handler = Callable[["Ctx", "Call"], Any]
-type Middleware = Callable[["Ctx", "Call", Handler], Any]
+# `Ctx[Any]`, not a bare `Ctx`: the parameter is a world's own declaration of the
+# worlds it adds (architecture section 8.3) and `Ctx` is invariant in it, so a
+# chain typed on `Ctx[Worlds]` would refuse the very context a world that made
+# that declaration runs its own middleware with. Nothing in the chain reads it.
+type Handler = Callable[["Ctx[Any]", "Call"], Any]
+type Middleware = Callable[["Ctx[Any]", "Call", Handler], Any]
 
 _log = logging.getLogger(__name__)
 
@@ -67,7 +81,40 @@ def build_chain(middlewares: Sequence[Middleware], innermost: Handler) -> Handle
     return handler
 
 
-def rebind(ctx: Ctx, call: Call) -> Ctx:
+def name_of(tool: str | Callable[..., Any]) -> str:
+    """What a call asked for, as one string: the name, or the function's qualified name.
+
+    A call by function reference is logged and reported under the name it
+    resolves to; this is what stands in until it has one, and what a resolution
+    failure names.
+    """
+    return tool if isinstance(tool, str) else getattr(tool, "__qualname__", repr(tool))
+
+
+def arguments_of(
+    tool: Tool,
+    asked: str | Callable[..., Any],
+    positional: Sequence[Any],
+    keywords: Mapping[str, Any],
+) -> dict[str, Any]:
+    """One call's arguments as validation takes them, however the caller named the tool.
+
+    A name is the wire's own spelling, and so are the arguments beside it: they
+    pass through, as they have always done. A function reference is Python's, and
+    `Tool.arguments` translates -- positional arguments bind to their parameters,
+    and an argument that declares an alias is sent under the alias the tool list
+    publishes.
+    """
+    if not isinstance(asked, str):
+        return tool.arguments(positional, keywords)
+    if positional:
+        # Only reachable by ignoring the string overload, which has no positional
+        # arguments after the name: every tool takes its arguments by name.
+        raise WorldBug(f"tool {asked!r} was named as a string, so its arguments are passed by name")
+    return dict(keywords)
+
+
+def rebind[C: Ctx](ctx: C, call: Call) -> C:
     """The context a layer runs with, bound to the call it is being handed.
 
     `call` is always `ctx.call` inside a layer. A middleware that rewrites
@@ -91,7 +138,7 @@ def _layer(middleware: Middleware, next_: Handler) -> Handler:
 
 
 def invoke(ctx: Ctx, call: Call) -> Any:
-    """Validate, run and serialise one call: the innermost handler.
+    """Validate and run one call, and answer with what the tool returned: the innermost handler.
 
     Raised inside the chain rather than before it, so a world's error handler
     sees `ArgumentError` and can restate it in the product's own words.
@@ -106,11 +153,14 @@ def invoke(ctx: Ctx, call: Call) -> Any:
     try:
         if tool.transaction:
             with ctx.db.transaction():
-                # Inside the transaction: a result that cannot be serialised
-                # rolls the call back rather than committing a write whose
-                # answer never reached the caller.
-                return serialise(tool.fn(ctx, **call.arguments))
-        return serialise(tool.fn(ctx, **call.arguments))
+                # Serialised inside the transaction and the rendering thrown
+                # away: a result that cannot be serialised rolls the call back
+                # rather than committing a write whose answer never reached the
+                # caller, and what comes back is the object the tool returned, so
+                # a host tool handed a `Charge` is handed a `Charge`. The wire is
+                # served by `openenv/env.py`, which renders it there.
+                return _proved(tool.fn(ctx, **call.arguments))
+        return _proved(tool.fn(ctx, **call.arguments))
     except ToolError:
         raise
     except Exception:
@@ -121,6 +171,12 @@ def invoke(ctx: Ctx, call: Call) -> Any:
         # fails here too, and the tool returned normally.
         _log.error("tool %r failed on instance %s", tool.name, ctx.instance.id, exc_info=True)
         raise
+
+
+def _proved(result: Any) -> Any:
+    """The result, once this framework has proved it would render."""
+    serialise(result)
+    return result
 
 
 def serialise(result: Any) -> Any:

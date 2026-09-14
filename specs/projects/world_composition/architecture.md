@@ -385,7 +385,11 @@ class Ctx[W: Worlds = Worlds]:
     instance: InstanceInfo
     worlds: W
     call: Call | None = None
-    def with_call(self, call: Call, *, worlds: Worlds | None = None) -> Ctx: ...
+
+    @overload
+    def with_call(self, call: Call | None) -> Self: ...
+    @overload
+    def with_call(self, call: Call | None, *, worlds: Worlds) -> Ctx[Any]: ...
 ```
 
 `db`, `ids` and `state` are the node's own; `clock` and `instance` are the instance's, shared by
@@ -394,7 +398,10 @@ opt-in of §2.4. `Tool.from_function`'s first-parameter check accepts `Ctx`, `Ct
 `typing.get_origin`) or no annotation, as today.
 
 `with_call` gains the keyword because the chain, not `Ctx`, knows which node a layer belongs to and
-under which activation; `Ctx` stays frozen and knows nothing about the instance. Every `Worlds` a
+under which activation; `Ctx` stays frozen and knows nothing about the instance. Two overloads
+(phase 3), because only handing in another activation's `Worlds` widens the answer: binding a call
+alone leaves the parameter alone, which is what keeps a `Ctx[CompanyWorlds]` one inside that
+world's own middleware. Every `Worlds` a
 running ctx carries was built by `Frame.ctx(key, call)` (§7.6); the template `worlds` on a
 `NodeRuntime` is `Worlds.unbound()`, whose every access raises, so a ctx that escaped the framework
 fails the same way a stale handle does.
@@ -555,6 +562,30 @@ def call(self, tool: str, /, **arguments: Any) -> Any: ...
 `Tool` becomes `Tool[**P, R]` and `Tool.from_function` preserves the parameters, so a tool built by a
 factory types the same way. This is annotation-only: nothing in the runtime reads `P` or `R`.
 
+*Built 2026-09-14, phase 3.* Three things this section did not say, each needed for any of it to
+reach a world author:
+
+- **`World.tool` needs overloads too** — a `Tool` in and the same `Tool[P, R]` out, a function in
+  and the same function out, and the keywords-only form returning a decorator. It returned `Any`,
+  so without them every `@world.tool` function is an untyped callable and `R` resolves to `Any`
+  wherever it is called.
+- **`Ctx[Any]`, not a bare `Ctx`, in the `Concatenate`** here and in `Handler` and `Middleware`.
+  `Ctx` is invariant in `W`, so a chain typed on `Ctx[Worlds]` refuses the very context a world
+  that declared `Ctx[CompanyWorlds]` (§8.3) runs its own middleware with. Nothing in the chain
+  reads the parameter.
+- **A call that type-checks has to run**, and the typed path spells its arguments the way *Python*
+  spells them where validation takes the way the *wire* does. `Tool.arguments` reconciles the two:
+  positional arguments — which `ParamSpec` requires the signature to accept, and which therefore
+  have to work — bind in the argument model's field order, the signature's order after the context;
+  every name is then translated to the one the published schema carries, so an argument declaring
+  `Field(alias="from")` is sent as `from` though the caller wrote `from_`. Too many positional
+  arguments, or one given twice, is a `WorldBug`. A tool named as a *string* is the wire's own
+  spelling on both sides and passes through untranslated, which is what `call.arguments_of`
+  branches on.
+
+`Ctx.with_call` gains two overloads for the same reason — `(call) -> Self` and
+`(call, *, worlds: Worlds) -> Ctx[Any]` — because only the second answer actually widens (§6.3).
+
 ### 8.2 Resolution
 
 `Composition.by_fn` groups the composition's `Contributed` entries by their tool's `fn` — one pass
@@ -568,17 +599,24 @@ world registers from one function, while `by_fn`, which is what dispatch reads, 
 both; and inverting a per-world map buys nothing that grouping the entries does not, because the
 entries already carry their tool. A per-world `fn → Tool` map is still needed for
 `WorldHandle.call(fn)` below, which resolves over *every* tool of a world in the handle's subtree,
-contributed or not — a set `Composition.by_fn` deliberately does not hold. It arrives with phase 3,
-in the multi-valued shape that consumer needs.
+contributed or not — a set `Composition.by_fn` deliberately does not hold.
+
+*Built 2026-09-14, phase 3:* that per-world map is `World.tools_by_fn: Mapping[Callable,
+tuple[Tool, ...]]`, public and read-only beside `World.tools`, maintained by `_add` and
+snapshotted by `__copy__`. Multi-valued for the reason above. The framework's own control tools are
+not in it: they are no part of a world's surface, are never contributed, and are refused by name by
+both `call` paths, so a reference to one resolves to nothing — which is what it is.
 
 - `Instance.call(fn)`: `comp.by_fn[fn]`. Empty → `WorldBug("<qualname> is not a tool of this world
   or anything it adds")`. More than one entry → `WorldBug` naming the candidate paths and telling
   the caller to use `ctx.worlds.<name>.call(fn)` or the exposed name. The ambiguity is real and the
   spec does not cover it: a function belonging to a world that is a node twice (the two Stripe
   accounts) genuinely does not name one store.
-- `WorldHandle.call(fn)`: the unique node **in this handle's subtree** whose world owns `fn`.
-  Ambiguous or absent → `WorldBug`. A handle names an account, so this is unambiguous in every case
-  the double-add creates.
+- `WorldHandle.call(fn)`: the unique node **in this handle's subtree** whose world owns `fn`, found
+  by walking the node and everything it adds and asking each world's `tools_by_fn`. Ambiguous or
+  absent → `WorldBug`. A handle names an account, so this is unambiguous in every case the
+  double-add creates. The owner may be a descendant, and the call then runs on *its* chain, its
+  context and its store.
 - `WorldHandle.call(name)`: the node's own world registry only — the added world's own unprefixed
   names, as §4 states. Filtering does not apply: host code can call every tool of an added world,
   contributed or not.
@@ -621,6 +659,10 @@ def invoke(ctx, call):
 The serialisation stays inside the transaction, so the framework's rule holds: a result that cannot be
 serialised still rolls the call back. What changes is that the **original object** is returned, so
 `R` in §8.1 is not a lie and a host tool receiving a `Charge` receives a `Charge`.
+
+*Built 2026-09-14, phase 3:* the proof is `call.serialise`, not a bare `to_jsonable_python` as the
+sketch above has it. `serialise` is where this framework's own refusals live — `bytes`, `set`, an
+iterator — and running the sketch instead would have dropped all three.
 
 `call.serialise` is already a public function of the module, so `openenv/env.py`'s `step` calls
 it on what `instance.call` returns and `control.dispatch`, which already serialises its own
@@ -815,12 +857,12 @@ decision there.
 
 | Module | Change | Section |
 |---|---|---|
-| `composition.py` | **New.** `AddedWorld`, `Node`, `Contributed`, `Composition`; resolution, the seal, the epoch, all whole-tree validation, `attached_limit()` | 3, 4 |
-| `handles.py` | **New.** `Frame`, `Worlds`, `WorldHandle` | 7.3, 7.6, 8.3 |
-| `world.py` | `add_world`; `added_worlds`; `composition()`; `chain` reads `composition().root.agent_chain`; every verb bumps the epoch; `__copy__` snapshots `added_worlds` and drops the seal; the per-world `fn → Tool` map `WorldHandle.call(fn)` resolves through, with phase 3 (§8.2) | 3, 4.2 |
+| `composition.py` | **New.** `AddedWorld`, `Node`, `Contributed`, `Composition`; resolution, the seal, the epoch, all whole-tree validation, `attached_limit()`; `Composition.entry_for(fn)` | 3, 4, 8.2 |
+| `handles.py` | **New.** `Frame`, `Worlds`, `WorldHandle`; the subtree walk `WorldHandle.call(fn)` resolves over, which lives here because `composition.py` imports this module | 7.3, 7.6, 8.2, 8.3 |
+| `world.py` | `add_world`; `added_worlds`; `composition()`; `chain` reads `composition().root.agent_chain`; every verb bumps the epoch; `__copy__` snapshots `added_worlds` and the inverted registry and drops the seal; `tools_by_fn`, the per-world multi-valued `fn → Tool` map `WorldHandle.call(fn)` resolves through, and the refusal of a tool function that cannot key it; `tool` overloaded so a registered tool keeps its own type | 3, 4.2, 8.1, 8.2 |
 | `ctx.py` | `Ctx` generic in `W: Worlds`; `worlds` field; `with_call(..., worlds=)` | 6.3 |
-| `tool.py` | `Tool[**P, R]`; first-parameter check accepts `Ctx[X]` | 8.1, 6.3 |
-| `call.py` | `Call.node: str = "main"`; `invoke` returns the original object after proving it serialises; `build_chain` gains the per-layer node pairing used by `composition.build_route_chain` | 7.6, 8.4 |
+| `tool.py` | `Tool[**P, R]`; first-parameter check accepts `Ctx[X]`; `Tool.arguments` binds positional arguments and translates parameter names to the wire names the schema publishes | 8.1, 6.3 |
+| `call.py` | `Call.node: str = "main"`; `invoke` returns the original object after proving it serialises; `Handler` and `Middleware` take `Ctx[Any]`, since `Ctx` is invariant in `W`; `name_of` and `arguments_of`, the two "how did the caller spell it" rules; `build_chain` gains the per-layer node pairing used by `composition.build_route_chain` | 7.6, 8.1, 8.4 |
 | `instances.py` | `NodeRuntime` per node; N files, connections, sessions, `Ids`, `state`; `node_seed`; the pinned node set; `db`/`ctx`/`state_path` as the root's; tree startup hooks with merged bound kwargs and N transactions; node dispatch; `_held()` with the depth counter, `_epoch` and the `Frame`; the thread-local in-call flag; `bulk` over N transactions; `freeze` refusing inside `bulk` per node; both read-only handles opened with attachments; `composition()`; the node path and `internal` marker in the log line | 6, 7, 9, 12 |
 | `fixtures.py` | `NodeMeta`; `FixtureMeta` `format_version` 1 or 2 with `nodes`; per-node freeze, hash and verify; `check_composition` | 11 |
 | `db.py` | `open_inspection(..., attachments=)`, attaching before the authorizer is installed | 9 |
