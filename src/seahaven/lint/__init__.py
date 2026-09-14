@@ -3,7 +3,7 @@
 Nothing in this package prints, reads `argv` or exits. A rule is a function from
 a `Target` -- a world, the module it was imported from, and what `sys.modules`
 held the moment it was imported -- to a list of `Finding`, and `run_all` is the
-concatenation of the four rule modules in code order. `seahaven/cli/check.py` is
+concatenation of the five rule modules in code order. `seahaven/cli/check.py` is
 the only thing here that knows about a terminal.
 
 The codes are stable and their gaps are deliberate: a retired rule's number is
@@ -19,13 +19,26 @@ the same rule.
 | SH201 | warning | a wall-clock call in world code, outside `middleware/` |
 | SH203 | warning | `random` or `uuid.uuid4()` in world code |
 | SH205 | warning | a tool with an empty description |
+| SH206 | warning | a prefixed world's description names a sibling tool the agent cannot call |
+| SH207 | warning | one tool of a shared node contributed under two names |
+| SH208 | error | `.instance(` in a module under `tools/` or `middleware/` |
+| SH209 | error | `ctx.worlds` naming something that is not a registered child |
 | SH301 | error | a module under `tools/` or `middleware/` that is never imported |
 | SH401 | error | a fixture sidecar that does not validate |
 | SH402 | error | a fixture's `file_sha256` does not match its state file |
 | SH403 | error | a fixture's `schema_hash` does not match the world |
 | SH404 | error | a fixture's `now` is not canonical |
 | SH405 | error | a fixture's state file has `-wal` or `-shm` companions |
+| SH406 | error | a composite sidecar's `nodes` disagrees with the world's composition |
 | SH501 | error | the package does not export a `World` named `world` |
+| SH502 | error | a `Worlds` subclass annotates a name no `add_world` registered |
+| SH503 | warning | a registered child name no declared `Worlds` subclass annotates |
+| SH504 | error | the world's composition does not seal |
+
+The composition is sealed before any other rule runs, so a tree that does not
+resolve is SH504 rather than a traceback out of the first rule that asks for it,
+and every rule that needs no tree still runs. `Target.composition` is how a rule
+asks for the tree and gets `None` when there is not one.
 """
 
 from dataclasses import dataclass
@@ -33,6 +46,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Literal
 
+from seahaven.composition import Composition
 from seahaven.errors import WorldBug
 from seahaven.world import World
 
@@ -108,14 +122,43 @@ class Target:
             )
         return Path(next(iter(path)))
 
+    @property
+    def composition(self) -> Composition | None:
+        """The world's sealed tree, or `None` when it does not seal.
+
+        A seal is lazy and its failures are whole-tree registration errors
+        (architecture section 4.3), so every rule that reads the tree would
+        otherwise have to decide for itself what to do about a `WorldBug`.
+        `lint.world` is the one rule that wants the message -- it is SH504 -- and
+        everything else wants the tree or nothing.
+
+        Resolved rather than cached here: `World.composition()` already caches
+        per registration epoch, so a second rule asking is an integer compare.
+        """
+        try:
+            return self.world.composition()
+        except WorldBug:
+            return None
+
 
 def run_all(target: Target) -> list[Finding]:
-    """Every rule, in the order `check` prints them."""
+    """Every rule, in the order `check` prints them.
+
+    `lint.world` runs first because it is what seals the composition: a tree that
+    does not resolve is reported once, as SH504, and the rules below it then read
+    `Target.composition` as `None` rather than raising a `WorldBug` apiece.
+    """
     # Imported here rather than at module top: each rule module imports this one
     # for `Finding` and `Target`, and the package is the surface they hang off.
-    from seahaven.lint import code, coverage, ddl, fixtures
+    from seahaven.lint import code, coverage, ddl, fixtures, world
 
-    findings = ddl.run(target) + code.run(target) + coverage.run(target) + fixtures.run(target)
+    findings = (
+        world.run(target)
+        + ddl.run(target)
+        + code.run(target)
+        + coverage.run(target)
+        + fixtures.run(target)
+    )
     return sorted(findings, key=lambda finding: finding.sort_key)
 
 

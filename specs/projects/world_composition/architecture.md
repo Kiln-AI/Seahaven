@@ -832,11 +832,15 @@ New codes. Gaps in the numbering are deliberate; retired codes are not reused.
 | SH503 | warning | A registered child name is unannotated, when the world declares a `Worlds` subclass | `lint/world.py` |
 | SH504 | error | The composition does not seal: any §4.4 failure, reported with its own message and the `add_world` it names | `lint/world.py`; `check` seals before any other rule runs |
 
-SH401–SH405 (sidecar validity, file hash, schema hash, `now`, read-only state file) each run **per
-node** on a version-2 sidecar and report the path in the message. `check` seals the composition as
+SH402, SH403 and SH405 (file hash, schema hash, journal companions) each run **per
+node** on a version-2 sidecar and report the path in the message. SH401 and SH404 stay whole-sidecar: there is
+one clock per instance, and a `nodes` list that repeats a `path` or a state file stops the fixture
+the way an invalid sidecar does. `check` seals the composition as
 its first act, so every §4.4 error is reported as SH504 rather than a traceback — which is where the
 functional spec's "registration error" intent actually lands (§4.3). A `Target` whose world cannot
-seal still runs the DDL, code and coverage rules, which need no tree.
+seal still runs every rule that needs no tree: only SH206, SH207, SH406 and the per-node half of
+SH403 read `Target.composition`, so the DDL and coverage rules, SH502 and SH503, the rest of the
+code rules and the rest of the fixture rules all still report.
 
 ## 15. Constraints and cost
 
@@ -845,8 +849,8 @@ seal still runs the DDL, code and coverage rules, which need no tree.
   concurrent instances, minute-long lifetimes) holds for small N and is not re-derived here.
 - Scopes multiply nodes: a world added under three scopes, with four worlds beneath it, is twelve
   nodes rather than four (§4.5). This is the correct count, but it means the attach bound is reached
-  by trees that look small in source, and `seahaven check` reports the node count so an author sees
-  it before an instance does.
+  by trees that look small in source. Where an author is told the count is SH504, which reports the
+  seal's own refusal with the real bound in it (§15.1).
 - The hard cap is the attach limit, 125 added nodes, checked at the seal. No lower framework limit
   is imposed: the spec never asked for one, and a number invented here would be a wall in the wrong
   place. Section 4.4's error names the real bound.
@@ -855,6 +859,32 @@ seal still runs the DDL, code and coverage rules, which need no tree.
 - No process-wide mutable state beyond the registration epoch and the per-`World` cache slot, both
   under one lock, both safe under free-threaded CPython. A `World` object still carries no state, so
   two roots in one process importing the same world get their own stores.
+
+### 15.1 Why `check` does not report the node count
+
+This section said, until 2026-09-14, that `seahaven check` reports the node count so an author sees
+it before an instance does. Phase 5 built the check rules and did not build that, and the clause
+above is rewritten rather than left standing. The reasoning, recorded here as §4.5 records its own:
+
+`check` prints findings and nothing else (`cli/check.py`), and a clean world prints nothing at all —
+the reference world's check is zero lines and exit 0. A node count is not a finding: it names no
+mistake and no edit. So there were two ways to report it and both are worse than not reporting it.
+An informational line changes what the command *is*, from a list of things to fix into a report with
+prose in it, and every tool that reads its output — a pre-commit hook, CI, an authoring agent — has
+to learn to skip a line that never means anything. A `warning`-severity finding fires on every
+correct composite world, which is precisely the rule `docs/reference/lints.md` says the rule set is
+kept small to avoid: one an author learns to ignore, and then ignores its neighbours with it.
+
+What is left is that the count is only ever *actionable* at the bound, and there it is reported.
+SH504 carries §4.4's refusal verbatim — `this world has 130 added stores; SQLite can attach 125` —
+which names the count and the limit, on a line whose path names the world, at the moment the count
+first matters and before any instance exists. That is the whole of what the struck clause promised
+an author.
+
+The count is available in process from `len(world.composition().nodes)` and per instance from
+`Instance.composition()`, so nothing is unknowable; what has no home is *volunteering* it. A command
+whose job is to describe a world rather than to find fault with one — `seahaven world info`, say —
+would be that home, and this design does not propose one.
 
 ## 16. The framework delta
 

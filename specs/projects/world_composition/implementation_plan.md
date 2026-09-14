@@ -43,7 +43,7 @@ three pytest suites, the licence check) before it is committed.
       `Change.world` and per-node rendering (§10); `Instance.composition()` (§12); control tools
       over the composition. `test_composite_fixtures.py`, `test_composite_inspection.py`,
       `test_composite_changes.py`. Needs phase 2.
-- [ ] **Phase 5: OpenEnv and `seahaven check`.** `SeahavenState.composition` (§12; `openenv/env.py`
+- [x] **Phase 5: OpenEnv and `seahaven check`.** `SeahavenState.composition` (§12; `openenv/env.py`
       serialising the observation's result landed in phase 3, with the `invoke` change that made it
       necessary); `check` seals first and reports seal
       errors as SH504 (§4.3); SH206–SH209, SH406, SH502–SH504 and per-node SH401–SH405 (§14),

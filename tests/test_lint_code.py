@@ -1,16 +1,20 @@
 """The world-code rules: what a wall clock, a coin flip and a silent tool look like.
 
-Two shapes of test. The two call rules are exercised over one-module worlds
-written into `tmp_path`, because what is being tested is the reading of a line of
-Python and there are a lot of lines to read. SH205 is exercised over a real
-registered tool, because a description is a property of the registry and not of
-the source.
+Three shapes of test. The call rules and the two composition rules that read
+source are exercised over one-module worlds written into `tmp_path`, because what
+is being tested is the reading of a line of Python and there are a lot of lines to
+read. SH205 is exercised over a real registered tool, because a description is a
+property of the registry and not of the source. SH206 is exercised over the
+committed `bazaar` and `emporium` trees, because a stale description is a fact
+about a *composition* -- which node owns the tool, and what the prefix renamed it
+to -- and there is no honest way to have one without the packages.
 """
 
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 
+import payments
 import pytest
 
 from seahaven.cli import discover
@@ -24,20 +28,40 @@ from tests.conftest import NOTES_SCHEMA, WORLDS, build_world, stub_target
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 
-def findings(tmp_path: Path, source: str, *, module: str = "tools/notes.py") -> list[Finding]:
+def findings(
+    tmp_path: Path, source: str, *, module: str = "tools/notes.py", world: World | None = None
+) -> list[Finding]:
     """Every code finding for one module of a world that has no tools."""
     package_dir = tmp_path / "pkg"
     path = package_dir / module
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source, encoding="utf-8")
-    world = World(
-        "linted",
-        "1.0.0",
-        NOTES_SCHEMA,
-        fixtures_dir=tmp_path / "fixtures",
-        work_dir=tmp_path / "work",
-    )
+    if world is None:
+        world = World(
+            "linted",
+            "1.0.0",
+            NOTES_SCHEMA,
+            fixtures_dir=tmp_path / "fixtures",
+            work_dir=tmp_path / "work",
+        )
     return code_lint.run(stub_target(world, package_dir))
+
+
+def host(tmp_path: Path) -> World:
+    """A world with one child, so `payments` is a name `ctx.worlds` really has.
+
+    Added with an empty allow list: what SH209 asks about is the registered
+    `name=`, and a child that contributes nothing cannot bring a finding of
+    another rule with it.
+    """
+    world = build_world(tmp_path)
+    world.add_world(payments.world, name="payments", tool_allow_list=[])
+    return world
+
+
+def target_for(name: str) -> Target:
+    found = discover(None, WORLDS / name)
+    return Target(found.world, found.package, found.imported)
 
 
 @pytest.mark.parametrize(
@@ -235,3 +259,175 @@ def test_a_world_that_is_one_module_is_refused_by_the_target(tmp_path: Path) -> 
     world = build_world(tmp_path)
     with pytest.raises(WorldBug, match="a world is a package"):
         _ = Target(world=world, package=module, imported=frozenset()).package_dir
+
+
+# --- SH208: an instance made inside a call -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        pytest.param("tools/notes.py", id="a tools module"),
+        pytest.param("middleware/gate.py", id="a middleware module"),
+        pytest.param("tools.py", id="a one-module tools layer"),
+    ],
+)
+def test_making_an_instance_in_a_registering_module_is_sh208(tmp_path: Path, module: str) -> None:
+    (finding,) = findings(tmp_path, "def t(ctx):\n    return world.instance(None)\n", module=module)
+    assert finding.code == "SH208"
+    assert finding.severity == "error"
+    assert finding.line == 2
+    assert "ctx.worlds" in finding.fix
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("def t(ctx):\n    return other.world.instance(None)\n", id="through a module"),
+        pytest.param("def t(self):\n    return self._world.instance(None)\n", id="through self"),
+    ],
+)
+def test_every_receiver_of_instance_is_sh208(tmp_path: Path, source: str) -> None:
+    """The receiver is whatever the module called its `World`; the mistake is the call."""
+    assert [f.code for f in findings(tmp_path, source)] == ["SH208"]
+
+
+def test_making_an_instance_outside_the_registering_directories_is_not_sh208(
+    tmp_path: Path,
+) -> None:
+    """A generator script and a helper are not a call; `world.instance(...)` is their door."""
+    source = "def t(ctx):\n    return world.instance(None)\n"
+    assert findings(tmp_path, source, module="fixtures_src/generate.py") == []
+    assert findings(tmp_path, source, module="helpers.py") == []
+
+
+def test_naming_an_instance_without_calling_it_is_not_sh208(tmp_path: Path) -> None:
+    assert findings(tmp_path, "maker = world.instance\n") == []
+
+
+# --- SH209: a child name nothing registered ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("def t(ctx):\n    return ctx.worlds.paymnets\n", id="attribute"),
+        pytest.param('def t(ctx):\n    return ctx.worlds["paymnets"]\n', id="subscript"),
+    ],
+)
+def test_a_child_name_no_add_world_registered_is_sh209(tmp_path: Path, source: str) -> None:
+    (finding,) = findings(tmp_path, source, world=host(tmp_path))
+    assert finding.code == "SH209"
+    assert finding.severity == "error"
+    assert "'paymnets'" in finding.message
+    assert "payments" in finding.fix
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("def t(ctx):\n    return ctx.worlds.payments.call('x')\n", id="attribute"),
+        pytest.param('def t(ctx):\n    return ctx.worlds["payments"].db\n', id="subscript"),
+    ],
+)
+def test_a_registered_child_name_is_not_sh209(tmp_path: Path, source: str) -> None:
+    assert findings(tmp_path, source, world=host(tmp_path)) == []
+
+
+def test_a_grandchild_reached_through_a_handle_is_not_sh209(tmp_path: Path) -> None:
+    """`ctx.worlds.payments.worlds.<name>` is the child's registrations, not this world's."""
+    source = "def t(ctx):\n    return ctx.worlds.payments.worlds.anything\n"
+    assert findings(tmp_path, source, world=host(tmp_path)) == []
+
+
+def test_a_computed_child_name_is_not_sh209(tmp_path: Path) -> None:
+    """A lint reads literals; a name built at run time is outside what it can see."""
+    source = "def t(ctx, which):\n    return ctx.worlds[which]\n"
+    assert findings(tmp_path, source, world=host(tmp_path)) == []
+
+
+def test_a_dunder_on_the_container_is_not_a_child_name(tmp_path: Path) -> None:
+    """`__getattr__` is consulted only for what ordinary lookup does not find."""
+    source = "def t(ctx):\n    return ctx.worlds.__class__\n"
+    assert findings(tmp_path, source, world=host(tmp_path)) == []
+
+
+def test_a_world_that_adds_nothing_says_so_in_the_fix(tmp_path: Path) -> None:
+    (finding,) = findings(tmp_path, "def t(ctx):\n    return ctx.worlds.payments\n")
+    assert finding.code == "SH209"
+    assert "adds no worlds" in finding.fix
+
+
+# --- SH206: a description a prefix left stale --------------------------------
+
+
+def test_a_prefixed_worlds_stale_description_is_sh206() -> None:
+    """`ledger`'s two tools name each other, and `bazaar` prefixes both."""
+    found = [f for f in code_lint.run(target_for("bazaar")) if f.code == "SH206"]
+    assert {f.severity for f in found} == {"warning"}
+    assert sorted(f.message.split("; the description is ")[0] for f in found) == [
+        "'ledger_list_entries' describes 'post_entry', which node 'ledger' contributes as "
+        "'ledger_post_entry'",
+        "'ledger_post_entry' describes 'list_entries', which node 'ledger' contributes as "
+        "'ledger_list_entries'",
+    ]
+    assert all("tool_prefix" in f.fix for f in found)
+
+
+def test_sh206_is_anchored_on_the_add_world_and_names_the_added_worlds_file() -> None:
+    """The text is `ledger`'s and the edit is `bazaar`'s, so the finding points at the edit.
+
+    An installed vendor world's description is inside `site-packages`: a file the
+    host's author cannot change and should not, and the only absolute path in an
+    otherwise project-relative report.
+    """
+    (finding, _) = sorted(
+        (f for f in code_lint.run(target_for("bazaar")) if f.code == "SH206"),
+        key=lambda f: f.message,
+    )
+    assert finding.path.name == "world.py"
+    assert finding.path.parent.name == "bazaar"
+    assert finding.line is None
+    assert "entries.py:" in finding.message
+
+
+def test_a_composition_whose_descriptions_name_nothing_is_not_sh206() -> None:
+    """`emporium` prefixes both payments accounts, and neither describes the other."""
+    assert [f for f in code_lint.run(target_for("emporium")) if f.code == "SH206"] == []
+
+
+def prefixed_pair(tmp_path: Path, alpha_doc: str) -> list[Finding]:
+    """A host prefixing one added world whose `alpha` describes itself however it likes."""
+    child = build_world(tmp_path / "added", name="added")
+
+    @child.tool
+    def alpha(ctx: Ctx) -> None:
+        pass
+
+    @child.tool
+    def beta(ctx: Ctx) -> None:
+        """The other one."""
+
+    child._tools["alpha"] = replace(child.tools["alpha"], description=alpha_doc)
+    host = build_world(tmp_path, name="host")
+    host.add_world(child, name="child", tool_prefix="pay_", tool_allow_list=["alpha", "beta"])
+    return [f for f in code_lint.run(stub_target(host, tmp_path)) if f.code == "SH206"]
+
+
+def test_a_description_that_names_a_sibling_is_sh206(tmp_path: Path) -> None:
+    (finding,) = prefixed_pair(tmp_path, "Call beta first.")
+    assert "'beta'" in finding.message and "'pay_beta'" in finding.message
+    assert "tool_prefix" in finding.fix
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        pytest.param("Call pay_beta first.", id="the name the agent really sees"),
+        pytest.param("Call betagram first.", id="a longer name that starts with it"),
+        pytest.param("Call alphabeta first.", id="a longer name that ends with it"),
+    ],
+)
+def test_a_mention_that_is_not_the_sibling_is_not_sh206(tmp_path: Path, description: str) -> None:
+    """A word boundary, and `_` is a word character: the prefixed name is not the bare one."""
+    assert prefixed_pair(tmp_path, description) == []

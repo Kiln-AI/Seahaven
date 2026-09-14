@@ -49,6 +49,7 @@ __all__ = [
     "NodeMeta",
     "check_composition",
     "check_id",
+    "composition_mismatch",
     "freeze",
     "load",
     "load_all",
@@ -490,12 +491,32 @@ def check_composition(meta: FixtureMeta, composition: Composition) -> list[str]:
     to make; the schema hash is the real invalidation signal and it is checked
     here per node.
     """
-    current = {node.path: node for node in composition.nodes}
-    _check_shape(meta, composition)
-    _check_node_set(meta, current)
-    _check_aliases(meta, current)
-    _check_schema_hashes(meta, current)
+    mismatch = composition_mismatch(meta, composition)
+    if mismatch is not None:
+        raise WorldBug(mismatch)
+    _check_schema_hashes(meta, {node.path: node for node in composition.nodes})
     return _version_differences(meta, composition)
+
+
+def composition_mismatch(meta: FixtureMeta, composition: Composition) -> str | None:
+    """Why this fixture does not describe this tree's *shape*, or `None` when it does.
+
+    The refusal `check_composition` raises, returned instead: `lint/fixtures.py`
+    reports it as SH406 before a commit, and an author who reads that line and an
+    author who hits the refusal in a run are reading the same sentence.
+
+    Schema hashes are deliberately not here. Per node they are the lint's SH403,
+    which exists for a leaf world too, and reporting a drifted schema as a shape
+    mismatch as well would be one defect under two codes.
+    """
+    current = {node.path: node for node in composition.nodes}
+    try:
+        _check_shape(meta, composition)
+        _check_node_set(meta, current)
+        _check_aliases(meta, current)
+    except WorldBug as error:
+        return str(error)
+    return None
 
 
 def _check_shape(meta: FixtureMeta, composition: Composition) -> None:

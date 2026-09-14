@@ -22,6 +22,7 @@ and ignored because Seahaven does not bound a call.
 
 import logging
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -102,8 +103,9 @@ class SeahavenState(State):
     """The session's state: which instance, from what, at what time, of which world.
 
     `episode_id` and `step_count` are the base's. Before the first `reset` there
-    is no instance, so `fixture` and `now` are both `None` and `world` is still
-    answered: the world a session is connected to is known before it is reset.
+    is no instance, so `fixture`, `now` and `composition` are all `None` and
+    `world` is still answered: the world a session is connected to is known
+    before it is reset.
     """
 
     # Descriptions for the same reason the observation's fields have them: the
@@ -125,6 +127,13 @@ class SeahavenState(State):
     )
     world: str = Field(
         description="The world this session is connected to. Known before any reset."
+    )
+    composition: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Every node of the instance's composition -- path, world, version, scope, aliases "
+            "and schema hash -- or null before the first reset. Never agent-facing."
+        ),
     )
 
 
@@ -226,7 +235,13 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
 
     @property
     def state(self) -> SeahavenState:
-        """Where the session is: its episode, its step count, and its instance."""
+        """Where the session is: its episode, its step count, and its instance.
+
+        `composition` is what the instance is running against, node by node, so
+        an eval over the wire can tell a tree from a leaf and a shared store from
+        two (architecture section 12). It is on `state` and nowhere else: `state`
+        is not an observation, and no agent reads one.
+        """
         instance = self._instance
         return SeahavenState(
             episode_id=self._episode_id,
@@ -234,6 +249,7 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
             fixture=instance.fixture if instance is not None else None,
             now=instance.clock.iso() if instance is not None else None,
             world=self.world.name,
+            composition=_composition(instance),
         )
 
     def close(self) -> None:
@@ -367,6 +383,19 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
         self._steps = 0
         if instance is not None:
             instance.destroy()
+
+
+def _composition(instance: Instance | None) -> list[dict[str, Any]] | None:
+    """The instance's composition report as JSON-able data, or `None` before a reset.
+
+    `aliases` is listed rather than left the tuple `asdict` copies: everything
+    else in this model is what a client will read back out of JSON, and a tuple
+    that survives in process and arrives as an array is the kind of difference
+    that is found by a test written against the wrong one.
+    """
+    if instance is None:
+        return None
+    return [asdict(report) | {"aliases": list(report.aliases)} for report in instance.composition()]
 
 
 def _internal_error() -> dict[str, Any]:
