@@ -45,7 +45,7 @@ New modules:
 ```
 seahaven/
   composition.py       # AddedWorld, Node, Composition; resolution, the seal, all whole-tree validation
-  handles.py           # Worlds, WorldHandle: the call-scoped view host code reaches added worlds through
+  handles.py           # Frame, Worlds, WorldHandle: the activation-scoped view host code reaches added worlds through
 ```
 
 Modified: `world.py`, `ctx.py`, `tool.py`, `call.py`, `instances.py`, `fixtures.py`, `db.py`,
@@ -64,9 +64,10 @@ exported under the same name.
 | `Node` | `composition.py` | One store in a composite. `key`, `path`, `world`, `scope`, `depth`, `added: Mapping[str, Node]` (child name → node), `aliases: tuple[str, ...]`, `file_name`, `schema_name`, `bound_startup: Mapping[str, Any]`, `agent_chain: Handler`, `internal_chain: Handler`. Immutable; rebuilt by each seal. |
 | `Contributed` | `composition.py` | One entry of the composite tool list: `name` (as the agent sees it), `tool`, `node`. |
 | `Composition` | `composition.py` | The sealed tree: `root: Node`, `nodes: tuple[Node, ...]` (BFS order, root first), `by_key`, `tools: Mapping[str, Contributed]` (insertion ordered), `by_fn: Mapping[Callable, tuple[Contributed, ...]]`, `accepted_startup_kwargs: frozenset[str] \| None` (`None` means "any"), `edges: tuple[tuple[str, str, str], ...]` (parent path, child name, child path). |
-| `Worlds` | `handles.py` | What `ctx.worlds` is. Attribute and item access to the node's children. Also the public, empty base class a world subclasses to declare child names for the type checker (§8.3). |
-| `WorldHandle` | `handles.py` | `call`, `db`, `state`, `worlds` for one node, valid for one scope (§7.3). |
-| `NodeRuntime` | `instances.py` | The per-instance, per-node state a `Node` describes: `db`, `ids`, `state`, `session`, `ctx`. The instance holds `dict[NodeKey, NodeRuntime]`. |
+| `Frame` | `handles.py` | One activation of an instance: `instance`, `epoch` (§7.3). `frame.ctx(key, call)` is the per-node, per-call `Ctx` every layer of a chain runs with (§7.6). Internal. |
+| `Worlds` | `handles.py` | What `ctx.worlds` is: a `Frame` plus the node it belongs to. Attribute and item access to that node's children. Also the public, empty base class a world subclasses to declare child names for the type checker (§8.3). |
+| `WorldHandle` | `handles.py` | `call`, `db`, `state`, `worlds` for one node, valid for one activation (§7.3). |
+| `NodeRuntime` | `instances.py` | The per-instance, per-node state a `Node` describes: `db`, `ids`, `state`, `session`, and `ctx`, the node's template context with no call and an unbound `worlds`. The instance holds `dict[NodeKey, NodeRuntime]` and the frozen set of node keys it was created with (§6.2). |
 
 ## 3. Declaration
 
@@ -100,9 +101,10 @@ Only what is knowable from the two `World` objects in hand. Each raises `WorldBu
    and permitting `__` inside a segment would let `a__b` and `a/b` collide.
 2. `tool_allow_list` and `tool_block_list` are not both given.
 3. `name` is not already used by another `add_world` on this host.
-4. `startup`'s keys are accepted by the added world's tree (`world.composition().accepted_startup_kwargs`,
-   or any if that is `None`). This forces a seal of the *added* world's subtree, which is complete
-   at this point — the added world was imported before the host could name it.
+4. `startup`'s keys are accepted by the added world's **own** hooks (`world.accepted_startup_kwargs`,
+   or any if a hook takes `**kwargs`) — not its subtree's, because §2.1 binds them to this node's
+   hooks and nothing deeper. The added world's registry is complete at this point: it was imported
+   before the host could name it.
 5. The added world's tree does not contain `self`. Walk `world`'s reachable `World` objects; a hit
    is the cycle error. A self-add is the depth-0 case of the same walk.
 
@@ -154,17 +156,24 @@ belongs to the seal.
    by nodes × children, identifies the composition just as completely, and is what the sidecar
    stores and the create-time check compares.
 
-4. **Bound startup.** For each node, gather the `startup` mappings of every edge reaching it. All
-   equal → that mapping. Otherwise a seal error: a node has one configuration (§2.1). The root has
-   none.
+4. **Bound startup.** For each node, merge the `startup` mappings of every edge reaching it
+   **key-wise**. The same key bound to two different values by two edges is a seal error naming both
+   edges: a node has one configuration (§2.1). An edge that binds nothing, or binds other keys, has
+   no opinion and conflicts with nothing. The root has none.
+
+   The merge, rather than an equality test across edges, is what lets a host configure a node that a
+   dependency also reaches: Shopify's storeless `add_world(stripe)` binds `{}`, and under an
+   equality rule that would have conflicted with any host `startup` on the same node — leaving every
+   shared node unconfigurable. Scope inheritance (step 1) makes such implicit routes the common
+   case.
 
 5. **Tool contribution**, memoised per node key, bottom-up:
 
    ```
-   contribute(w) -> tuple[Contributed, ...]:
+   contribute((w, s)) -> tuple[Contributed, ...]:
        own      = [Contributed(t.name, t, node_of(w, s)) for t in w.tools.values() if not t.control]
        for a in w.added_worlds:
-           inner = contribute(a.world)                       # already filtered and prefixed below a
+           inner = contribute((a.world, a.store or s))       # already filtered and prefixed below a
            kept  = filter(inner, a.tool_allow_list, a.tool_block_list)   # matched on inner names
            own  += [Contributed(prefix(a.tool_prefix, c.name), c.tool, c.node) for c in kept]
    ```
@@ -176,16 +185,22 @@ belongs to the seal.
    node travels with the tool, so a grandchild's tool reached through the host still runs against the
    grandchild's store.
 
-   `node_of(w, s)` is why the memo key is the node key and not the world: a node's own tools belong
-   to whichever node key the walk is under, so two Stripe accounts contribute the same `Tool`
-   objects against different nodes. The recursion into `a.world` is entered at
-   `(a.world, a.store if a.store is not None else s)` — the same scope propagation as step 1.
+   The memo key is the node key and not the world because a node's own tools belong to whichever
+   node key the walk is under: two Stripe accounts contribute the same `Tool` objects against
+   different nodes. The recursion into `a.world` propagates the scope exactly as step 1 does.
 
-6. **Chains.** For each node, `agent_chain = build_chain(concat(m for w in route(node) for m in
-   w.middlewares), invoke)` where `route(node)` is the worlds along the canonical path root→node,
-   outermost first; and `internal_chain = build_chain(node.world.middlewares, invoke)`. Both use the
-   framework's existing `build_chain` unchanged. `World.chain` becomes
-   `self.composition().root.agent_chain`, so a leaf world's chain is exactly what it is today.
+6. **Chains.** For each node, two handlers built by `composition.build_route_chain(layers,
+   owner_key)`, where `layers` is a sequence of `(node_key, middleware)` pairs:
+
+   - `agent_chain`: for each node on the canonical route root→owner, outermost first, that node's
+     world's middlewares, each paired with **that node's** key; then `invoke` paired with the owner.
+   - `internal_chain`: the owner's own middlewares paired with the owner; then `invoke`.
+
+   `build_route_chain` is the framework's `build_chain` with one addition: each layer runs with the
+   `Ctx` of the node it is paired with (§7.6), obtained through the frame the incoming ctx carries,
+   and `call` is normalised exactly as today so that `call is ctx.call` in every layer. A leaf
+   world's `agent_chain` pairs every layer with the root and is byte-for-byte the framework's
+   chain. `World.chain` becomes `self.composition().root.agent_chain`.
 
    *Interpretation flagged:* §3.4 names two chains, "the host's chain outermost, then the owning
    world's chain". Applied recursively through §2.2's nesting, that is the whole canonical route,
@@ -248,7 +263,7 @@ introduced it.
 | Duplicate name in the composite tool list | `tool 'stripe_create_charge' is contributed by both 'stripe' and 'stripe_eu'; give one a different tool_prefix` |
 | A contributed name is `reset`, `step`, `state`, `close`, or a control tool's name | reuses the framework's reserved-name message, with the path |
 | A contributed name fails `^[A-Za-z0-9_-]{1,128}$` | `tool_prefix 'stripe.' produces 'stripe.create_charge', which is not a valid tool name` |
-| Conflicting bound `startup` on one node (§4.1 step 4) | `node 'stripe' is reached with two different startup configurations, from 'shopify/payments' and 'x/payments'` |
+| The same `startup` key bound to two values on one node (§4.1 step 4) | `node 'stripe' has startup 'region' bound to 'us' by add_world at 'main/stripe' and to 'eu' by add_world at 'x/payments'` |
 | `len(nodes) - 1 > attached_limit()` | `this world has 130 added stores; SQLite can attach 125` |
 
 `attached_limit()` is probed once per process from a throw-away `apsw.Connection(":memory:")` via
@@ -328,15 +343,22 @@ try:
     for node in comp.nodes:
         rt = NodeRuntime(db=open_instance(dir/node.file_name, clock),
                          ids=Ids(node_seed(base, node.path)), state={}, session=None)
-        rt.ctx = Ctx(rt.db, clock, rt.ids, rt.state, InstanceInfo(...), worlds=None)
-    instance = Instance(...); register lazily as today
-    with instance.lock:
-        instance._epoch += 1
+        rt.ctx = Ctx(rt.db, clock, rt.ids, rt.state, InstanceInfo(...), worlds=Worlds.unbound())
+    instance = Instance(..., node_keys=frozenset(comp.by_key)); register lazily as today
+    with instance._held():                                          # depth 0→1 bumps the epoch, §7.3
         run_startup_hooks(comp, instance, startup_kwargs)           # 6.4
         for node in comp.nodes: rt.session = start_session(rt.db.conn, node.world)
 except BaseException:
     close everything opened; rmtree(dir); raise
 ```
+
+**The instance pins its node set.** `node_keys` is captured at creation and compared against the
+live seal on every call (§7.1). The framework promises that a tool or middleware registered after
+instances exist reaches them on the next call, and the seal delivers that; but an `add_world` after
+instances exist changes the number of files an instance is supposed to have, and no live instance
+can honour it. Such a call raises `WorldBug("this world's composition changed after the instance was
+created; create a new instance")` rather than dispatching against a tree the instance does not
+hold.
 
 `node_seed(base, path)` is `base` itself for the root and `sha256(base + b"\0" + path.encode())`
 for an added node. The root's derivation is therefore untouched, and each added node's stream is a
@@ -363,8 +385,11 @@ every node. Bare `seahaven.Ctx` keeps working as an annotation, and `Ctx[Company
 opt-in of §2.4. `Tool.from_function`'s first-parameter check accepts `Ctx`, `Ctx[X]` (compared with
 `typing.get_origin`) or no annotation, as today.
 
-`with_call` gains the keyword because the dispatcher, not `Ctx`, knows the epoch; `Ctx` stays
-frozen and knows nothing about the instance.
+`with_call` gains the keyword because the chain, not `Ctx`, knows which node a layer belongs to and
+under which activation; `Ctx` stays frozen and knows nothing about the instance. Every `Worlds` a
+running ctx carries was built by `Frame.ctx(key, call)` (§7.6); the template `worlds` on a
+`NodeRuntime` is `Worlds.unbound()`, whose every access raises, so a ctx that escaped the framework
+fails the same way a stale handle does.
 
 ### 6.4 Startup hooks
 
@@ -382,8 +407,8 @@ frozen and knows nothing about the instance.
   **{k: v for k, v in node.bound_startup.items() if hook accepts k}}`. Bound wins and is not
   overridable, because a bound keyword is part of the composition and an eval must not be able to
   reconfigure one node by passing a `reset()` keyword that happens to share its name (§5.3).
-- `ctx.worlds` is live during hooks: the instance sets `_epoch` before running them and each
-  hook's `ctx` carries a `Worlds` bound to that epoch.
+- Each hook receives `frame.ctx(node.key, None)` for its own node: live `worlds`, no `call`. The
+  frame is the creation activation (§7.3).
 
 ## 7. The call path
 
@@ -391,20 +416,21 @@ frozen and knows nothing about the instance.
 
 ```
 Instance.call(target, /, **arguments):
-    comp = self.world.composition()
-    entry = comp.tools[target] if isinstance(target, str) else resolve_fn(comp, target)   # §8
-    if target is str and entry is None: raise UnknownTool(target)
+    comp = self._current_composition()                  # seals; refuses a changed node set (§6.2)
+    entry = comp.tools.get(target) if isinstance(target, str) else resolve_fn(comp, target)   # §8
+    if entry is None: raise UnknownTool(target)
     tool = entry.tool
     with gate(bypass=tool.control):
-        with self._held():                              # RLock + closed check
-            self._epoch += 1
+        with self._held() as frame:                     # RLock + closed check; depth 0→1 opens a Frame
             if tool.control: return control.dispatch(self, comp, entry)
-            node = entry.node; rt = self.runtime[node.key]
-            ctx = rt.ctx.with_call(Call(entry.name, arguments, tool),
-                                   worlds=Worlds(self, node, self._epoch))
+            node = entry.node
+            ctx = frame.ctx(node.key, Call(entry.name, arguments, tool, node=node.path))
             with in_call():                             # §7.4
                 return node.agent_chain(ctx, ctx.call)
 ```
+
+`_current_composition()` is `self.world.composition()` plus the pinned-node-set check, memoised on
+the `Composition` object's identity so the set comparison runs once per seal, not per call.
 
 Unchanged from the framework's path but for the node lookup: the gate is still taken before the
 lock, control tools still bypass both the gate and the chain, and the chain is still
@@ -418,13 +444,10 @@ made on their behalf.
 
 ```
 WorldHandle.call(target, /, **arguments):
-    self._check_scope()                                 # §7.3
+    frame = self._live_frame()                          # §7.3: raises if this activation has ended
     node, tool = resolve_in_subtree(self._node, target)
-    with self._instance.lock:                           # RLock re-entry; no gate
-        if self._instance.closed: raise WorldBug(...)
-        rt = self._instance.runtime[node.key]
-        ctx = rt.ctx.with_call(Call(tool.name, arguments, tool),
-                               worlds=Worlds(self._instance, node, self._epoch))
+    with frame.instance._held():                        # RLock re-entry at depth ≥ 1: same frame, no gate
+        ctx = frame.ctx(node.key, Call(tool.name, arguments, tool, node=node.path))
         return node.internal_chain(ctx, ctx.call)
 ```
 
@@ -445,15 +468,20 @@ WorldHandle.call(target, /, **arguments):
 
 ### 7.3 Handle lifetime: handles are not references
 
-The instance holds `_epoch: int` — unrelated to a node's *scope* in §4.1; this one bounds how long a
-handle stays usable — incremented under the lock at the start of each agent-initiated
-`Instance.call`, each `bulk()` block, and instance creation. Every `Worlds` and
-`WorldHandle` captures the epoch it was built under; every member access compares first and raises
-`WorldBug("a world handle was used after the call it belongs to returned")` on a mismatch.
+`Instance._held()` is the one way framework code takes the instance lock. It keeps a depth counter
+beside the `RLock`; the transition from depth 0 to 1 increments `_epoch` and opens a `Frame(self,
+epoch)`, and every nested `_held()` on the same thread yields that same frame. The epoch bounds how
+long a handle stays usable (it is unrelated to a node's *scope* in §4.1). Every `Worlds` and
+`WorldHandle` holds the frame it was built from; every member access checks `frame.epoch ==
+instance._epoch` first and raises `WorldBug("a world handle was used after the call it belongs to
+returned")` otherwise.
 
-The epoch is per outermost activation, not per dispatch, so a handle stays valid across a nested
-call and after it returns, for as long as the host tool is running. That is the lifetime §4
-describes when it calls handles call-scoped.
+Bumping at depth 0 rather than per `Instance.call` is what keeps handles valid for the whole
+outermost activation: across a nested `handle.call`, after it returns, and — the case that would
+otherwise bite fixture generators — across an `inst.call(...)` made from inside a `bulk()` block,
+which re-enters the lock at depth 1 and therefore opens no new frame. A handle lives exactly as long
+as the activation that made it, which is the lifetime §4 describes when it calls handles
+call-scoped.
 
 This is the mechanism that makes §2.3's sharing implementable: because handlers reach added worlds
 by name on every call and never hold a store, the framework is free to resolve a name to a different
@@ -470,10 +498,38 @@ thread, so a thread-local is exactly the right scope. `bulk()` does not set it.
 
 ### 7.5 `bulk`
 
-Takes the lock, bumps the epoch, opens one transaction per node, yields the **root's** `Ctx`
-with `call=None` and a live `worlds`, and commits the transactions in sequence on exit, rolling all
-back if the block raised. Fixture generation reaches every node through `ctx.worlds.<name>.db`
-(§5.3).
+`_held()` at depth 0 (a new frame), one transaction per node, yields `frame.ctx(root.key, None)` —
+the **root's** context with a live `worlds` and no `call` — and commits the transactions in sequence
+on exit, rolling all back if the block raised. Fixture generation reaches every node through
+`ctx.worlds.<name>.db` (§5.3). An `inst.call(...)` inside the block re-enters at depth 1 and keeps
+the block's handles valid (§7.3).
+
+### 7.6 Which context a middleware sees
+
+Every layer of a chain runs with the `Ctx` of the node it was paired with at the seal (§4.1 step 6):
+`frame.ctx(key, call)` is `runtime[key].ctx.with_call(call, worlds=Worlds(frame, key))`. So for an
+agent call to a contributed Stripe tool through `my_company`:
+
+- `my_company`'s middleware runs with `my_company`'s `db`, `state`, `ids` and `worlds`;
+- Stripe's middleware, and then `invoke` and the tool, run with Stripe's.
+
+`call` is the same object in every layer, and `call.node` names the owning node's path, so a host
+gate or trace knows what is being called without touching a foreign store. `invoke` opens its
+transaction on the ctx it was handed, which is the owner's connection.
+
+This is the only reading under which the two examples §3.4 gives for host middleware work at all.
+An access-control middleware on the host reads the principal its own startup hook put in
+`ctx.state`; a trace writes to its own tables through `ctx.db`. With the owning node's ctx in every
+layer, both would silently see Stripe's empty state and Stripe's tables instead. The cost is that a
+host middleware cannot reach the owning node's store through `ctx.db`; if it needs to, it has
+`ctx.worlds` and `call.node`, the same doors a host tool has.
+
+A middleware that rewrites arguments and passes a new `Call` on still works: the next layer
+normalises `ctx` to its own node with that `Call`, as `build_chain` does today. A middleware's own
+`ctx.state` is its own world's and never the tool's, so nothing leaks downward by accident; a host
+layer that deliberately wants to hand the owning node something writes to that node's `state`
+through `ctx.worlds`, the same door a host tool uses. Added worlds stay unaware of their host, which
+is what §4 asks.
 
 ## 8. Typed access
 
@@ -675,9 +731,10 @@ tool's errors are its own world's `ToolError` subclasses, shaped by its own hand
 them names a node.
 
 The `WorldBug`s introduced here: the five `add_world` checks (§3.2); the six seal checks (§4.4); a
-handle used outside its scope; instance creation from inside a call; a function passed to `call`
-that no node owns or that more than one node owns; an unknown child name; every create-time
-composition mismatch (§11.3); a freeze conformance failure naming the path.
+handle used outside its activation; a call on an instance whose composition changed after it was
+created (§6.2); instance creation from inside a call; a function passed to `call` that no node owns
+or that more than one node owns; an unknown child name; every create-time composition mismatch
+(§11.3); a freeze conformance failure naming the path.
 
 ## 14. `seahaven check`
 
@@ -724,12 +781,12 @@ decision there.
 | Module | Change | Section |
 |---|---|---|
 | `composition.py` | **New.** `AddedWorld`, `Node`, `Contributed`, `Composition`; resolution, the seal, the epoch, all whole-tree validation, `attached_limit()` | 3, 4 |
-| `handles.py` | **New.** `Worlds`, `WorldHandle` | 7.3, 8.3 |
+| `handles.py` | **New.** `Frame`, `Worlds`, `WorldHandle` | 7.3, 7.6, 8.3 |
 | `world.py` | `add_world`; `added_worlds`; `_tools_by_fn`; `composition()`; `chain` reads `composition().root.agent_chain`; every verb bumps the epoch | 3, 4.2 |
 | `ctx.py` | `Ctx` generic in `W: Worlds`; `worlds` field; `with_call(..., worlds=)` | 6.3 |
 | `tool.py` | `Tool[**P, R]`; first-parameter check accepts `Ctx[X]` | 8.1, 6.3 |
-| `call.py` | `invoke` returns the original object after proving it serialises | 8.4 |
-| `instances.py` | `NodeRuntime` per node; N files, connections, sessions, `Ids`, `state`; `node_seed`; tree startup hooks with bound kwargs and N transactions; node dispatch; `_epoch` (handle lifetime); the thread-local in-call flag; `bulk` over N transactions; `composition()`; the node path and `internal` marker in the log line | 6, 7, 12 |
+| `call.py` | `Call.node: str = "main"`; `invoke` returns the original object after proving it serialises; `build_chain` gains the per-layer node pairing used by `composition.build_route_chain` | 7.6, 8.4 |
+| `instances.py` | `NodeRuntime` per node; N files, connections, sessions, `Ids`, `state`; `node_seed`; the pinned node set; tree startup hooks with merged bound kwargs and N transactions; node dispatch; `_held()` with the depth counter, `_epoch` and the `Frame`; the thread-local in-call flag; `bulk` over N transactions; `composition()`; the node path and `internal` marker in the log line | 6, 7, 12 |
 | `fixtures.py` | `NodeMeta`; `FixtureMeta` `format_version` 1 or 2 with `nodes`; per-node freeze, hash and verify; `check_composition` | 11 |
 | `db.py` | `open_inspection(..., attachments=)`, attaching before the authorizer is installed | 9 |
 | `changes.py` | `Change.world`; render per node | 10 |
@@ -768,17 +825,25 @@ Framework tests, pytest, no network, as `../seahaven_framework/architecture.md` 
 - **`test_composite_instance.py`** — N files created and named by path; blank genesis at one clock;
   per-node `Ids` (the root's stream identical with and without added nodes; a node's stream
   unchanged when a sibling is added or removed; same fixture and seed reproduce every node);
-  hook order and the once-per-shared-node rule; bound `startup` not overridable by a `reset()`
-  keyword of the same name while that keyword still reaches every other hook; a root hook seeding a
+  hook order and the once-per-shared-node rule; bound `startup` merged key-wise across a host edge
+  and a dependency's storeless edge to the same node, and refused with both edges named when one key
+  has two values; bound `startup` not overridable by a `reset()` keyword of the same name while that
+  keyword still reaches every other hook; an `add_world` after an instance exists makes that
+  instance's next call raise while a tool registered after it exists is served; a root hook seeding a
   child through `ctx.worlds.<name>.state` before the child's hooks run; unknown `reset` argument
   refused before any file is created; a hook raising leaves no directory.
 - **`test_composite_dispatch.py`** — a contributed tool runs against its own node's store; middleware
-  nesting order for a two-level and a three-level tree, asserting the full canonical route;
+  nesting order for a two-level and a three-level tree, asserting the full canonical route; **each
+  layer sees its own world's ctx**: a host gate reading `ctx.state["principal"]` set by the host's
+  hook passes for a contributed tool, an intermediate world's trace writes to its own table, and
+  `invoke` runs on the owner's connection, with `call` identical in every layer and `call.node`
+  naming the owner; a middleware rewriting arguments in the host layer is seen by the owner's layer;
   `ctx.worlds.<name>.call` runs only the owning chain; an added world's `ToolError` reaches the host
   tool as itself; a host tool writing to two stores where the second fails leaves the first write in
   place (no cross-world atomicity, asserted, because evals depend on it); nested calls do not take
   the gate (a thread test that would deadlock if they did); the `RLock` re-entry; direct
-  `ctx.worlds.<name>.db` writes; a handle kept past its call raises; `world.instance()` from inside a
+  `ctx.worlds.<name>.db` writes; a handle kept past its call raises; a handle made in a `bulk()`
+  block survives an `inst.call(...)` inside that block; a template ctx's `worlds` raises; `world.instance()` from inside a
   tool raises; the log line carries the path and marks nested calls internal.
 - **`test_typed_call.py`** — `by_fn` resolution by function reference at the instance and through a
   handle; ambiguity when a world is a node twice, with the message; a function from a world outside
@@ -832,6 +897,13 @@ is written against and is cheap enough to build blank in each test.
    changes `Handler`, which every middleware in every world is written against.
 10. **Nested calls bypass the gate and re-enter the lock.** One instance runs one call at a time,
     however many nodes that call touches.
-11. **No new exception type.** Composition adds no vocabulary an agent can observe.
-12. **The attach bound is probed, not hard-coded.** Measured at 125 on apsw 3.53.4; a different
+11. **A middleware layer runs with its own world's context**, paired at the seal, with `call`
+    shared. The owning node's context reaches only the owner's own layers and the tool. Without
+    this the host middleware examples in §3.4 cannot be written.
+12. **An instance pins its node set.** Late tools and middleware reach it; a late `add_world` does
+    not, loudly.
+13. **Bound `startup` is merged key-wise across routes.** An equality rule would have left every
+    node a dependency also reaches unconfigurable.
+14. **No new exception type.** Composition adds no vocabulary an agent can observe.
+15. **The attach bound is probed, not hard-coded.** Measured at 125 on apsw 3.53.4; a different
     build fails at the seal with its own number.

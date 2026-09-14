@@ -99,9 +99,12 @@ Rules:
   under two names with the same `store` is one node with two views (two prefixes or two lists over
   one store): allowed, with the duplicate-tool warning of §2.3. With different `store` keys it is
   two nodes: two Stripe accounts.
-- `startup` keywords must be ones the added world's hooks accept (its `accepted_startup_kwargs`);
-  an unknown keyword is a registration error. Two routes to one node (§2.3) with different
-  `startup` values is a registration error: a node has one configuration.
+- `startup` keywords must be ones the added world's own hooks accept (its `accepted_startup_kwargs`);
+  an unknown keyword is a registration error. When several routes reach one node (§2.3), their
+  bound keywords are merged; the same keyword bound to two different values on two routes is a
+  registration error, because a node has one configuration. A route that binds nothing has no
+  opinion: a dependency's plain `add_world(stripe_world.world)` never stops a host from
+  configuring the Stripe node they share.
 - A world may not appear in its own subtree, directly or transitively. Registration error.
 - A host may have no tools or tables of its own and be a pure aggregator. Nothing special happens.
 - A world with added worlds can still be run standalone as a root, with its own fixtures. Its
@@ -166,6 +169,15 @@ separate them short of reaching into Shopify's declaration, which §12 forbids. 
 fixes both without a new parameter and without a host ever touching another world's declaration: the
 marketplace's Shopify carries a merchant-scoped Stripe because everything under a `store="merchant"`
 edge is merchant-scoped.
+
+Two things the rule does not give, stated so they are not discovered. **Scoping is coarse.** A
+`store=` scopes a whole subtree; "the merchant's Stripe but the company's Slack under one Shopify"
+is not expressible, because the only finer tool would be the host redirecting Shopify's children,
+which §12 rules out. **Scope names are one namespace across the tree, dependencies' internals
+included.** A `store="eu"` written inside a package the host never reads shares with the host's
+own `store="eu"`, and, since scopes propagate, so does everything storeless beneath both. That is
+sharing-by-name working as intended; a world that wants an account nobody else can reach by
+accident names its scope after itself.
 
 - **Canonical path.** A node has one path: the shallowest route to it, ties broken by registration
   order, depth-first. Every other route is an alias. A host that wants a particular name for a
@@ -583,8 +595,8 @@ accepts or removes.
 - `tool_allow_list` and `tool_block_list` both given; a list naming a tool the added world does not
   have
 - Duplicate `name` on one host; an invalid or reserved `name`
-- A `startup` keyword the added world's hooks do not accept; two routes to one node (same world,
-  same scope) with different `startup` values
+- A `startup` keyword the added world's hooks do not accept; the same `startup` keyword bound to
+  two different values on two routes to one node (same world, same scope)
 - A tool name collision after prefixing, including the framework's reserved names
 - A world appearing in its own subtree
 - More nodes than the inspection connection can attach
