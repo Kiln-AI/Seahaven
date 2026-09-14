@@ -59,6 +59,36 @@ class SeahavenClient(
     behaviour too.
     """
 
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *args: Any,
+        websocket_ping_timeout_s: float | None = 120.0,
+        **kwargs: Any,
+    ) -> None:
+        """Default the websocket pong timeout to two minutes, not OpenEnv's twenty seconds.
+
+        A session is one websocket connection holding one instance, and there is
+        no resume: any disconnect destroys the instance and the episode, and
+        reconnecting mints a fresh environment. So if the server goes
+        unresponsive at the event-loop level for longer than the ping timeout,
+        every connected client gives up at once and every one of those episodes
+        is lost -- one stall, many episodes, unrecoverable. Widening the timeout
+        widens the window a server can stall through without taking the episodes
+        with it.
+
+        The honest cost: a server that is genuinely dead, or a network that is
+        genuinely severed, now takes up to two minutes to notice instead of
+        twenty seconds. That is the right trade for a long eval or RL rollout
+        and a worse one for a short interactive session -- which is why this is
+        a default and not a fixed value; a caller who passes
+        `websocket_ping_timeout_s` explicitly still gets exactly that value.
+        `websocket_ping_interval_s` is untouched, still OpenEnv's `20.0`.
+        """
+        super().__init__(
+            base_url, *args, websocket_ping_timeout_s=websocket_ping_timeout_s, **kwargs
+        )
+
     def __enter__(self) -> Self:
         """The base client's `__enter__`, narrowed to this client's own type.
 

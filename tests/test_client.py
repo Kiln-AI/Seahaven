@@ -40,6 +40,18 @@ def client() -> SeahavenClient:
     return SeahavenClient(base_url=UNCONNECTED)
 
 
+def test_the_ping_timeout_defaults_to_two_minutes(client: SeahavenClient) -> None:
+    """Wider than OpenEnv's stock `20.0`: see `SeahavenClient.__init__` for why."""
+    assert client._websocket_ping_timeout_s == 120.0
+    # The interval is untouched -- only the timeout gets a different default.
+    assert client._websocket_ping_interval_s == 20.0
+
+
+def test_an_explicit_ping_timeout_still_wins(client: SeahavenClient) -> None:
+    explicit = SeahavenClient(base_url=UNCONNECTED, websocket_ping_timeout_s=5.0)
+    assert explicit._websocket_ping_timeout_s == 5.0
+
+
 # --- the parsers -----------------------------------------------------------
 
 
