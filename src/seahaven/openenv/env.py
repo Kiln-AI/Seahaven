@@ -114,9 +114,13 @@ class SeahavenState(State):
     # round-2 finding a third time, one class over. They do not reach a client:
     # `GET /schema` answers `State.model_json_schema()` and `GET /state` is
     # annotated `response_model=State`, so OpenEnv never publishes a subclass's
-    # fields either way. `SeahavenState` still describes itself, because the
-    # model is the thing that is wrong or right about its own fields, and the
-    # day upstream publishes the real state model these are already correct.
+    # fields either way -- filed upstream as
+    # https://github.com/huggingface/OpenEnv/issues/1155 (open against 0.4.2;
+    # `main` is unchanged). TODO: when a release carrying that fix is the floor,
+    # these descriptions reach a client and this note can go. `SeahavenState`
+    # still describes itself, because the model is the thing that is wrong or
+    # right about its own fields, and the day upstream publishes the real state
+    # model these are already correct.
     fixture: str | None = Field(
         default=None, description="The fixture the instance was made from, or null for a blank one."
     )

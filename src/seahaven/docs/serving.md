@@ -189,6 +189,30 @@ process, `inst.call("controller_changes")` always reaches them, and `inst.tools(
 memory, and a client that drops without closing holds one for ever. An hour is long enough that no
 live eval is reaped and short enough that a crashed harness does not accumulate instances.
 
+**A disconnect is not an error in the log.** OpenEnv's WebSocket handler closes the connection from
+its own side after the peer has usually already gone, and lets the `WebSocketDisconnect` that raises
+escape into uvicorn's ASGI error path — an `ERROR: Exception in ASGI application` and a full
+traceback for a session that ended perfectly normally. Seahaven closes both halves of that.
+`SeahavenClient` asks the server to close and waits for it to, so the handshake finishes and nothing
+is raised at all; and the app carries ASGI middleware that absorbs a `WebSocketDisconnect` escaping a
+WebSocket route, which covers every client Seahaven does not ship — a stock `GenericEnvClient`, a raw
+socket, a harness that dies mid-session. An absorbed disconnect is one `DEBUG` line on the
+`seahaven.openenv` logger, so it can still be found; the error log is left for errors. The price is
+that a `WebSocketDisconnect` reaching the top of a WebSocket connection is never reported as a server
+error, which is the right trade: it only ever means the peer went away.
+
+**A dropped connection is a lost episode, so `SeahavenClient` waits longer before calling one dead.**
+A session is one connection holding one instance, and there is no resume: any disconnect destroys
+the instance, and reconnecting builds a new one. So a server that stalls at the event-loop level for
+longer than the keepalive timeout loses every episode on the box at once, unrecoverably.
+`SeahavenClient` therefore defaults its WebSocket ping *timeout* to 120 seconds where OpenEnv
+defaults to 20, keeping the ping interval at OpenEnv's 20 — six times the tolerance for a stall,
+without pinging any less often. The price is the other direction: a genuinely dead server or a
+severed network takes up to two minutes to notice instead of twenty seconds. That is the right trade
+for an eval or an RL rollout and the wrong one for a short interactive session, which is why it is a
+default rather than a fixed value — pass `websocket_ping_timeout_s=` to choose your own. A client
+Seahaven does not ship keeps OpenEnv's 20 seconds.
+
 ### The concurrency gate, and what is wrong with it
 
 The gate bounds how many tool calls execute at once. It never bounds admission: calls queue, and
@@ -267,10 +291,44 @@ sign-off and has not happened.
 These are real and reproduced, and all three are OpenEnv's rather than Seahaven's. None of them is
 in the WebSocket path an eval and `SeahavenClient` use.
 
-- **`GET /state` over HTTP answers the base model.** OpenEnv annotates that route with its own
-  `State` type, so `fixture`, `now` and `world` are stripped, and the route is not session-bound
-  either — the numbers it does return are a fresh environment's. Read state over the WebSocket.
-- **`GET /schema` publishes the base state model** for the same reason, so a client never sees the
-  state shape it is driving.
-- **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
-  OpenEnv closes a socket the client has already closed. The sessions are fine; the log is noisy.
+- **`POST /reset`, `POST /step` and `GET /state` over plain HTTP are refused, with a `501`.**
+  OpenEnv builds a brand-new environment inside each of those three handlers and closes it again
+  before replying, so no two requests ever share one: `/reset` resets one instance, `/step` steps a
+  different one, `/state` reads a third, and none of them observes the others. Nothing errors —
+  upstream answers a well-formed `200` describing an environment that is already gone, which is the
+  worst way for an endpoint to be wrong. Seahaven replaces those three handlers with one that says
+  so. The body is FastAPI's `{"detail": ...}` envelope wrapped around the `{"code", "message",
+  "details"}` triple the rest of the framework uses:
+
+  ```json
+  {
+    "detail": {
+      "code": "http_episode_control_unsupported",
+      "message": "GET /state cannot hold an episode, so Seahaven refuses it ...",
+      "details": {
+        "route": "GET /state",
+        "use_instead": "/ws",
+        "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
+        "upstream": {
+          "package": "openenv 0.4.2",
+          "file": "openenv/core/env_server/http_server.py",
+          "regression": "86a222d",
+          "defect": "each handler builds an Environment from the factory and closes it ..."
+        }
+      }
+    }
+  }
+  ```
+
+  The three paths stay in the published OpenAPI schema on purpose. `openenv push` decides what kind
+  of environment a world is by reading path *names*: an app that publishes `/reset` is a simulation
+  environment and must publish `/step` and `/state` beside it, and an app that publishes none of the
+  three is a production environment. Deleting them would pass that check while declaring a Seahaven
+  world to be something it is not, so only the behaviour changes. This is local protection and not a
+  fix: the defect is upstream's, is unfixed there, and a world built on a stock OpenEnv server still
+  has it. Drive episodes over `/ws`.
+  ([huggingface/OpenEnv#1156](https://github.com/huggingface/OpenEnv/issues/1156).)
+- **`GET /schema` publishes the base state model**, so a client never sees the state shape it is
+  driving: `create_app` takes an action class and an observation class and no state class, and the
+  route answers `State.model_json_schema()` for every environment.
+  ([huggingface/OpenEnv#1155](https://github.com/huggingface/OpenEnv/issues/1155).)

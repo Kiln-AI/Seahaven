@@ -13,9 +13,12 @@ and the claim that it is is worth a test rather than a paragraph.
 
 import asyncio
 import json
+import logging
 import time
+import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Iterator, MutableMapping
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +40,14 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
+from fastapi import WebSocketDisconnect
 from openenv import GenericEnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from openenv.core.utils import convert_to_ws_url
+from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import connect as ws_connect
 
-from seahaven.openenv import SeahavenClient
+from seahaven.openenv import SeahavenClient, _SwallowWebSocketDisconnect
 from seahaven.openenv.env import SeahavenObservation
 from tests.serving import serving
 
@@ -62,6 +67,9 @@ UNSOLICITED_TIMEOUT = 2.0
 # floored at that 5 seconds however small the timeout is.
 REAPED_AFTER = 1.0
 REAP_DEADLINE = 30.0
+
+# OpenEnv's episode-control routes over plain HTTP, and the verb each answers.
+HTTP_EPISODE_CONTROL = (("POST", "/reset"), ("POST", "/step"), ("GET", "/state"))
 
 
 def insert(id: str) -> str:
@@ -293,6 +301,106 @@ def test_a_tool_argument_called_tool_is_callable_through_the_client(tmp_path: Pa
         }
 
 
+# --- the refused HTTP episode-control routes -------------------------------
+
+
+def test_the_http_episode_routes_refuse_rather_than_answer_a_throwaway_environment(
+    world: World,
+) -> None:
+    """The three routes OpenEnv cannot serve, refused here in words.
+
+    Upstream builds a fresh environment inside each of the `/reset`, `/step` and
+    `/state` handlers and closes it before replying, so the three never observe
+    one another and every answer is a plausible 200 about nothing. Seahaven
+    replaces the handlers. What is asserted is what a reader at 2am needs: the
+    status, the machine-readable code, which route they hit, where to go
+    instead, and enough of the upstream citation to check the claim.
+    """
+    with serving(world) as url:
+        for verb, path in HTTP_EPISODE_CONTROL:
+            status, body = _request(url + path, method=verb)
+            assert status == 501, (verb, path, body)
+            refusal = body["detail"]
+            assert refusal["code"] == "http_episode_control_unsupported"
+            assert refusal["details"]["route"] == f"{verb} {path}"
+            assert refusal["details"]["use_instead"] == "/ws"
+            assert refusal["details"]["upstream"]["regression"] == "86a222d"
+            assert "/ws" in refusal["message"]
+            assert "SeahavenClient" in refusal["message"]
+
+
+def test_a_well_formed_step_is_refused_in_the_same_words_as_a_malformed_one(world: World) -> None:
+    """The refusal answers a good request, not only a bad one.
+
+    A replacement handler that still declared OpenEnv's `StepRequest` would
+    answer 422 to a body that does not parse, and the caller would go off fixing
+    a payload that can never work. Both bodies have to reach the same 501.
+    """
+    step = json.dumps(
+        {"action": CallToolAction(tool_name="rows", arguments={"sql": "SELECT 1"}).model_dump()}
+    ).encode()
+    with serving(world) as url:
+        well_formed = _request(url + "/step", method="POST", data=step)
+        nonsense = _request(url + "/step", method="POST", data=b"not json at all")
+    assert well_formed[0] == 501
+    assert nonsense == well_formed
+
+
+def test_the_refused_routes_are_still_published_as_openapi_paths(world: World) -> None:
+    """Refused and not removed, because `openenv push` reads the paths.
+
+    `mode_endpoint_consistency` in `openenv/cli/_validation.py` calls an app that
+    publishes `/reset` a simulation environment and then requires `/step` and
+    `/state` beside it. It never calls the three, only names them, so deleting
+    them would not fail that criterion -- it would quietly reclassify a Seahaven
+    world as a *production* environment, which is a wrong declaration about what
+    the world is. The paths stay, and what the schema now promises at each of
+    them is the refusal and nothing else.
+    """
+    with serving(world) as url:
+        status, document = _request(url + "/openapi.json")
+    assert status == 200
+    paths = document["paths"]
+    for verb, path in HTTP_EPISODE_CONTROL:
+        assert path in paths, sorted(paths)
+        assert sorted(paths[path][verb.lower()]["responses"]) == ["501"]
+
+
+def test_refusing_the_episode_routes_leaves_the_rest_of_the_http_surface_alone(
+    world: World,
+) -> None:
+    """Three routes, and the neighbours they sit between are untouched.
+
+    `/metadata` builds a throwaway environment exactly as the refused three do,
+    and is deliberately still served: metadata is the world's and not an
+    episode's, so a fresh environment answers it correctly. This is the test
+    that fails if the refusal is ever widened to a path that did not need it.
+    """
+    with serving(world) as url:
+        assert _request(url + "/health") == (200, {"status": "healthy"})
+        metadata = _request(url + "/metadata")
+        assert metadata[0] == 200
+        assert metadata[1]["name"] == world.name
+        schema = _request(url + "/schema")
+        assert schema[0] == 200
+        assert sorted(schema[1]) == ["action", "observation", "state"]
+
+
+def test_a_websocket_session_is_untouched_by_the_refusal(world: World) -> None:
+    """The transport that is the product, on the same server at the same moment.
+
+    The `state` frame in particular: its HTTP namesake now answers 501, and the
+    session's own state has to keep arriving over the wire, whole and real.
+    """
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset()
+        assert _request(url + "/state")[0] == 501
+        env.call("execute", sql=insert("n1"))
+        state = env.state()
+        assert (state.world, state.step_count) == (world.name, 1)
+        assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n1"]
+
+
 # --- the published schema --------------------------------------------------
 
 
@@ -457,6 +565,133 @@ def test_five_hundred_sessions_reset_and_call_with_no_errors(trivial_world: Worl
     with serving(trivial_world) as url:
         answers = asyncio.run(drive(url))
     assert answers == [{"message": str(number)} for number in range(SESSIONS)]
+
+
+# --- disconnects -----------------------------------------------------------
+
+
+class _Kept(logging.Handler):
+    """A handler that keeps every record it is handed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@contextmanager
+def _watched(world: World, **options: Any) -> Iterator[tuple[str, list[logging.LogRecord]]]:
+    """Serve a world, and collect what uvicorn logs on its own error channel.
+
+    `caplog` cannot see this: uvicorn's loggers set `propagate=False`, so nothing
+    uvicorn logs ever reaches the handler pytest puts on the root logger. The
+    handler has to go on *after* the server starts, because uvicorn configures
+    logging with `dictConfig` as it boots and that drops every handler already on
+    `uvicorn.error`, and it has to come off *after* the server stops, or a
+    traceback logged while the last connection is torn down would be missed.
+    `ExitStack` unwinds in reverse, so registering the removal first buys that
+    order.
+    """
+    logger = logging.getLogger("uvicorn.error")
+    kept = _Kept()
+    with ExitStack() as stack:
+        stack.callback(logger.removeHandler, kept)
+        url = stack.enter_context(serving(world, **options))
+        logger.addHandler(kept)
+        yield url, kept.records
+
+
+def _errors(records: list[logging.LogRecord]) -> list[str]:
+    return [record.getMessage() for record in records if record.levelno >= logging.ERROR]
+
+
+def test_a_session_that_ends_normally_leaves_nothing_in_the_error_log(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A clean disconnect is silent, and both halves of that are asserted.
+
+    Nothing on `uvicorn.error` is the operator's half: a session that ended
+    normally must not look like a failure in the log they grep when something
+    real goes wrong. Nothing from `seahaven.openenv` is the client's half: the
+    middleware absorbs a disconnect that escapes OpenEnv's handler and says so at
+    debug level, so silence there means the client waited for the server rather
+    than that something quietly cleaned up after it.
+    """
+    caplog.set_level(logging.DEBUG, logger="seahaven.openenv")
+    with _watched(world) as (url, records), SeahavenClient(base_url=url) as env:
+        env.reset()
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+    assert _errors(records) == []
+    absorbed = [record for record in caplog.records if record.name == "seahaven.openenv"]
+    assert [record.getMessage() for record in absorbed] == []
+
+
+def test_a_peer_that_vanishes_is_not_logged_as_a_server_error(world: World) -> None:
+    """The half no client-side fix can reach: a socket that simply stops.
+
+    A harness that dies mid-session, a stock client, anything that hangs up
+    without waiting -- OpenEnv is then closing a connection that is already gone.
+    That is the peer's business and never the server's, and it must not reach the
+    error log either.
+    """
+
+    async def connect_and_vanish(url: str) -> None:
+        async with ws_connect(convert_to_ws_url(url) + "/ws", proxy=None):
+            pass
+
+    with _watched(world) as (url, records):
+        asyncio.run(connect_and_vanish(url))
+    assert _errors(records) == []
+
+
+def test_the_middleware_absorbs_only_a_disconnected_websocket() -> None:
+    """Narrow on purpose: this scope, this exception, nothing else.
+
+    A `WebSocketDisconnect` reaching the top of a websocket connection means the
+    peer went away, which no server can act on. Anything else out of a handler is
+    a real failure and has to stay loud, and an HTTP request is not this
+    middleware's business at all.
+    """
+
+    async def raise_through(error: Exception, scope_type: str) -> None:
+        async def failing(scope: Scope, receive: Receive, send: Send) -> None:
+            raise error
+
+        await _SwallowWebSocketDisconnect(failing)(
+            {"type": scope_type, "path": "/ws"}, _unused_receive, _unused_send
+        )
+
+    asyncio.run(raise_through(WebSocketDisconnect(code=1006), "websocket"))
+    with pytest.raises(WebSocketDisconnect):
+        asyncio.run(raise_through(WebSocketDisconnect(code=1006), "http"))
+    with pytest.raises(RuntimeError, match="the world is on fire"):
+        asyncio.run(raise_through(RuntimeError("the world is on fire"), "websocket"))
+
+
+async def _unused_receive() -> MutableMapping[str, Any]:
+    raise AssertionError("the stub app never reads the connection")
+
+
+async def _unused_send(message: MutableMapping[str, Any]) -> None:
+    raise AssertionError("the stub app never writes to the connection")
+
+
+def _request(url: str, *, method: str = "GET", data: bytes | None = None) -> tuple[int, Any]:
+    """Answer the status and decoded body, for the statuses urllib calls errors.
+
+    `urlopen` raises on anything from 400 up, and the body of a refusal is the
+    whole point of these tests, so both halves are read the same way.
+    """
+    request = urllib.request.Request(url, data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as refused:
+        return refused.code, json.loads(refused.read())
 
 
 def _freeze(world: World, fixture_id: str = "start") -> str:
