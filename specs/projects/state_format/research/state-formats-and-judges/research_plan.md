@@ -31,7 +31,7 @@ be superseded by `state()`.
   WorkArena, OSWorld and peers expose final state and write per-task judges
 - [ ] OpenEnv and RL-framework consumers — what OpenEnv and the RL/eval frameworks that consume
   environments expect from `state`, rewards and saved episodes
-- [ ] Diff formats and versioned data contracts — row-level change representations and how
+- [x] Diff formats and versioned data contracts — row-level change representations and how
   long-lived structured outputs are versioned
 - [ ] Declarative assertion languages over JSON — Jinja2, JMESPath, jq, JSONPath, CEL, JSONLogic,
   SQL-over-JSON and how eval tools express assertions
