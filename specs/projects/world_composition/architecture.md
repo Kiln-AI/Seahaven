@@ -6,8 +6,10 @@ status: complete
 
 The technical design for composable worlds. It follows `functional_spec.md` section by section and
 is deep enough that whoever implements it designs nothing significant. It is written against the
-framework as specified in `../seahaven_framework/` (`architecture.md` and the eight documents under
-`components/`), none of whose decisions it reopens.
+framework as specified in `../seahaven_framework/` and **verified against the framework as
+implemented** on `main` (`src/seahaven/`, all thirteen phases of its plan complete). Where the
+code diverged from its spec during implementation, the code governs and is what this document
+cites. None of the framework's decisions is reopened.
 
 Four decisions were taken before drafting. Three answer questions the functional spec leaves to
 "the repo, with the code" (§12); the second reopened §2.3, which is now revised.
@@ -84,6 +86,13 @@ registration epoch (§4.2).
 opens that scope for the added world and everything beneath it (§4.1). `startup` is copied into a
 `MappingProxyType` over a plain dict, so a caller mutating the dict it passed cannot change the
 composition after the fact.
+
+`World.__copy__` — the framework's way to point a world at another fixtures directory for a test —
+snapshots the three registries and drops the instance manager. It now also snapshots
+`added_worlds` and drops the sealed composition, so the copy reseals on first use. A copy is a
+distinct `World` object and therefore a distinct node key (§4.1): copy the **root** to relocate its
+fixtures, as the framework's tests do, never a dependency — a host that added the original does not
+see the copy, and the docs say so.
 
 ### 3.2 Checks at the call
 
@@ -346,6 +355,11 @@ except BaseException:
     close everything opened; rmtree(dir); raise
 ```
 
+`Instance.__init__` takes `runtime: Mapping[NodeKey, NodeRuntime]` in place of today's single
+`ctx`, `db` and `session`. `instance.db`, `instance.ctx` and `instance.state_path` stay as
+properties over the **root's** runtime, because `fixtures.freeze`, `control.py` and the pytest
+plugin read them and a leaf world's instance must be indistinguishable from today's.
+
 **The instance pins its node set.** `node_keys` is captured at creation and compared against the
 live seal on every call (§7.1). The framework promises that a tool or middleware registered after
 instances exist reaches them on the next call, and the seal delivers that; but an `add_world` after
@@ -416,7 +430,7 @@ Instance.call(target, /, **arguments):
     tool = entry.tool
     with gate(bypass=tool.control):
         with self._held() as frame:                     # RLock + closed check; depth 0→1 opens a Frame
-            if tool.control: return control.dispatch(self, comp, entry)
+            if tool.control: return control.dispatch(self, frame.ctx(comp.root.key, Call(...)))
             node = entry.node
             ctx = frame.ctx(node.key, Call(entry.name, arguments, tool, node=node.path))
             with in_call():                             # §7.4
@@ -597,7 +611,12 @@ The serialisation stays inside the transaction, so the framework's rule holds: a
 serialised still rolls the call back. What changes is that the **original object** is returned, so
 `R` in §8.1 is not a lie and a host tool receiving a `Charge` receives a `Charge`.
 
-`openenv/env.py` serialises for the wire, and `control.dispatch` serialises its own results.
+`call.serialise` is already a public function of the module, so `openenv/env.py`'s `step` calls
+it on what `instance.call` returns and `control.dispatch`, which already serialises its own
+results, is unchanged. The change is behaviour-preserving for everything in the repository today:
+every ProjectTracker tool returns `dict[str, Any]`, `str`, `list` or `None` and none returns a
+model, and `to_jsonable_python` of such a value is an equal value, so the 65 call sites in the
+suites and the executed docs that index a result see what they saw before.
 
 The cost is one redundant `to_jsonable_python` per call on the server path. The alternative —
 carrying the serialised form alongside the result — either changes `Handler`'s signature, which
@@ -629,10 +648,17 @@ makes the eval's cross-node view safe. It is read-only, it is never a world tool
 Schema names are the node's path with `/` replaced by `__` (`stripe`, `stripe__tax`); the root is
 SQLite's own `main`. §3.2's ban on `__` inside a name is what keeps this injective.
 
-`Instance.inspect()` builds the attachment list from `comp.nodes[1:]` and caches the handle as
-today. `controller_run_sql` runs on it and therefore sees every node, schema-qualified, in one
-statement (§6.1). A world's own `run_sql` helper runs on `ctx.db`, which is one node's connection,
-so isolation between nodes is structural and there is no allowlist to get wrong.
+The instance keeps **two** read-only handles, and both are opened this way with the same
+attachment list built from `comp.nodes[1:]`: `inspect()`, the caller's, read without the instance
+lock; and `_control_db()`, the control tools' own, read under the lock. They are separate because
+`sandbox.run_statement` swaps a connection's authorizer for the length of a statement, and a swap
+on a connection another thread is stepping a cursor on deadlocks inside SQLite (`instances.py`,
+`_control_db`). `controller_run_sql` therefore runs on the control handle and sees every node,
+schema-qualified, in one statement (§6.1). Its `_ControlAuthorizer` defers to the permanent
+`_deny_writes`, which receives the database name with every action and allows reads on an attached
+schema exactly as on `main`; nothing in it changes. A world's own `run_sql` helper runs on
+`ctx.db`, which is one node's connection, so isolation between nodes is structural and there is
+no allowlist to get wrong.
 
 The bound is the attach limit, checked at the seal (§4.4).
 
@@ -672,6 +698,8 @@ rejects any other `format_version` naming the file, as today. There is exactly o
 
 Under the instance lock:
 
+0. Refuse if any node's connection is in a transaction, in the framework's own words: `freeze`
+   cannot run inside `bulk()`, and with N transactions open the check is `any(rt.db.in_transaction)`.
 1. `conformance.check(rt.db.conn, node.world)` for **every** node, all of them, before anything is
    written. A failure names the path and mints nothing (§5.3).
 2. `VACUUM INTO` each node's file into `.pending-<id>/<file_name>`.
@@ -743,11 +771,13 @@ New codes. Gaps in the numbering are deliberate; retired codes are not reused.
 | SH406 | error | Composite sidecar: `nodes` disagrees with the world's composition (paths, scopes or aliases) | `lint/fixtures.py` |
 | SH502 | error | A `Worlds` subclass annotates an attribute that is not a registered child name | `lint/world.py` |
 | SH503 | warning | A registered child name is unannotated, when the world declares a `Worlds` subclass | `lint/world.py` |
+| SH504 | error | The composition does not seal: any §4.4 failure, reported with its own message and the `add_world` it names | `lint/world.py`; `check` seals before any other rule runs |
 
 SH401–SH405 (sidecar validity, file hash, schema hash, `now`, read-only state file) each run **per
 node** on a version-2 sidecar and report the path in the message. `check` seals the composition as
-its first act, so every §4.4 error is reported as a finding with its message rather than a
-traceback — which is where the functional spec's "registration error" intent actually lands (§4.3).
+its first act, so every §4.4 error is reported as SH504 rather than a traceback — which is where the
+functional spec's "registration error" intent actually lands (§4.3). A `Target` whose world cannot
+seal still runs the DDL, code and coverage rules, which need no tree.
 
 ## 15. Constraints and cost
 
@@ -776,17 +806,17 @@ decision there.
 |---|---|---|
 | `composition.py` | **New.** `AddedWorld`, `Node`, `Contributed`, `Composition`; resolution, the seal, the epoch, all whole-tree validation, `attached_limit()` | 3, 4 |
 | `handles.py` | **New.** `Frame`, `Worlds`, `WorldHandle` | 7.3, 7.6, 8.3 |
-| `world.py` | `add_world`; `added_worlds`; `_tools_by_fn`; `composition()`; `chain` reads `composition().root.agent_chain`; every verb bumps the epoch | 3, 4.2 |
+| `world.py` | `add_world`; `added_worlds`; `_tools_by_fn`; `composition()`; `chain` reads `composition().root.agent_chain`; every verb bumps the epoch; `__copy__` snapshots `added_worlds` and drops the seal | 3, 4.2 |
 | `ctx.py` | `Ctx` generic in `W: Worlds`; `worlds` field; `with_call(..., worlds=)` | 6.3 |
 | `tool.py` | `Tool[**P, R]`; first-parameter check accepts `Ctx[X]` | 8.1, 6.3 |
 | `call.py` | `Call.node: str = "main"`; `invoke` returns the original object after proving it serialises; `build_chain` gains the per-layer node pairing used by `composition.build_route_chain` | 7.6, 8.4 |
-| `instances.py` | `NodeRuntime` per node; N files, connections, sessions, `Ids`, `state`; `node_seed`; the pinned node set; tree startup hooks with merged bound kwargs and N transactions; node dispatch; `_held()` with the depth counter, `_epoch` and the `Frame`; the thread-local in-call flag; `bulk` over N transactions; `composition()`; the node path and `internal` marker in the log line | 6, 7, 12 |
+| `instances.py` | `NodeRuntime` per node; N files, connections, sessions, `Ids`, `state`; `node_seed`; the pinned node set; `db`/`ctx`/`state_path` as the root's; tree startup hooks with merged bound kwargs and N transactions; node dispatch; `_held()` with the depth counter, `_epoch` and the `Frame`; the thread-local in-call flag; `bulk` over N transactions; `freeze` refusing inside `bulk` per node; both read-only handles opened with attachments; `composition()`; the node path and `internal` marker in the log line | 6, 7, 9, 12 |
 | `fixtures.py` | `NodeMeta`; `FixtureMeta` `format_version` 1 or 2 with `nodes`; per-node freeze, hash and verify; `check_composition` | 11 |
 | `db.py` | `open_inspection(..., attachments=)`, attaching before the authorizer is installed | 9 |
 | `changes.py` | `Change.world`; render per node | 10 |
 | `control.py` | `controller_run_sql` and `controller_changes` over the composition (no signature change) | 5, 9, 10 |
-| `openenv/env.py` | Serialise the observation's result; `SeahavenState.composition` | 8.4, 12 |
-| `lint/` | SH206–SH209, SH406, SH502, SH503; SH401–SH405 per node; `lint/world.py` is new | 14 |
+| `openenv/env.py` | `step` calls `call.serialise` on the result; `SeahavenState.composition` | 8.4, 12 |
+| `lint/` | SH206–SH209, SH406, SH502–SH504; SH401–SH405 per node; `lint/world.py` is new | 14 |
 | CI | Verify `ty` handles the `Concatenate` + `ParamSpec` overloads of §8.1 before world code relies on them; if it does not, a second checker on world code is the fallback, never generated code | 8.1 |
 
 Handed elsewhere, unchanged from the functional spec: the authoring-docs requirements (prefer an
@@ -864,9 +894,11 @@ Framework tests, pytest, no network, as `../seahaven_framework/architecture.md` 
   destroying every node's directory.
 
 The reference world stays single-node. A second, deliberately small composite fixture world lives
-under `tests/worlds/` — a two-tool "payments" leaf, a "shop" world that adds it with an empty allow
-list, and a host that adds both plus a second payments account — which is the tree every test above
-is written against and is cheap enough to build blank in each test.
+under `tests/worlds/` beside `tidy`, `messy`, `broken_ddl` and `no_world` — a two-tool "payments"
+leaf, a "shop" world that adds it with an empty allow list, and a host that adds both plus a second
+payments account — which is the tree every test above is written against and is cheap enough to
+build blank in each test. `tests/test_docs_examples.py` executes every example in the docs, so the
+composition page's examples run against that world too.
 
 ## 18. Technical decisions worth stating
 
