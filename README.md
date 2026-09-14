@@ -38,67 +38,74 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
 
 ## Quickstart
 
-Python 3.14 or newer.
+Install with `uv add seahaven` or `pip install seahaven`. Python 3.14+.
+
+Scaffold a world:
 
 ```sh
-uv add seahaven          # or: pip install seahaven
+seahaven new crm
 ```
 
-A world is a schema, a set of tools, and the fixtures an instance starts from. The smallest one is
-a single file:
+Build your world: a schema, a set of tools, and the fixtures an instance starts from. Here is a CRM
+with one table and two tools:
 
 ```python
 import seahaven
 
 world = seahaven.World(
-    name="notes",
+    name="crm",
     version="1.0.0",
-    schema="""
-    CREATE TABLE notes (
-        id TEXT PRIMARY KEY,
-        body TEXT NOT NULL,
-        created_at TEXT NOT NULL
-    ) STRICT;
-    """,
+    schema="CREATE TABLE contacts (id TEXT PRIMARY KEY, email TEXT NOT NULL, stage TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;",
 )
 
 
 @world.tool
-def add_note(ctx: seahaven.Ctx, body: str) -> dict[str, str]:
-    """Write a note down and return it."""
-    note = {"id": ctx.ids.uuid(), "body": body, "created_at": ctx.clock.iso()}
-    ctx.db.execute(
-        "INSERT INTO notes (id, body, created_at) VALUES (?, ?, ?)",
-        note["id"],
-        note["body"],
-        note["created_at"],
-    )
-    return note
+def create_contact(ctx: seahaven.Ctx, email: str) -> dict[str, str]:
+    """Add a contact to the pipeline as a lead."""
+    contact = {"id": ctx.ids.uuid(), "email": email, "stage": "lead", "updated_at": ctx.clock.iso()}
+    ctx.db.execute("INSERT INTO contacts VALUES (?, ?, ?, ?)", *contact.values())
+    return contact
 
 
-with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
-    note = inst.call("add_note", body="buy milk")
-    assert note["created_at"] == "2026-06-01T09:00:00.000Z"  # the instance's clock, frozen
-    assert [change.op for change in inst.changes()] == ["insert"]  # what an eval grades
+@world.tool
+def move_contact(ctx: seahaven.Ctx, contact_id: str, stage: str) -> dict[str, str]:
+    """Move a contact to a new pipeline stage."""
+    ctx.db.execute("UPDATE contacts SET stage = ?, updated_at = ? WHERE id = ?", stage, ctx.clock.iso(), contact_id)
+    return ctx.db.one("SELECT * FROM contacts WHERE id = ?", contact_id)
 ```
 
-The tool's signature is the JSON schema an agent sees and its docstring is the description. The
-instance is a private copy with a frozen clock and seeded ids, and its changeset is what an eval
-grades.
+Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
 
-A real world is a package. `seahaven new` scaffolds one, with an error handler, a fixture
-generator, tests on the bundled pytest plugin, and every framework rule as a lint:
+Run it in process. An instance is a private copy of the world with a frozen clock and seeded ids,
+and its changeset is what an eval grades:
+
+```py
+from crm import world
+
+with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
+    lead = inst.call("create_contact", email="ada@example.com")
+    won = inst.call("move_contact", contact_id=lead["id"], stage="won")
+    assert won["updated_at"] == "2026-06-01T09:00:00.000Z"  # the frozen clock
+    assert [c.op for c in inst.changes()] == ["insert"]  # the net diff: one new row, now "won"
+```
+
+Serve it. Every session gets its own instance, and any OpenEnv client can drive it:
 
 ```sh
-seahaven new crm
-cd crm
-uv sync
-uv run pytest
-uv run seahaven check
+seahaven serve
+```
+
+```py
+from seahaven.openenv import SeahavenClient
+
+with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
+    env.reset()
+    lead = env.call("create_contact", email="ada@example.com").result
+    env.call("move_contact", contact_id=lead["id"], stage="won")
 ```
 
 For a full-size example, see [ProjectTracker](worlds/projecttracker/), the reference world: a
-fictional issue tracker with nine tables, 25 tools, full-text search and three fixtures.
+fictional issue tracker with nine tables, 25 tools, search and three fixtures.
 
 Building a world with an agent? Point it at `seahaven docs`. The docs ship inside the package and
 always match the installed version.
@@ -106,23 +113,8 @@ always match the installed version.
 ## Serving
 
 Seahaven's remote lifecycle and transport are [OpenEnv](https://huggingface.co/docs/openenv/index).
-One command serves a world; every session gets its own instance, hundreds per process:
-
-```sh
-seahaven serve
-```
-
-`SeahavenClient` is one client for every Seahaven world, and the stock OpenEnv client works too:
-
-```py
-from seahaven.openenv import SeahavenClient
-
-with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
-    env.reset(fixture="agency", seed=7)
-    tools = env.list_tools()  # [{"name", "description", "input_schema"}, ...]
-    observation = env.call("get_issue", key="ENG-12")
-    print(observation.result["title"])
-```
+`seahaven serve` runs one world and hundreds of sessions per process, each with its own instance.
+`SeahavenClient` is one client for every Seahaven world, and the stock OpenEnv client works too.
 
 An eval reads the instance over the same connection: `seahaven serve --include-control-tools`
 exposes the changeset and read-only inspection SQL as two control tools, never listed to the agent.
