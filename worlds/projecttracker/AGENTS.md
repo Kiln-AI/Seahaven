@@ -1,15 +1,13 @@
 # ProjectTracker
 
-A Seahaven world. The framework's own documents are the place to start — `architecture.md` and
-`components/projecttracker.md` under `specs/projects/seahaven_framework/` — and this file holds only
-what is particular to this world.
+A Seahaven world. This file holds only what is particular to this world; the framework's bundled
+docs are the place to start, and the commands below say how to read them.
 
 Commands: `uv run seahaven check` runs every lint over this world and is what to run before a
 commit; `uv run seahaven fixture list` lists its fixtures and `uv run seahaven fixture freeze` mints
 one; `uv run seahaven docs` prints the directory the bundled authoring documentation is installed
 in. Those pages are written: start at `index.md`, then `concepts.md` and `authoring.md`, and read
-`projecttracker.md` there for a walkthrough of this world. The specifications under
-`specs/projects/seahaven_framework/` remain the source of truth where the two disagree.
+`projecttracker.md` there for a walkthrough of this world.
 
 This world lives inside the Seahaven repository rather than beside it, so the repository's own
 `AGENTS.md` — Python 3.14, fully typed, `ty` and `ruff` and the tests clean before any commit —
@@ -18,10 +16,7 @@ applies here too.
 ## About this world
 
 - **Scope.** The whole tracker: nine tables and an FTS5 index, twenty-five tools plus Seahaven's two
-  SQL helpers, three fixtures and the generator that makes them. It is specified in
-  `specs/projects/seahaven_framework/components/projecttracker.md`; when code and that document
-  disagree, the document wins unless `phase_plans/phase_10.md` records why not (it records three
-  deviations, each with its reason).
+  SQL helpers, three fixtures and the generator that makes them.
 - **Layout.** One module per resource under `tools/`, and the `_`-prefixed modules beside them are
   shared and register nothing: `_types.py` (the argument types every tool spells its parameters
   with), `_pagination.py` (the keyset cursor), `_rows.py` (row shapes and the `require_*` lookups),

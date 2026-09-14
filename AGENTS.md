@@ -3,17 +3,10 @@
 Seahaven is a Python framework for building synthetic worlds: faithful, stateful mocks of a
 company's tool surface, on SQLite, that agents work against in evals.
 
-The spec is the source of truth and lives in `specs/projects/seahaven_framework/`: read
-`project_overview.md`, then `functional_spec.md`, then `architecture.md` and `components/`. When
-code and spec disagree, the spec wins unless a phase plan records why not. A change in behaviour
-updates the spec in the same commit.
+The bundled docs in `src/seahaven/docs/` are the written documentation, and their examples are
+executed by the test suite. Where nothing is written down, the code is the answer.
 
-We develop with the `/spec` skill (https://github.com/scosman/vibe-crafting); the phases are in
-`specs/projects/seahaven_framework/implementation_plan.md`. The skill owns the process.
-
-`BACKLOG.md` holds real issues in already-committed code that are out of scope for the phase that
-found them. Add to it rather than widening the diff under review; do not pick from it without
-asking. Close an item by deleting it in the commit that fixes it.
+We develop with the `/spec` skill: https://github.com/scosman/vibe-crafting
 
 `CONTRIBUTING.md` is the short guide for outside contributors.
 

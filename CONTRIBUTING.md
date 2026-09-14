@@ -36,7 +36,6 @@ uv run python scripts/check_licences.py
 - Keep a pull request to one change. Unrelated fixes go in their own.
 - Runtime dependencies must be permissively licensed (MIT, Apache-2.0, BSD). No copyleft.
 - No real customer data anywhere, including in the reference world.
-- If a change alters behaviour, update the spec in `specs/` in the same pull request.
 
 ## Licence
 
