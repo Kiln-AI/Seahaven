@@ -56,13 +56,21 @@ world = seahaven.World(
     """,
 )
 
+
 @world.tool
 def create_contact(ctx: seahaven.Ctx, email: str, notes: str = "") -> dict[str, str]:
     """Add a contact to the pipeline as a lead."""
-    contact = {"id": ctx.ids.uuid(), "email": email, "notes": notes, "stage": "lead", "updated_at": ctx.clock.iso()}
+    contact = {
+        "id": ctx.ids.uuid(),
+        "email": email,
+        "notes": notes,
+        "stage": "lead",
+        "updated_at": ctx.clock.iso(),
+    }
     row = ctx.db.execute("INSERT INTO contacts VALUES (?, ?, ?, ?, ?)", *contact.values())
     ctx.db.execute("INSERT INTO contacts_fts (rowid, notes) VALUES (?, ?)", row.last_rowid, notes)
     return contact
+
 
 @world.tool
 def search_stale_leads(ctx: seahaven.Ctx, query: str) -> list[dict[str, str]]:
@@ -81,9 +89,11 @@ same run, and what the agent changed is a diff:
 
 ```py
 for rollout in range(100):
-    with world.instance("big_co", seed=rollout) as world_instance:  # a private copy of the fixture, in ms
-        run_agent(world_instance)                                    # your agent, your harness
-        reward = grade(world_instance.changes())                     # the net diff the agent left behind
+    with world.instance(
+        "big_co", seed=rollout
+    ) as world_instance:  # a private copy of the fixture, in ms
+        run_agent(world_instance)  # your agent, your harness
+        reward = grade(world_instance.changes())  # the net diff the agent left behind
 ```
 
 **Serve it:** Host and OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.

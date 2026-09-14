@@ -10,6 +10,18 @@ We develop with the `/spec` skill: https://github.com/scosman/vibe-crafting
 
 `CONTRIBUTING.md` is the short guide for outside contributors.
 
+## Specs
+
+The specs in `specs/` are point-in-time records of past projects: what was designed and decided at
+the time that project was built. They are history, not a live description of the system.
+
+**You do not need to update prior specs when you change the code.** They are expected to go out of
+date, and drift between a completed spec and the current code is not a defect to fix. Do not spend a
+review round on it, and do not open follow-up work for it.
+
+Where the code and a spec disagree, the code is the answer. The bundled docs in `src/seahaven/docs/`
+are the documentation that must stay current; specs are not.
+
 ## Environment
 
 This project runs on a final release of CPython 3.14 or newer, never a release candidate: two
