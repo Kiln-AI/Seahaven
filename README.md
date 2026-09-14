@@ -1,7 +1,7 @@
 # Seahaven
 
 **Synthetic worlds for AI agents.** Fake, stateful replicas of the systems your agent works
-against, for evals and RL.
+against, for RL and evals.
 
 > **Seahaven** *(noun)*
 >
@@ -9,16 +9,11 @@ against, for evals and RL.
 > 2. The town in *The Truman Show*. An entire world built so that one inhabitant believes it is
 >    real.
 
-Seahaven is a Python framework for building synthetic worlds: stateful mocks of the tools, APIs and
-databases an agent works against, that the agent cannot tell from the real thing. You bring the
-world's logic, a schema and a set of tools. Seahaven owns the rest: a private copy of the world per
-agent, reset, a frozen clock, seeded ids, validation, hosting, and a diff of everything the agent
-changed. It excels at cloning existing systems for agent evals and RL.
+RL and evals need thousands of rollouts, in parallel, each from a known state, each inspectable
+afterwards. No real system or staging copy can do that.
 
-Evals and RL need a read-write environment you can stand up by the hundred, reset in milliseconds,
-and inspect afterwards. A real system, or its staging copy, is none of those things: expensive to
-set up, impossible to reset, throttled, and shared. A Seahaven world is a file copy to create, a SQL
-query to inspect, and a file delete to destroy.
+A Seahaven world can. Clone the tools your agent uses in production, fork hundreds of private
+copies in milliseconds, run an agent in each, see exactly what it changed, then throw them away.
 
 ## A world, in one screen
 
