@@ -46,8 +46,7 @@ Scaffold a world:
 seahaven new crm
 ```
 
-Build your world: a schema, a set of tools, and the fixtures an instance starts from. Here is a CRM
-with one table and two tools:
+Build your world: a schema and a set of tools. Here is a CRM with one table and two tools:
 
 ```python
 import seahaven
@@ -88,7 +87,7 @@ from seahaven.openenv import SeahavenClient
 with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     env.reset()
     lead = env.call("create_contact", email="ada@example.com").result
-    env.call("move_contact", contact_id=lead["id"], stage="won")
+    env.call("move_contact", contact_id=lead["id"], stage="won")  # the lead is still there
 ```
 
 For a full-size example, see [ProjectTracker](worlds/projecttracker/), the reference world: a
