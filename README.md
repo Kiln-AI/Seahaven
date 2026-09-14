@@ -1,5 +1,8 @@
 # Seahaven
 
+[Docs](src/seahaven/docs/index.md) · [PyPI](https://pypi.org/project/seahaven/) ·
+[OpenEnv](https://huggingface.co/docs/openenv/index) · [Kiln AI](https://kiln.tech)
+
 **Synthetic worlds for AI agents.** Fake, stateful replicas of the systems your agent works
 against, for RL and evals.
 
@@ -14,9 +17,6 @@ afterwards. No real system or staging copy can do that.
 
 A Seahaven world can. Clone the tools your agent uses in production, fork hundreds of private
 copies in milliseconds, run an agent in each, see exactly what it changed, then throw them away.
-
-[Docs](src/seahaven/docs/index.md) · [PyPI](https://pypi.org/project/seahaven/) ·
-[OpenEnv](https://huggingface.co/docs/openenv/index) · [Kiln AI](https://kiln.tech)
 
 ## Features
 
