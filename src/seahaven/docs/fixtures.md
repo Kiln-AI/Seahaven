@@ -51,8 +51,8 @@ value in for ever.
 
 Fill it through the world's own tools when the point is that the data is reachable the way an agent
 would have made it, or through `inst.bulk()` when you are loading thousands of rows and a tool call
-per row would spend its time on argument validation. `bulk()` yields the instance's own context —
-one transaction, under the instance lock, no call attached — and startup hooks do not run again.
+per row would spend its time on argument validation. `bulk()` yields the root node's context — one
+transaction per node, under the instance lock, no call attached — and startup hooks do not run again.
 
 ```python
 from pathlib import Path

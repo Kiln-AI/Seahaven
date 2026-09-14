@@ -1,20 +1,25 @@
 """What a tool is handed, and everything it is allowed to reach for.
 
-One `Ctx` exists per instance and carries the instance's database, clock and
-seeded randomness. A call gets a shallow copy of it with `call` set, so a tool
-sees its own `Call` and never another's, while `db` and `state` stay the one
-object the whole instance shares.
+One `Ctx` exists per node per instance and carries that node's database, state
+and seeded randomness, the instance's clock, and the worlds its node adds. A call
+gets a shallow copy of it with `call` set, so a tool sees its own `Call` and never
+another's, while `db` and `state` stay the one object the whole node shares.
+
+`Ctx` is generic in `worlds` so that a world can declare its children to a type
+checker (`Ctx[CompanyWorlds]`); bare `Ctx` is the same annotation it has always
+been, and nothing in the runtime reads the parameter.
 """
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 
 from seahaven.clock import Clock
 from seahaven.db import Db
 from seahaven.ids import Ids
 
-if TYPE_CHECKING:  # `call.py` sits above this module; the annotation is all that is needed here
+if TYPE_CHECKING:  # both modules sit above this one; the annotations are all that is needed here
     from seahaven.call import Call
+    from seahaven.handles import Worlds
 
 __all__ = ["Ctx", "InstanceInfo"]
 
@@ -34,8 +39,8 @@ class InstanceInfo:
 
 
 @dataclass(frozen=True)
-class Ctx:
-    """The instance context: `ctx` in every tool, middleware and startup hook."""
+class Ctx[W: Worlds = Worlds]:
+    """The node context: `ctx` in every tool, middleware and startup hook."""
 
     db: Db
     clock: Clock
@@ -45,12 +50,24 @@ class Ctx:
     # business, and a framework model here would only be in the way.
     state: dict[str, Any]
     instance: InstanceInfo
+    # No default, deliberately: every context is built by the framework, and one
+    # built without this would answer `ctx.worlds` with an `AttributeError`
+    # rather than with the framework's own refusal. A context that belongs to no
+    # activation gets `handles.unbound()`, whose every access raises.
+    worlds: W
     call: Call | None = None
 
-    def with_call(self, call: Call) -> Self:
-        """A copy of this context bound to one call.
+    def with_call(self, call: Call | None, *, worlds: Worlds | None = None) -> Ctx[Any]:
+        """A copy of this context bound to one call, and optionally to one activation.
 
         Shallow: `db`, `state` and `ids` are the same objects, so a tool writing
-        to `ctx.state` writes to the instance's state.
+        to `ctx.state` writes to the node's state.
+
+        `worlds` is a keyword because the chain, not the context, knows which node
+        a layer belongs to and under which activation (architecture section 6.3).
+        `call` may be `None`: a startup hook and a `bulk()` block run against a
+        live `worlds` with no call at all.
         """
-        return replace(self, call=call)
+        if worlds is None:
+            return replace(self, call=call)
+        return replace(self, call=call, worlds=worlds)

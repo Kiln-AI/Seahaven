@@ -4,8 +4,8 @@ A world may add other worlds, and what a host declares with `add_world` is a
 *graph* -- the same world reached by two routes is one store, a world added under
 a named scope is another. This module turns that graph into the one thing the
 rest of the framework reads: a `Composition`, the sealed tree of `Node`s with
-their canonical paths, their files, their bound startup keywords, and the flat,
-insertion-ordered tool list an agent sees.
+their canonical paths, their files, their bound startup keywords, the chains
+their calls descend, and the flat, insertion-ordered tool list an agent sees.
 
 A leaf world is a composition of exactly one node, with path `main`, file
 `state.sqlite` and its own tools in registration order, so nothing downstream
@@ -31,8 +31,11 @@ from typing import TYPE_CHECKING, Any
 
 import apsw
 
+from seahaven.call import Call, Handler, Middleware, build_chain, invoke
+from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
 from seahaven.fixtures import STATE_NAME
+from seahaven.handles import ctx_for
 from seahaven.tool import Tool
 
 if TYPE_CHECKING:  # `world.py` imports this module; the annotation is all that is needed here
@@ -46,7 +49,9 @@ __all__ = [
     "Node",
     "NodeKey",
     "attached_limit",
+    "build_route_chain",
     "bump",
+    "canonical_tree",
     "epoch",
     "resolve",
 ]
@@ -157,6 +162,12 @@ class Node:
     file_name: str
     schema_name: str
     bound_startup: Mapping[str, Any]
+    # What an agent-initiated call to a tool this node owns descends -- every
+    # node's middlewares along the canonical route, outermost first -- and what a
+    # call from host code through a handle descends, which is this node's own
+    # middlewares and nothing above them. Both end in `invoke` on this node.
+    agent_chain: Handler
+    internal_chain: Handler
 
     def __repr__(self) -> str:
         return f"<Node {self.path} of {self.world.name} scope={self.scope!r}>"
@@ -199,10 +210,10 @@ def resolve(root: World) -> Composition:
     in that table's order, with a message naming the path and the `add_world`
     behind it.
     """
-    order, children, paths, depths = _walk(root)
+    order, children, paths, depths, parents = _walk(root)
     edges, aliases = _edges(children, paths)
     bound, conflicts = _bound_startup(children, paths)
-    nodes = _nodes(order, paths, depths, children, aliases, bound)
+    nodes = _nodes(order, paths, depths, parents, children, aliases, bound)
     surface = _contribute(order[0], nodes, children)
 
     _raise_unknown_list_names(surface.unknown)
@@ -227,8 +238,12 @@ def resolve(root: World) -> Composition:
 type _Children = Mapping[NodeKey, tuple[tuple[str, AddedWorld, NodeKey], ...]]
 
 
-def _walk(root: World) -> tuple[list[NodeKey], _Children, dict[NodeKey, str], dict[NodeKey, int]]:
-    """One breadth-first walk of the tree: its nodes in order, their edges, paths and depths.
+def _walk(
+    root: World,
+) -> tuple[
+    list[NodeKey], _Children, dict[NodeKey, str], dict[NodeKey, int], dict[NodeKey, NodeKey]
+]:
+    """One breadth-first walk: the nodes in order, their edges, paths, depths and parents.
 
     A node is `(world object, scope)`. An edge with `store=None` passes the
     adder's scope through and an edge with `store="eu"` opens that scope for the
@@ -252,6 +267,9 @@ def _walk(root: World) -> tuple[list[NodeKey], _Children, dict[NodeKey, str], di
     children: dict[NodeKey, tuple[tuple[str, AddedWorld, NodeKey], ...]] = {}
     paths = {root_key: ROOT_PATH}
     depths = {root_key: 0}
+    # The node each one was first reached from: its parent on the canonical
+    # route, and what the chain of a node is read off.
+    parents: dict[NodeKey, NodeKey] = {}
     pending: deque[NodeKey] = deque([root_key])
     while pending:
         key = pending.popleft()
@@ -265,10 +283,25 @@ def _walk(root: World) -> tuple[list[NodeKey], _Children, dict[NodeKey, str], di
             if child not in paths:
                 paths[child] = _route(paths[key], added.name)
                 depths[child] = depths[key] + 1
+                parents[child] = key
                 order.append(child)
                 pending.append(child)
         children[key] = tuple(edges)
-    return order, children, paths, depths
+    return order, children, paths, depths, parents
+
+
+def canonical_tree(root: Node) -> Iterator[Node]:
+    """Depth-first preorder over the canonical tree: every node once, under its own path.
+
+    The tree, not the graph: an edge whose route is an alias is not descended,
+    because the node it reaches is visited under the parent its path names. So a
+    node shared by two hosts is walked once, which is what "each node's startup
+    hooks run once, however many routes reach it" asks for.
+    """
+    yield root
+    for name, child in root.added.items():
+        if child.path == _route(root.path, name):
+            yield from canonical_tree(child)
 
 
 def _route(parent_path: str, name: str) -> str:
@@ -334,6 +367,7 @@ def _nodes(
     order: Sequence[NodeKey],
     paths: Mapping[NodeKey, str],
     depths: Mapping[NodeKey, int],
+    parents: Mapping[NodeKey, NodeKey],
     children: _Children,
     aliases: Mapping[NodeKey, tuple[str, ...]],
     bound: Mapping[NodeKey, Mapping[str, Any]],
@@ -352,6 +386,8 @@ def _nodes(
             file_name=_file_name(paths[key]),
             schema_name=_schema_name(paths[key]),
             bound_startup=MappingProxyType(dict(bound[key])),
+            agent_chain=build_route_chain(_route_layers(key, parents), key),
+            internal_chain=build_route_chain(_own_layers(key), key),
         )
         for key in order
     }
@@ -359,6 +395,83 @@ def _nodes(
         for name, _added, child in children[key]:
             tables[key][name] = nodes[child]
     return nodes
+
+
+def build_route_chain(layers: Sequence[tuple[NodeKey, Middleware]], owner_key: NodeKey) -> Handler:
+    """The framework's chain, with each layer paired with the node it belongs to.
+
+    `build_chain` over middlewares each wrapped in its node -- one chain builder
+    and one context-normalisation rule in this framework, and this is the same one
+    a world without a composition has always run.
+
+    The one addition is the wrapper: a layer runs with the `Ctx` of *its own*
+    node -- its own `db`, `state`, `ids` and `worlds` -- rather than with the
+    owner's, which is what lets a host's access-control middleware read the
+    principal its own startup hook wrote while the tool it is guarding belongs to
+    a world two levels down. `call` is `build_chain`'s own, so `call is ctx.call`
+    in every layer.
+
+    A leaf world's chain pairs every layer with the root, and `ctx_for` hands each
+    one the context `build_chain` already gave it: the chain the framework has
+    today, with one wrapper in front of each layer and nothing allocated in it.
+    """
+    return build_chain(
+        [_on_node(key, middleware) for key, middleware in layers],
+        _owner_layer(owner_key, invoke),
+    )
+
+
+def _on_node(key: NodeKey, middleware: Middleware) -> Middleware:
+    """One middleware, run with the context of the node it was paired with at the seal."""
+
+    def on_node(ctx: Ctx[Any], call: Call, next_: Handler) -> Any:
+        return middleware(ctx_for(ctx, key, call), call, next_)
+
+    return on_node
+
+
+def _owner_layer(key: NodeKey, innermost: Handler) -> Handler:
+    """The bottom of every chain: the owner's own context, whatever ran above it.
+
+    Needed because the layer above `invoke` may belong to any node on the route --
+    a host with middleware and an owner with none is the ordinary case -- and
+    `invoke` opens its transaction on the context it is handed.
+    """
+
+    def call_innermost(ctx: Ctx[Any], call: Call) -> Any:
+        return innermost(ctx_for(ctx, key, call), call)
+
+    return call_innermost
+
+
+def _route_layers(
+    key: NodeKey, parents: Mapping[NodeKey, NodeKey]
+) -> list[tuple[NodeKey, Middleware]]:
+    """Every middleware on the canonical route to a node, outermost first.
+
+    The whole route rather than the host's chain and the owner's: applied
+    recursively through the nesting a composite is, that is what "the host's chain
+    outermost, then the owning world's" says, and it is the reading under which an
+    intermediate composite's error handler still shapes the errors of the tools it
+    contributes.
+    """
+    route = [key]
+    while route[-1] in parents:
+        route.append(parents[route[-1]])
+    return [
+        (node_key, middleware)
+        for node_key in reversed(route)
+        for middleware in node_key[0].middlewares
+    ]
+
+
+def _own_layers(key: NodeKey) -> list[tuple[NodeKey, Middleware]]:
+    """A node's own middlewares, for a call host code makes into it.
+
+    Only the owning world's chain runs: the host's is already wrapped around the
+    host tool making the call.
+    """
+    return [(key, middleware) for middleware in key[0].middlewares]
 
 
 def _schema_name(path: str) -> str:

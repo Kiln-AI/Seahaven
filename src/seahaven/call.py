@@ -21,7 +21,7 @@ from seahaven.tool import Tool
 if TYPE_CHECKING:  # `ctx.py` is below this module; the annotation is all that is needed here
     from seahaven.ctx import Ctx
 
-__all__ = ["Call", "Handler", "Middleware", "build_chain", "invoke", "serialise"]
+__all__ = ["Call", "Handler", "Middleware", "build_chain", "invoke", "rebind", "serialise"]
 
 type Handler = Callable[["Ctx", "Call"], Any]
 type Middleware = Callable[["Ctx", "Call", Handler], Any]
@@ -37,11 +37,17 @@ class Call:
     and the validated arguments after. A middleware that wants typed arguments
     before then calls `call.tool.validate(call.arguments)` itself; the model is
     built once at registration, so that is cheap.
+
+    `node` is the canonical path of the node that owns the tool, so a host's
+    middleware anywhere on the route knows what is being called without touching
+    a foreign store. A leaf world's calls all say `main`, which is what the
+    default spells.
     """
 
     name: str
     arguments: Mapping[str, Any]
     tool: Tool
+    node: str = "main"
 
     def with_arguments(self, **changes: Any) -> Self:
         """A copy with `changes` merged over the current arguments."""
@@ -49,19 +55,37 @@ class Call:
 
 
 def build_chain(middlewares: Sequence[Middleware], innermost: Handler) -> Handler:
-    """The middleware chain, outermost first, ending in `innermost`."""
+    """The middleware chain, outermost first, ending in `innermost`.
+
+    The one chain builder: `composition.build_route_chain`, which is what a
+    node's chains are built by, is this function over middlewares wrapped in
+    the node each was paired with at the seal.
+    """
     handler = innermost
     for middleware in reversed(middlewares):
         handler = _layer(middleware, handler)
     return handler
 
 
+def rebind(ctx: Ctx, call: Call) -> Ctx:
+    """The context a layer runs with, bound to the call it is being handed.
+
+    `call` is always `ctx.call` inside a layer. A middleware that rewrites
+    arguments passes a new `Call` down without having to rebuild the context to
+    match, and a middleware that passes the one it was given costs nothing here.
+
+    One rule, written once: `build_chain` applies it to every layer it wraps, and
+    `handles.ctx_for` applies it again on the branch where the layer's own node
+    needs no context of its own -- idempotent, so a chain built by
+    `composition.build_route_chain` through `build_chain` sees the same context
+    either way.
+    """
+    return ctx if ctx.call is call else ctx.with_call(call)
+
+
 def _layer(middleware: Middleware, next_: Handler) -> Handler:
     def call_middleware(ctx: Ctx, call: Call) -> Any:
-        # `call` is always `ctx.call`. A middleware that rewrites arguments passes
-        # a new `Call` down without having to rebuild the context to match, and a
-        # middleware that passes the one it was given costs nothing here.
-        return middleware(ctx if ctx.call is call else ctx.with_call(call), call, next_)
+        return middleware(rebind(ctx, call), call, next_)
 
     return call_middleware
 

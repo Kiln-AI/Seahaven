@@ -22,7 +22,7 @@ three pytest suites, the licence check) before it is committed.
       tool surface and `Instance.tools()` (§5). No chains, no instances yet.
       The composite test world under `tests/worlds/` (§17) with `test_composition.py` and
       `test_add_world.py`.
-- [ ] **Phase 2: contexts, handles, composite instances and dispatch.** `handles.py` (`Frame`,
+- [x] **Phase 2: contexts, handles, composite instances and dispatch.** `handles.py` (`Frame`,
       `Worlds`, `WorldHandle`); `Ctx` generic with `worlds` and `with_call(worlds=)` (§6.3);
       `Call.node`; `build_route_chain` and per-node chains on `Node` (§4.1 step 6, §7.6);
       `NodeRuntime`, N files named by path, N connections and sessions, `node_seed`, the pinned

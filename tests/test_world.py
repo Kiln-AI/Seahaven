@@ -219,7 +219,7 @@ def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
     assert world.startup_hooks == ()
 
 
-def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -> None:
+def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path, ctx: Ctx) -> None:
     """The other direction, which the docstring and the spec both promise.
 
     `world.py`'s module docstring says registration is open for the life of the
@@ -228,7 +228,10 @@ def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -
     world is copied once import-time registration is done and not before.
     """
 
+    ran: list[str] = []
+
     def passthrough(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        ran.append("middleware")
         return next_(ctx, call)
 
     def startup(ctx: Ctx) -> None:
@@ -237,7 +240,6 @@ def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -
     world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
     world.tool(echo)
     elsewhere = copy.copy(world)
-    frozen_chain = elsewhere.chain
 
     world.tool(echo, name="echo_twice")
     world.middleware(passthrough)
@@ -246,7 +248,13 @@ def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path) -
     assert "echo_twice" not in elsewhere.tools
     assert elsewhere.middlewares == ()
     assert elsewhere.startup_hooks == ()
-    assert elsewhere.chain is frozen_chain
+    # The chain is the copy's own tree sealed, and a middleware registered on the
+    # original after the copy was taken is not in it. Asserted by running it: the
+    # chain is rebuilt by every reseal, so it is the same chain, not the same
+    # object.
+    call = Call("echo", {"word": "hi"}, elsewhere.tools["echo"])
+    assert elsewhere.chain(ctx.with_call(call), call) == {"word": "hi"}
+    assert ran == []
 
 
 def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) -> None:

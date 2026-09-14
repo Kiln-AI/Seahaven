@@ -28,6 +28,7 @@ from seahaven.errors import (
     WorldBug,
 )
 from seahaven.fixtures import Fixture
+from seahaven.handles import WorldHandle, Worlds
 from seahaven.ids import Ids
 from seahaven.instances import Instance
 from seahaven.tool import Tool
@@ -55,6 +56,8 @@ __all__ = [
     "UnknownTool",
     "World",
     "WorldBug",
+    "WorldHandle",
+    "Worlds",
     "helpers",
     "sandbox",
     "sql_files",

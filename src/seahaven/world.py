@@ -32,7 +32,7 @@ from typing import Any
 import apsw
 
 from seahaven import control
-from seahaven.call import Handler, Middleware, build_chain, invoke
+from seahaven.call import Handler, Middleware
 from seahaven.composition import (
     NAME,
     RESERVED_NODE_NAMES,
@@ -46,7 +46,7 @@ from seahaven.ctx import Ctx
 from seahaven.db import build_blank
 from seahaven.errors import WorldBug
 from seahaven.fixtures import Fixture, load_all
-from seahaven.instances import Instance, InstanceManager
+from seahaven.instances import Instance, InstanceManager, calling
 from seahaven.tool import Tool
 
 __all__ = [
@@ -161,7 +161,6 @@ class World:
         # and a seal that failed is retried rather than remembered.
         self._seal: tuple[int, Composition] | None = None
         self._seal_lock = threading.Lock()
-        self.chain: Handler = build_chain((), invoke)
         # Made on the first instance, not here: a world that is only imported --
         # to be linted, to have its tools listed, to be scaffolded against --
         # never touches the working directory at all.
@@ -192,6 +191,17 @@ class World:
     def startup_hooks(self) -> Sequence[RegisteredStartupHook]:
         """The startup hooks, in registration order."""
         return tuple(self._startup_hooks)
+
+    @property
+    def chain(self) -> Handler:
+        """What an agent-initiated call to one of this world's own tools descends.
+
+        The root node's chain, which for a world that adds nothing is this world's
+        middlewares and `invoke` -- the chain it has always been. A contributed
+        tool has its own, on the node that owns it, because the route to it runs
+        through more worlds than this one.
+        """
+        return self.composition().root.agent_chain
 
     @property
     def added_worlds(self) -> Sequence[AddedWorld]:
@@ -356,7 +366,16 @@ class World:
         carries its own. Everything else keyword is passed to the startup hooks
         that named it. The instance is a context manager and leaving the block
         destroys it.
+
+        Never from inside a tool call: a handler that wants another world reaches
+        it through `ctx.worlds`, and a world that made its own instance would be
+        writing to a store no eval can see.
         """
+        if calling():
+            raise WorldBug(
+                "instances cannot be created from inside a tool call; reach added worlds "
+                "through ctx.worlds"
+            )
         return self._instances().create(fixture, seed=seed, now=now, startup_kwargs=startup_kwargs)
 
     def fixtures(self) -> list[Fixture]:
@@ -377,11 +396,11 @@ class World:
 
         A copy is a *snapshot of the four registries*, taken at copy time and
         severed in both directions: the copy does not see a tool, a middleware, a
-        startup hook or an added world registered on the original afterwards, its
-        `chain` stays
-        as it was, and nothing registered on the copy reaches back. That is the
-        one place a world stops being open for registration for the life of the
-        process, so take the copy after import-time registration is done.
+        startup hook or an added world registered on the original afterwards, so
+        its `chain` is what its own snapshot seals to, and nothing registered on
+        the copy reaches back. That is the one place a world stops being open for
+        registration for the life of the process, so take the copy after
+        import-time registration is done.
 
         The instance manager is deliberately *not* carried over: a manager hands
         the world it was made for to every instance it makes, and that world is
@@ -466,9 +485,8 @@ class World:
     def _register_middleware(self, obj: Middleware) -> Middleware:
         _check_middleware_shape(obj)
         self._middlewares.append(obj)
-        # Rebuilt rather than walked per call: the chain is a closure over the
-        # middleware it had when it was built, and instances read it at call time.
-        self.chain = build_chain(self._middlewares, invoke)
+        # The chains are closures over the middleware each node had when the tree
+        # was sealed, so this invalidates the seal and the next use rebuilds them.
         bump()
         return obj
 

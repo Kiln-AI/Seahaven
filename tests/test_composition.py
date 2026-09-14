@@ -602,6 +602,7 @@ def test_the_committed_composite_world_has_one_flat_tool_surface() -> None:
     composition = emporium.world.composition()
     assert list(composition.tools) == [
         "record_charge_owner",
+        "settle_order",
         "pay_create_charge",
         "pay_list_charges",
         "eu_create_charge",
@@ -611,6 +612,7 @@ def test_the_committed_composite_world_has_one_flat_tool_surface() -> None:
     # `shop` adds payments with an empty allow list, so nothing of it reaches the
     # agent through the shop -- and the shop's own tool still does.
     assert [entry.node.path for entry in composition.tools.values()] == [
+        "main",
         "main",
         "payments",
         "payments",

@@ -26,6 +26,7 @@ from seahaven.clock import Clock
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, open_instance
 from seahaven.errors import ToolError
+from seahaven.handles import unbound
 from seahaven.ids import Ids, instance_seed
 from seahaven.instances import Instance
 from seahaven.lint import Target
@@ -116,7 +117,9 @@ def ctx(db: Db, clock: Clock) -> Ctx:
     """An instance context as a call receives it, without an instance behind it.
 
     Everything in the call path takes a `Ctx` and nothing else, which is what
-    lets it be tested before `instances.py` exists.
+    lets it be tested before `instances.py` exists. Its `worlds` is unbound, as
+    every context with no activation behind it is: reaching another world through
+    it raises, and a chain run with it keeps it in every layer.
     """
     return Ctx(
         db=db,
@@ -124,6 +127,7 @@ def ctx(db: Db, clock: Clock) -> Ctx:
         ids=Ids(instance_seed("test")),
         state={},
         instance=InstanceInfo(id="i_test", fixture=None, seed=instance_seed("test")),
+        worlds=unbound(),
     )
 
 
@@ -198,6 +202,37 @@ def register_test_tools(world: World) -> None:
         row = ctx.db.one("SELECT datetime('now') AS sql_now")
         assert row is not None
         return {"python": ctx.clock.iso(), "sql": str(row["sql_now"])}
+
+
+def composable_world(name: str, **options: Any) -> World:
+    """A world with a table of its own and the two tools that read and write it.
+
+    Everything is named after the world -- the table, the tools -- so several of
+    these compose into one flat surface with no prefix, and a test can tell which
+    node's store a row landed in by which table holds it.
+    """
+    world = World(
+        name,
+        "1.0.0",
+        f"CREATE TABLE {name}_rows (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;",
+        **options,
+    )
+
+    @world.tool(name=f"{name}_write")
+    def write(ctx: Ctx, value: str) -> dict[str, str]:
+        """Write one row into this world's own store."""
+        row = {"id": ctx.ids.uuid(), "value": value}
+        ctx.db.execute(
+            f"INSERT INTO {name}_rows (id, value) VALUES (?, ?)", row["id"], row["value"]
+        )
+        return row
+
+    @world.tool(name=f"{name}_read")
+    def read(ctx: Ctx) -> list[str]:
+        """Every value in this world's own store, oldest first."""
+        return [row["value"] for row in ctx.db.rows(f"SELECT value FROM {name}_rows ORDER BY id")]
+
+    return world
 
 
 class Boom(ToolError):
