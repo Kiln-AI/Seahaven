@@ -33,7 +33,7 @@ be superseded by `state()`.
   environments expect from `state`, rewards and saved episodes
 - [x] Diff formats and versioned data contracts — row-level change representations and how
   long-lived structured outputs are versioned
-- [ ] Declarative assertion languages over JSON — Jinja2, JMESPath, jq, JSONPath, CEL, JSONLogic,
+- [x] Declarative assertion languages over JSON — Jinja2, JMESPath, jq, JSONPath, CEL, JSONLogic,
   SQL-over-JSON and how eval tools express assertions
 - [x] Tool-call and trajectory records — conventional shapes for a tool call record and a
   trajectory, and how they cope with size
