@@ -46,7 +46,8 @@ Scaffold a world:
 seahaven new crm
 ```
 
-Build your world: a schema and a set of tools. Here is a CRM with one table and two tools:
+Build your world: a schema and a set of tools. Here is a CRM with one table, a search index and two
+tools:
 
 ```python
 import seahaven
@@ -54,24 +55,43 @@ import seahaven
 world = seahaven.World(
     name="crm",
     version="1.0.0",
-    schema="CREATE TABLE contacts (id TEXT PRIMARY KEY, email TEXT NOT NULL, stage TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;",
+    schema="""
+    CREATE TABLE contacts (id TEXT PRIMARY KEY, email TEXT NOT NULL, notes TEXT NOT NULL, stage TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
+    CREATE VIRTUAL TABLE contacts_fts USING fts5(notes, content='contacts');
+    """,
 )
 
 @world.tool
-def create_contact(ctx: seahaven.Ctx, email: str) -> dict[str, str]:
+def create_contact(ctx: seahaven.Ctx, email: str, notes: str = "") -> dict[str, str]:
     """Add a contact to the pipeline as a lead."""
-    contact = {"id": ctx.ids.uuid(), "email": email, "stage": "lead", "updated_at": ctx.clock.iso()}
-    ctx.db.execute("INSERT INTO contacts VALUES (?, ?, ?, ?)", *contact.values())
+    contact = {"id": ctx.ids.uuid(), "email": email, "notes": notes, "stage": "lead", "updated_at": ctx.clock.iso()}
+    row = ctx.db.execute("INSERT INTO contacts VALUES (?, ?, ?, ?, ?)", *contact.values())
+    ctx.db.execute("INSERT INTO contacts_fts (rowid, notes) VALUES (?, ?)", row.last_rowid, notes)
     return contact
 
 @world.tool
-def move_contact(ctx: seahaven.Ctx, contact_id: str, stage: str) -> dict[str, str]:
-    """Move a contact to a new pipeline stage."""
-    ctx.db.execute("UPDATE contacts SET stage = ?, updated_at = ? WHERE id = ?", stage, ctx.clock.iso(), contact_id)
-    return ctx.db.one("SELECT * FROM contacts WHERE id = ?", contact_id)
+def search_stale_leads(ctx: seahaven.Ctx, query: str) -> list[dict[str, str]]:
+    """Full-text search over leads nobody has touched in 30 days."""
+    return ctx.db.rows(
+        "SELECT contacts.* FROM contacts_fts JOIN contacts ON contacts.rowid = contacts_fts.rowid "
+        "WHERE contacts_fts MATCH ? AND stage = 'lead' AND updated_at < datetime('now', '-30 days')",
+        query,
+    )
 ```
 
-Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
+Each tool's signature is the JSON schema an agent sees, and its docstring is the description. Time
+comes from the instance's clock, in Python and in SQL: `search_stale_leads` gives the same answer in
+every rollout, this year and next.
+
+Run your agent against it. Every rollout gets a private copy of a fixture, the same seed replays the
+same run, and what the agent changed is a diff:
+
+```py
+for rollout in range(100):
+    with world.instance("big_co", seed=rollout) as world_instance:  # a private copy of the fixture, in ms
+        run_agent(world_instance)                                    # your agent, your harness
+        reward = grade(world_instance.changes())                     # the net diff the agent left behind
+```
 
 Serve it. Every session gets its own instance, and any OpenEnv client can drive it:
 
@@ -83,9 +103,9 @@ seahaven serve
 from seahaven.openenv import SeahavenClient
 
 with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
-    env.reset()
-    lead = env.call("create_contact", email="ada@example.com").result
-    env.call("move_contact", contact_id=lead["id"], stage="won")  # the lead is still there
+    env.reset(fixture="big_co", seed=7)
+    env.call("create_contact", email="ada@example.com", notes="asked about pricing for 50 seats")
+    stale = env.call("search_stale_leads", query="pricing").result
 ```
 
 For a full-size example, see [ProjectTracker](worlds/projecttracker/), the reference world: a
