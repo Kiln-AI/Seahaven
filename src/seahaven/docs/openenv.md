@@ -14,6 +14,8 @@ Two consequences worth stating plainly:
 
 - **Any OpenEnv client works.** The stock Python client drives a Seahaven world; so does
   `SeahavenClient`, which is the same client with the observation typed and two conveniences on it.
+  One divergence is worth reading before writing a client of your own: how a tool's *error* is
+  carried, below.
 - **Any language works.** The wire is JSON over a WebSocket, documented below. A harness in
   TypeScript, Go or Rust needs a WebSocket and a JSON encoder, not a Seahaven port.
 
@@ -201,7 +203,7 @@ In process — in pytest, in a script, in a harness that does not serve — this
 flag: `inst.changes()` is the same changeset, and `inst.call("controller_changes")` always reaches
 the control tool.
 
-## No rewards
+## No rewards, no done
 
 **A Seahaven observation carries no reward.** `reward` is always `null` and `done` is always
 `false`. The environment never ends an episode and never scores one.
@@ -214,13 +216,12 @@ kind — a large, complex application: a CRM, an issue tracker, a billing system
 internal tool surface. **There is no universal reward signal for a world like that.** Whether a
 final state is good depends entirely on what the agent was asked to do in that session. The same
 database, with the same three issues closed and one contact created, is a success for one scenario
-and a failure for the next.
+and a failure for the next. **Whether the session is done is a decision of the caller, not of the
+environment**, for the same reason: the environment cannot know what finishing looks like.
 
 The thing that *does* know the goal is the eval or RL framework driving the episode. So Seahaven
 gives it the material to judge with — the complete, net diff of what the agent changed — and stays
-out of the judging. Grade on state, not on the transcript: a rollout that talked its way to the
-right answer and a rollout that did the work are not the same rollout, and the changeset is where
-the difference shows.
+out of the judging.
 
 **The payoff is reuse.** A world with no opinion about reward is a world you build once. Build
 `MyCorp`, freeze the fixture `BigClient`, and then write hundreds of scenarios against that
@@ -230,21 +231,26 @@ scenario would need a new world.
 
 ## Where Seahaven diverges from OpenEnv's conventions
 
-Three, all deliberate, all things a client author should know.
+Two, both deliberate, both things a client author should know.
 
 - **A tool's error travels on `error`.** OpenEnv's convention reserves `error` for transport
   failures and puts a tool's own error inside `result`. Seahaven does the opposite: a tool error is
   data the agent reads, it must never close the session, and one shape for it across every
   world — `{"code", "message", "details"}`, the same dict an in-process `ToolError` gives — is
   worth more than the convention. Read `observation.error`, expect those three keys.
+
+  **This has a cost, and it is not only stylistic.** OpenEnv's own `CallToolObservation` types that
+  field as its `ToolError` model — `{error_type, message}`, and `extra="forbid"` — so a client that
+  validates a frame into *that* model rejects a Seahaven tool error outright, and OpenEnv's MCP
+  client raises on any non-null `error` before reading `.message` off it. Successes are
+  interoperable with every client; a tool *error* wants a client that parses `error` leniently, or
+  `SeahavenClient`, whose observation model is this shape.
+
 - **A `WorldBug` fails the frame loudly.** It is not rendered as an observation. An eval that
   scored a run while the world was broken is the failure this design exists to prevent, so the
   author sees their bug instead. An unexpected exception inside a tool is a different case: it is
   logged with its traceback and answered with a fixed `{"code": "internal", "message": "internal
   error"}`, so engine text never reaches an agent.
-- **`State` carries extra fields that OpenEnv does not publish.** `fixture`, `now` and `world` are
-  on the state message; `GET /schema` and `GET /state` publish the base model and drop them (B13).
-  Read state over the WebSocket.
 
 ## MCP moves are not supported
 
@@ -278,7 +284,7 @@ grade the final state against what the scenario asked for, then
 [auto-optimize](https://kiln.tech/features/auto-optimize) the agent — prompts, models,
 fine-tuning — against that eval. Same world, same fixture, as many scenarios as the job needs.
 
-Kiln is open source, and Seahaven is built by the same team.
+Seahaven is built by the Kiln AI team.
 
 ## Rough edges, and one install trap
 
