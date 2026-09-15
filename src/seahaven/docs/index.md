@@ -1,8 +1,9 @@
 # Seahaven
 
 Seahaven is a Python framework for building **synthetic worlds**. A synthetic world is a working
-copy of the tools an agent uses at a real company: an issue tracker, a CRM, a billing system. The
-copy is fake, but it stores real state in a SQLite database, so a write changes every later read.
+copy of a system an agent works against: a CRM behind a REST API, a payment processor with a SQL
+database, an issue tracker, a warehouse system. The copy is fake, but it stores real state in a
+SQLite database, so a write changes every later read.
 
 Evals and reinforcement learning need thousands of runs. Each run has to start from a known state,
 run in parallel with the others, and be inspectable afterwards. A real system cannot do that, and

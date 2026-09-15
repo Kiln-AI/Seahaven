@@ -290,12 +290,12 @@ the design decision most worth understanding before you build on this.
 
 Many RL environments model a world where reward is easy to state. A game has a win, a score and a
 terminal state, and the environment is the natural place to compute them. Seahaven models the other
-kind: a large business application, or a company's whole internal tool surface. **There is no
-universal reward signal for a world like that.** Whether a final state is good depends entirely on
-what the agent was asked to do in that session. The same database, with the same three issues closed
-and one contact created, is a success for one scenario and a failure for the next. Whether the
-session is finished is a decision of the caller for the same reason: the environment cannot know
-what finishing looks like.
+kind: a stateful system with no built-in idea of winning, such as a CRM, a payment ledger or an
+issue tracker. **There is no universal reward signal for a world like that.** Whether a final state
+is good depends entirely on what the agent was asked to do in that session. The same database, with
+the same three issues closed and one contact created, is a success for one scenario and a failure
+for the next. Whether the session is finished is a decision of the caller for the same reason: the
+environment cannot know what finishing looks like.
 
 The thing that does know the goal is the eval or RL framework driving the episode. So Seahaven gives
 it the material to judge with — the complete, net difference of what the agent changed — and stays
