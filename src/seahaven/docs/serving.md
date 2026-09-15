@@ -85,12 +85,17 @@ episode's. Control tools are never in it.
 {"error": {"code": "NOT_FOUND", "message": "issue ENG-99 not found", "details": {"kind": "issue"}}}
 ```
 
-**A tool error travels on `error`, as data.** This diverges from OpenEnv's convention, which reserves
-`error` for transport failures and puts a tool's error inside `result`. Seahaven takes the divergence
-deliberately: a tool error is something the agent reads and acts on, it must never close the session,
-and one shape for it across every world — the same dict `ToolError.to_dict()` gives in process — is
-worth more than the convention. Evals should read `observation.error` and expect `{"code",
-"message", "details"}`.
+**A tool error travels on `error`, as data.** It is something the agent reads and acts on, it never
+closes the session, and it has one shape across every world — the same dict `ToolError.to_dict()`
+gives in process. Evals should read `observation.error` and expect `{"code", "message", "details"}`.
+
+Note: OpenEnv's docstrings say `error` is only for transport failures, but its own implementation
+uses it for tool errors too — `MCPEnvironment` answers a failed tool call with
+`ToolErrorType.EXECUTION_ERROR`, "tool ran but failed". Seahaven follows the convention their code
+establishes rather than the one their docstrings describe. The shape does differ: OpenEnv's
+`ToolError` is `{error_type, message}` and forbids extra keys, so a `code` and `details` do not fit
+in it — a client that validates against that model wants a lenient parse of `error`, or
+`SeahavenClient`.
 
 What does *not* become an observation is a `WorldBug`: it propagates and fails the frame loudly,
 because an eval that scored a run while the world was broken is the failure this design exists to
