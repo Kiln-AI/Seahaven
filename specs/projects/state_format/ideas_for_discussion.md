@@ -72,6 +72,41 @@ it. Sections below are left as argued; where a decision overrides a section, the
 - Whole rows, `changed`, `indirect`, ordering and the net-versus-log question are under
   discussion; the briefing in Appendix A is the material for it.
 
+**Batch 4 (2026-09-15), §3 the diff, second pass. Positions proposed in discussion, pending
+confirmation:**
+
+- **No whole database.** Zero upside: the starting state is a lookup by world name, world version,
+  fixture id and fixture hash, and a judge that has it can rebuild anything from it plus the log.
+  Storing the fixture once beats storing it per run (one small fixture is already 1.9 MB).
+- **No whole rows either, by the same logic.** Whole rows for touched rows are a partial copy of
+  the starting state; a judge that needs any untouched column needs the fixture, and once it has
+  the fixture it needs nothing from the row. Records carry the key and the changed columns only:
+  `key` separate; on an update `before` and `after` hold exactly the changed non-key columns (which
+  makes a separate `changed` list redundant); an insert's `after` and a delete's `before` are whole
+  rows, as SQLite already gives them.
+- **The ordered per-call change log is the authoritative data.** It strictly dominates the net
+  diff (the diff is a fold of the log; the log cannot be recovered from the diff), it answers
+  intermediate-value and ordering questions, and it attributes every row change to the call that
+  made it, which the diff cannot. Each entry is tagged with the call ordinal `i` from `calls`.
+- **The net diff is also in the document, derived by the producer.** Most judges want final
+  state, and the exact-match use ("carry the diff from a known-good run") needs a canonical form
+  that every consumer computes identically. The fold has enough rules (insert+update = insert,
+  insert+delete = nothing, update+update with columns that returned to their original value
+  dropped, delete+insert = update, PK rewrite = delete+insert) that N judge implementations in N
+  languages would disagree at the edges. The producer already has the exact net diff for free:
+  it is what `inst.changes()` returns from the cumulative session. Stated invariant: `diff ==
+  fold(log)`, and a helper can verify it. Cost is at most a doubling of a small block.
+- **`indirect` stays**: a boolean per record, SQLite's own flag, free.
+- **Composition**: every log and diff record carries a field naming the sub-world it belongs to,
+  `null` for the root, so a composed world's document is one flat list that still materialises to
+  one table. Name to be chosen (`world` collides with the root provenance field; `scope` or
+  `namespace` are candidates). Tool names in `calls` and `counters` need the same treatment.
+- **A judge helper ships with Seahaven** (Python; other languages are the judge system's): load a
+  document, fold the log and check it against the diff, materialise both into SQLite tables, and
+  given the fixture file, overlay the log to produce full before and after rows or the full final
+  database. This is the "reassemble the whole DB from fixture plus log" path, done once in one
+  place rather than by every judge.
+
 ## 1. Versioning: producer-side formatters, pinned per world
 
 Your proposal (`state(format="v1")`, a pluggable `StateFormatter`, a world-level default) matches
