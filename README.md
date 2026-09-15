@@ -146,8 +146,8 @@ environments. `seahaven serve` runs one world, creating a unique instance and ep
 connection. Serve over 100 instances per process. Connect with any OpenEnv client or tool, in any
 language, like [Kiln](https://kiln.tech).
 
-[Serving a world](src/seahaven/docs/serving_and_openenv.md) is the whole story: the client, the wire
-protocol, what a session is, and why a Seahaven observation carries no reward.
+See [Serving a world](src/seahaven/docs/serving_and_openenv.md) for more details: the client, the
+wire protocol, what a session is, and why a Seahaven observation carries no reward.
 
 ## Agents
 
