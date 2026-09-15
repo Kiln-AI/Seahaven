@@ -68,12 +68,16 @@ class SeahavenObservation(CallToolObservation):
     connection reaches the same check (`http_server.py` line 985 in openenv
     0.4.2), which answers an internal error to anything that is not one.
 
-    `error` is a tool's own error, which diverges from OpenEnv's convention that
-    `error` is a transport failure and a tool's error travels inside `result`.
-    Seahaven takes the divergence deliberately: a tool error is data the agent
-    reads, it must never close the session, and one shape for it across every
-    world -- `{"code", "message", "details"}`, the same dict `ToolError.to_dict`
-    gives in-process -- is worth more than the convention.
+    `error` is a tool's own error: data the agent reads, which never closes the
+    session, in one shape across every world -- `{"code", "message", "details"}`,
+    the same dict `ToolError.to_dict` gives in-process. OpenEnv's docstrings say
+    the field is only for transport failures, but its own `MCPEnvironment`
+    answers a failed tool call with `ToolErrorType.EXECUTION_ERROR` ("tool ran
+    but failed"), so this follows the convention their code establishes rather
+    than the one their docstrings describe. The shape differs: their `ToolError`
+    is `{error_type, message}` and forbids extra keys, so a strict parse of
+    `error` against it rejects a tool error -- `SeahavenClient` types the field
+    as this dict, and any lenient client reads it fine.
     """
 
     # All three carry descriptions of their own rather than the inherited ones,

@@ -15,7 +15,7 @@ Two consequences worth stating plainly:
 
 - **Any OpenEnv client works.** The stock Python client drives a Seahaven world; so does
   `SeahavenClient`, which is the same client with the observation typed and two conveniences on it.
-  One divergence is worth reading before writing a client of your own: how a tool's *error* is
+  One detail is worth reading before writing a client of your own: how a tool's *error* is
   carried, below.
 - **Any language works.** The wire is JSON over a WebSocket, documented below. A harness in
   TypeScript, Go or Rust needs a WebSocket and a JSON encoder, not a Seahaven port.
@@ -234,21 +234,21 @@ pair — each with its own goal, its own grader, its own idea of what a good fin
 that computed a reward would have baked one scenario's goal into the environment, and the next
 scenario would need a new world.
 
-## Where Seahaven diverges from OpenEnv's conventions
+## Two things a client author should know
 
-Two, both deliberate, both things a client author should know.
+- **A tool's error travels on `error`.** It is data the agent reads, it never closes the session,
+  and it has one shape across every world — `{"code", "message", "details"}`, the same dict an
+  in-process `ToolError` gives. Read `observation.error`, expect those three keys.
 
-- **A tool's error travels on `error`.** OpenEnv's convention reserves `error` for transport
-  failures and puts a tool's own error inside `result`. Seahaven does the opposite: a tool error is
-  data the agent reads, it must never close the session, and one shape for it across every
-  world — `{"code", "message", "details"}`, the same dict an in-process `ToolError` gives — is
-  worth more than the convention. Read `observation.error`, expect those three keys.
+  Note: OpenEnv's docstrings say `error` is only for transport failures, but its own implementation
+  uses it for tool errors too — `MCPEnvironment` answers a failed tool call with
+  `ToolErrorType.EXECUTION_ERROR`, "tool ran but failed". Seahaven follows the convention their code
+  establishes rather than the one their docstrings describe.
 
-  **This has a cost, and it is not only stylistic.** OpenEnv's own `CallToolObservation` types that
-  field as its `ToolError` model — `{error_type, message}`, and `extra="forbid"` — so a client that
-  validates a frame into *that* model rejects a Seahaven tool error outright, and OpenEnv's MCP
-  client raises on any non-null `error` before reading `.message` off it. Successes are
-  interoperable with every client; a tool *error* wants a client that parses `error` leniently, or
+  The shape does differ, and it is the one thing to plan for: OpenEnv types the field as its own
+  `ToolError` — `{error_type, message}`, `extra="forbid"` — so a `code` and `details` do not
+  fit in it, and a client that validates a frame into *that* model will reject a tool error.
+  Successes are interoperable everywhere. For errors, parse `error` leniently, or use
   `SeahavenClient`, whose observation model is this shape.
 
 - **A `WorldBug` fails the frame loudly.** It is not rendered as an observation. An eval that
