@@ -51,6 +51,10 @@ read-only SQL access (`controller_run_sql`) and the changeset (`controller_chang
 This fails the "stable and reusable" bar above. We want `state` to replace them. We don't need to
 pull them out right away, but we should update the docs to push `state()` as the primary surface.
 
+Note: `src/seahaven/docs/openenv.md` is being added on another branch and will be in `main` soon.
+It describes the OpenEnv surface, including `state`, and will conflict with this design. Updating
+it for the new design is part of this project's docs work.
+
 ## DB format
 
 This is a key design decision. Our design is that one world/fixture might have hundreds of
