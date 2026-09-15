@@ -26,6 +26,29 @@ Two things the research settled that reframe the brief:
    assertion document, with the assertion document shipped as the dataset label. We are on the
    right track, and there is a worked example to steal from and improve on.
 
+## Decisions so far
+
+A running log of what has been settled in discussion, so the functional spec can be written from
+it. Sections below are left as argued; where a decision overrides a section, the log wins.
+
+**Batch 1 (2026-09-15), §1 versioning:**
+
+- The version lives in the document. Format string style is `seahaven.state/1`.
+- The wire returns the whole state document as the OpenEnv state object. An earlier session
+  established that a Seahaven world can return a custom JSON state object over the WebSocket state
+  message (the HTTP `GET /state` route strips subclass fields; that is `BACKLOG.md` B13 and not our
+  path). The plan carries a step that confirms this end to end, since nothing here works without it.
+- The format is chosen at `reset(state_format=...)`, falling back to `World(state_format=...)`.
+  `reset` wins. `state_format` joins `fixture`, `seed` and `now` as a reserved reset keyword that a
+  startup hook may not name.
+- `World(state_format=...)` is required: there is no runtime default, because a default that tracks
+  the newest format would change what every eval saves on a Seahaven upgrade, and a default that
+  never moves is a constant a future maintainer will be tempted to bump. A world that gives none
+  fails at construction with a message naming the current format. The scaffold (`seahaven new`)
+  writes the current format into the new world, so a pin is chosen once, at creation, the way the
+  fixture sidecar's `format_version` is. Changing a world's pin is a change to the world, and the
+  docs say so.
+
 ## 1. Versioning: producer-side formatters, pinned per world
 
 Your proposal (`state(format="v1")`, a pluggable `StateFormatter`, a world-level default) matches
