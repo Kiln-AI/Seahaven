@@ -20,8 +20,9 @@ A world is an ordinary Python package with three parts:
 - **fixtures**, frozen databases that hold a starting state such as "a twelve-person agency with six
   months of history".
 
-An eval makes an **instance** — a private copy of one fixture that lasts for one run — drives it
-through tool calls, and grades the state the agent left behind.
+When a client such as an RL runner or an eval case starts a run, Seahaven creates an **instance** of
+the world: an isolated copy of one fixture that lasts for that run or episode. The client drives the
+instance through tool calls, then grades the state the agent left behind.
 
 ## A small world, end to end
 
