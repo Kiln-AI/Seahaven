@@ -64,6 +64,14 @@ it. Sections below are left as argued; where a decision overrides a section, the
   by other means (the world package, `describe_schema`, the fixture); a state document is produced
   once per episode and is not the place to repeat it.
 
+**Batch 3 (2026-09-15), §3 the diff, first pass:**
+
+- The diff carries no ignore list; what is noise is the judge's decision.
+- Flat versus grouped is open, and the answer has to account for composition: the grouping
+  question applies at the database level as well as inside it. See §3 briefing, part 5.
+- Whole rows, `changed`, `indirect`, ordering and the net-versus-log question are under
+  discussion; the briefing in Appendix A is the material for it.
+
 ## 1. Versioning: producer-side formatters, pinned per world
 
 Your proposal (`state(format="v1")`, a pluggable `StateFormatter`, a world-level default) matches
@@ -350,3 +358,170 @@ WHERE c.table = 'issues' AND c.op = 'update'
   for updates on a large diff. Both are architecture-step checks.
 - How Prime Intellect's hub and prime-rl consume saved traces, if we want a second consumer beside
   TRL to design against.
+
+## Appendix A: briefing for §3, the diff
+
+### 1. What `inst.changes()` produces today
+
+Three shapes, pinned by `tests/test_changes.py`. A table `notes(id TEXT PRIMARY KEY, body TEXT,
+n INTEGER)`, fixture row `{"id": "n1", "body": "hello", "n": 3}`:
+
+```jsonc
+// INSERT INTO notes VALUES ('n2', 'new', 1)          -> whole new row
+{"table": "notes", "op": "insert", "key": {"id": "n2"},
+ "before": null, "after": {"id": "n2", "body": "new", "n": 1}}
+
+// UPDATE notes SET body = 'goodbye' WHERE id = 'n1'   -> key + changed columns, both sides
+{"table": "notes", "op": "update", "key": {"id": "n1"},
+ "before": {"id": "n1", "body": "hello"}, "after": {"body": "goodbye"}}
+//                                   ^ "n": 3 is not here, on either side
+
+// DELETE FROM notes WHERE id = 'n1'                  -> whole old row
+{"table": "notes", "op": "delete", "key": {"id": "n1"},
+ "before": {"id": "n1", "body": "hello", "n": 3}, "after": null}
+```
+
+The `update` shape is SQLite's: an update carries the primary key and the columns the update
+modified, nothing else, on both sides. That is the source of "a judge cannot read an unchanged
+column from the diff".
+
+### 2. It is a net diff: what a sequence of writes turns into
+
+SQLite's session extension records, per primary key, the row *as it was the first time the
+episode touched it*, and at `changes()` time compares that against the live table. So the diff is
+"fixture versus now", per row, and the path between is gone. Verbatim from SQLite: "if a row is
+inserted and then later deleted while a session object is active, neither the insert nor the
+delete will be present in the changeset", and "if there is a row with a matching primary key in
+the database, but all fields contain their original values, no change is added".
+
+| The episode did | The diff shows |
+|---|---|
+| set `n` from 1 to 2, then back to 1 | nothing |
+| update `body` twice | one `update`, `before` the fixture's value, `after` the final value |
+| insert a row, then update it | one `insert` with the final values |
+| insert a row, then delete it | nothing |
+| delete a row, then insert one with the same key | one `update` (or nothing, if identical) |
+| update a row to the values it already had | nothing |
+| change a primary key value | a `delete` of the old key and an `insert` of the new |
+| a call that raised and rolled back | nothing |
+| a startup hook's rows | nothing: the session attaches after the hooks |
+| a trigger or `ON DELETE CASCADE` write | included, indistinguishable from the agent's unless the `indirect` flag is surfaced |
+| a write to a table in `untracked_tables`, or an FTS5 shadow table | nothing |
+| a row with `NULL` in any primary-key column | nothing, silently |
+
+This is a deliberate property, and it is what makes two runs that reach the same state agree
+whatever route they took. It is also a limit: "the agent first moved the issue to `in_review`
+and then to `done`" is not a question a net diff can answer. A per-call log is a different
+artifact (Dolt ships both as separate tables and does not merge them), and it is the P2 format
+in §4. The judge families that need it are ordering judges; everything about end state does not.
+
+### 3. The same update in the four formats the research keeps citing
+
+The row `issues:iss_3` goes from `status = "open"` to `"done"`, and the tool also bumps
+`updated_at`. Every format below is real output, lightly trimmed.
+
+**Seahaven today** (SQLite changeset semantics, changed columns only):
+
+```jsonc
+{"table": "issues", "op": "update", "key": {"id": "iss_3"},
+ "before": {"id": "iss_3", "status": "open", "updated_at": "2026-03-01T…"},
+ "after":  {"status": "done", "updated_at": "2026-03-04T…"}}
+```
+
+**Agent-Diff** (2026, the closest prior art: whole rows on both sides, table on the row,
+grouped by op):
+
+```jsonc
+{"inserts": [], "deletes": [],
+ "updates": [{"__table__": "issues",
+              "before": {"id": "iss_3", "status": "open", "assignee_id": "u_2", "title": "…", "updated_at": "…"},
+              "after":  {"id": "iss_3", "status": "done", "assignee_id": "u_2", "title": "…", "updated_at": "…"}}]}
+```
+
+Which columns changed is recomputed at judge time (`_changed_keys(before, after, ignores)`).
+Their judge for this row is `{"diff_type": "changed", "entity": "issues", "where": {"id": "iss_3"},
+"expected_changes": {"status": {"to": "done"}}}` with `strict: true`, which fails if any column
+outside `expected_changes` and outside the ignore list changed. `updated_at` is on every shipped
+suite's global ignore list.
+
+**Debezium** (the change-data-capture envelope most of the industry copies; a log entry per
+commit, not a net diff):
+
+```jsonc
+{"op": "u",
+ "before": {"id": "iss_3"},                       // PK only, unless REPLICA IDENTITY FULL
+ "after":  {"id": "iss_3", "status": "done", "assignee_id": "u_2", "title": "…", "updated_at": "…"},
+ "source": {"connector": "postgresql", "db": "tracker", "table": "issues", "txId": 556, "lsn": 24023128},
+ "ts_ms": 1465584025523}
+```
+
+The `source` block is the part nobody else has and everybody wishes they had; §2's provenance
+block is our version of it, at the document root because one episode has one source.
+
+**Dolt** (`dolt diff -r json`, a net diff between two commits, grouped by table, whole rows, NULLs
+omitted, no `op` field):
+
+```jsonc
+{"tables": [{"name": "issues",
+             "data_diff": [{"from_row": {"id": "iss_3", "status": "open", "assignee_id": "u_2", "title": "…"},
+                            "to_row":   {"id": "iss_3", "status": "done", "assignee_id": "u_2", "title": "…"}}]}]}
+```
+
+An insert is `{"from_row": {}, "to_row": {…}}`; a delete is the reverse. As a SQL table
+(`dolt_diff_issues`) the same row is `from_status = 'open', to_status = 'done', diff_type =
+'modified'`, which is why "status went from A to B" is a one-line `WHERE` there.
+
+### 4. The proposed v1 shape, on the same row
+
+```jsonc
+{"table": "issues", "op": "update", "key": {"id": "iss_3"}, "indirect": false,
+ "changed": ["status", "updated_at"],
+ "before": {"id": "iss_3", "status": "open", "assignee_id": "u_2", "title": "…", "updated_at": "…"},
+ "after":  {"id": "iss_3", "status": "done", "assignee_id": "u_2", "title": "…", "updated_at": "…"}}
+```
+
+What each addition buys:
+
+- **Whole rows.** "Every issue whose status changed still has an assignee" becomes writable.
+  Cost: the row's width in bytes per update; nothing for inserts and deletes, which are whole
+  already. How to build it: `after` is the live row by key; `before` is `after` with the
+  changeset's old values overlaid. Both are available at `state()` time because the instance is
+  still alive; neither is available later, which is why it has to be in the document.
+- **`changed`.** Keeps the information the whole-row shape would otherwise hide, and makes
+  "changed `status` and nothing else" a set comparison instead of a column-by-column diff the
+  judge author has to write. Agent-Diff recomputes this at judge time; we know it exactly and
+  should say it.
+- **`indirect`.** SQLite's own flag: `true` when a trigger or foreign-key action made the change
+  rather than the statement. A world with an `issue_events` trigger, or `ON DELETE CASCADE` on
+  `issue_labels`, produces rows the agent never asked for; today they look like agent writes.
+- **Order.** SQLite documents within-table order as undefined and the implementation emits hash
+  order. Sorting by `(table, key)` costs nothing and makes two identical runs produce identical
+  documents, which is what lets an eval diff two state files.
+
+### 5. Flat, grouped, and composition
+
+Three ways to arrange the same changes:
+
+```jsonc
+// (a) flat: one list, table on the record
+"changes": [{"table": "issues", "op": "update", …}, {"table": "issue_events", "op": "insert", …}]
+
+// (b) grouped by table, then op (Dolt-like)
+"tables": {"issues": {"updates": [{…}]}, "issue_events": {"inserts": [{…}]}}
+
+// (c) grouped by op, table on the record (Agent-Diff)
+"updates": [{"table": "issues", …}], "inserts": [{"table": "issue_events", …}]
+```
+
+(a) materialises into one SQL table in one step and filters the same way in every expression
+language. (b) reads best by eye and makes "did `comments` change at all" a key lookup. (c) is the
+weakest of the three: it optimises for the op, which is the question asked least. The ideas doc
+recommends (a) plus a `summary` of counts per table and op, which gives (b)'s lookup for the
+common case without duplicating rows.
+
+The composition point raised in discussion: the grouping question does not stop at the row list.
+The database block is itself a group inside the state document, beside `calls` and `counters`,
+and the shape has to be designed so that a document can carry more than one such group, and so
+that the database group can be split further if a world ever has more than one database or more
+than one namespace of tables. That is a §3 decision still to be made, and it constrains (a)
+versus (b): (b) already has a natural place to put a namespace; (a) needs a field for it.
