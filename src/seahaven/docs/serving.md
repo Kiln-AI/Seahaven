@@ -1,8 +1,13 @@
 # Serving a world
 
 Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/huggingface/OpenEnv)
-(v0.4.x). There is no other remote API for the agent side: a world is either driven in process
-through `world.instance(...)`, or over OpenEnv.
+(v0.4.x), over its WebSocket endpoint `/ws`. There is no other remote API for the agent side: a
+world is either driven in process through `world.instance(...)`, or over that WebSocket.
+
+**In particular there is no MCP server here.** An OpenEnv app publishes a `/mcp` endpoint, but it is
+not the MCP protocol and nothing on it can reach an instance, so Seahaven refuses every method on
+it. That refusal, and why `/ws` is the agent-facing transport in spite of OpenEnv's own advice, are
+under "Rough edges" below.
 
 The server and the client live in Seahaven's `serve` extra, because `openenv`'s dependency tree is
 large and a world used in process should not pay for it.
@@ -288,8 +293,8 @@ sign-off and has not happened.
 
 ## Rough edges worth knowing before you meet them
 
-These are real and reproduced, and all three are OpenEnv's rather than Seahaven's. None of them is
-in the WebSocket path an eval and `SeahavenClient` use.
+These are real and reproduced, and every one of them is OpenEnv's rather than Seahaven's. None of
+them is in the WebSocket path an eval and `SeahavenClient` use.
 
 - **`POST /reset`, `POST /step` and `GET /state` over plain HTTP are refused, with a `501`.**
   OpenEnv builds a brand-new environment inside each of those three handlers and closes it again
@@ -328,6 +333,72 @@ in the WebSocket path an eval and `SeahavenClient` use.
   fix: the defect is upstream's, is unfixed there, and a world built on a stock OpenEnv server still
   has it. Drive episodes over `/ws`.
   ([huggingface/OpenEnv#1156](https://github.com/huggingface/OpenEnv/issues/1156).)
+- **`POST /mcp` and `ws /mcp` are refused, with a JSON-RPC error inside a `200`.** OpenEnv's `/mcp`
+  is not MCP. It dispatches exactly four methods — `openenv/session/create`,
+  `openenv/session/close`, `tools/list` and `tools/call` — and has no `initialize`, no capability
+  negotiation, no notifications, no SSE, no `Mcp-Session-Id`, no resources and no prompts. An
+  off-the-shelf MCP client (Claude Desktop, Cursor, the `mcp` and `fastmcp` SDKs) opens with
+  `initialize`, gets `-32601 Method not found: initialize`, and never gets further. Upstream says
+  this is deliberate and temporary: its RFC 003 leans on MCP's custom-transports clause, lists "no
+  SSE streaming · no server-initiated messages · **no session management**" as known gaps, and
+  plans standard Streamable HTTP later.
+
+  Underneath that, every door on it is dead for one reason: the dialect has no `reset`, and a
+  Seahaven tool call needs an instance. Left alone, `tools/list` succeeds and advertises every tool
+  the world has, and then every `tools/call` behind it answers `reset first` — with or without an
+  `openenv/session/create` session id, and over the websocket exactly as over `POST`. That is a
+  well-formed answer about nothing, which is what the three HTTP routes above are refused for. So
+  all four methods are refused, on both transports, in one statement.
+
+  **The refusal is an HTTP `200`, not the `501` above**, because `openenv push` probes this exact
+  route: `mcp_endpoint` in `openenv/cli/_validation.py` POSTs `{}` to `/mcp` and passes only on a
+  `200` whose JSON body has `"jsonrpc": "2.0"`. A `501` would fail a push that has nothing wrong
+  with it. The refusal therefore lives in the JSON-RPC envelope, where a JSON-RPC caller looks for
+  it anyway — error code `-32601`, whose definition is "method does not exist / *is not
+  available*" — with the framework's `{"code", "message", "details"}` triple in `data`:
+
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32601,
+      "message": "Method not available: this Seahaven world does not serve OpenEnv's /mcp ...",
+      "data": {
+        "code": "mcp_transport_unsupported",
+        "message": "/mcp is not served here, on either transport, so Seahaven refuses every ...",
+        "details": {
+          "route": "/mcp",
+          "method": "tools/call",
+          "use_instead": "/ws",
+          "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
+          "upstream": {
+            "package": "openenv 0.4.2",
+            "file": "openenv/core/env_server/http_server.py",
+            "dispatches": ["openenv/session/create", "openenv/session/close", "tools/list",
+                           "tools/call"],
+            "missing": ["initialize", "reset"],
+            "defect": "the dialect is not MCP -- there is no initialize ..."
+          }
+        }
+      }
+    }
+  }
+  ```
+
+  `ws /mcp` answers the same frame and then closes normally: every method is refused, so a second
+  frame could only earn the same answer, and a socket left open implies a negotiation that does not
+  exist. `/mcp` stays in the published OpenAPI schema for the same reason the three paths above do.
+
+  **`/ws` is the agent-facing transport, which is a deliberate divergence from OpenEnv's advice.**
+  OpenEnv's own lifecycle guide says `/ws` "is not an agent-facing interface … must not be given
+  directly to agents" and points agents at `/mcp` instead. Seahaven inverts that, on purpose: a
+  Seahaven episode needs a `reset`, the MCP dialect has no verb for one, and a transport an agent
+  cannot start an episode on is not an agent-facing interface either. It is a considered position
+  and not an oversight, and it is not the end of MCP frames — a `{"type": "mcp"}` message on a
+  `/ws` connection reaches the same upstream handler with the *session's* environment, and works
+  correctly once the session has been reset. Anything built on `openenv/session/create` would be
+  thrown away the day upstream ships real Streamable HTTP; a world reached over `/ws` would not.
 - **`GET /schema` publishes the base state model**, so a client never sees the state shape it is
   driving: `create_app` takes an action class and an observation class and no state class, and the
   route answers `State.model_json_schema()` for every environment.
