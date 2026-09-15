@@ -21,20 +21,20 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
 
 - **[Stateful](src/seahaven/docs/concepts.md#instance).** Writes change every later read. Each
   instance is its own SQLite database.
-- **[Fixtures](src/seahaven/docs/fixtures.md).** Freeze known starting states like
+- **[Fixtures](src/seahaven/docs/db_schema_and_fixtures.md).** Freeze known starting states like
   `small_startup`, `agency` or `big_co`, and reuse them across evals. Immutable and hash-verified.
 - **[Any interface](src/seahaven/docs/authoring.md#writing-a-tool).** Expose tools that match REST
   APIs, sandboxed SQL, search, or any custom protocol.
-- **[Serving](src/seahaven/docs/serving.md).** Hundreds of instances per process, one private
-  instance per session, thousands of tool calls per second.
+- **[Serving](src/seahaven/docs/serving_and_openenv.md).** Hundreds of instances per process, one
+  private instance per session, thousands of tool calls per second.
 - **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same fixture, same frozen
   clock, same seeded ids: the same run, every time. The clock is frozen in Python and in SQL.
 - **[Changesets](src/seahaven/docs/concepts.md#changeset).** The net diff between the fixture and
   what the agent left behind. Grade on state, not on transcripts.
 - **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
   or Shopify API. Compose, reuse and share worlds.
-- **[OpenEnv](src/seahaven/docs/openenv.md).** `seahaven serve` is an OpenEnv environment. Drive
-  it with any OpenEnv client, in any language, or publish it to Hugging Face.
+- **[OpenEnv](src/seahaven/docs/serving_and_openenv.md).** `seahaven serve` is an OpenEnv
+  environment. Drive it with any OpenEnv client, in any language, or publish it to Hugging Face.
 
 The [docs index](src/seahaven/docs/index.md) has the full set, and `seahaven docs` prints the
 copy that ships with your install.
@@ -100,7 +100,7 @@ for rollout in range(100):
         reward = grade(world_instance.changes())  # the net diff the agent left behind
 ```
 
-**Serve it:** Host and OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.
+**Serve it:** Host an OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.
 
 ```sh
 uv run seahaven serve
@@ -146,8 +146,8 @@ environments. `seahaven serve` runs one world, creating a unique instance and ep
 connection. Serve over 100 instances per process. Connect with any OpenEnv client or tool, in any
 language, like [Kiln](https://kiln.tech).
 
-[OpenEnv compatibility](src/seahaven/docs/openenv.md) is the whole story: the client, the wire
-protocol, what a session is, and why a Seahaven observation carries no reward.
+See [Serving a world](src/seahaven/docs/serving_and_openenv.md) for more details: the client, the
+wire protocol, what a session is, and why a Seahaven observation carries no reward.
 
 ## Agents
 
