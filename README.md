@@ -32,8 +32,8 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   not on transcripts.
 - **Composable worlds.** Add sub-worlds to your world, like a full Stripe or Shopify API. Compose,
   reuse and share worlds.
-- **[OpenEnv](https://huggingface.co/docs/openenv/index).** `seahaven serve` is an OpenEnv
-  environment. Drive it with any OpenEnv client, or publish it to Hugging Face.
+- **[OpenEnv](src/seahaven/docs/openenv.md).** `seahaven serve` is an OpenEnv
+  environment. Drive it with any OpenEnv client, in any language, or publish it to Hugging Face.
 
 ## Quickstart
 
@@ -117,10 +117,13 @@ fictional issue tracker with nine tables, 25 tools, search and three fixtures.
 
 ## Serving (OpenEnv)
 
-Seahaven's remote lifecycle and transport are [OpenEnv](https://huggingface.co/docs/openenv/index),
-an open standard for connecting to RL environments. `seahaven serve` runs one world, creating a
-unique instance and episode for each connection. Serve over 100 instances per process. Connect with
-any OpenEnv client or tool, like [Kiln](https://kiln.tech).
+Seahaven's remote lifecycle and transport are OpenEnv, an open standard for connecting to RL
+environments. `seahaven serve` runs one world, creating a unique instance and episode for each
+connection. Serve over 100 instances per process. Connect with any OpenEnv client or tool, in any
+language, like [Kiln](https://kiln.tech).
+
+[OpenEnv compatibility](src/seahaven/docs/openenv.md) is the whole story: the client, the wire
+protocol, what a session is, and why a Seahaven observation carries no reward.
 
 ## Agents
 

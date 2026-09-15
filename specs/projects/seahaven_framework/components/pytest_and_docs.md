@@ -58,6 +58,7 @@ seahaven/docs/
                         #   generates it; any schema change means regenerating them all), descriptions for eval authors
   testing.md            # the pytest plugin, what to test in a world
   serving.md            # seahaven serve, the OpenEnv client, control tools, publishing to a hub (seahaven new --hub)
+  openenv.md            # OpenEnv compatibility: driving a world from any client, the wire protocol, no rewards
   extensions.md         # the extension contract, the XML-RPC example
   reference/api.md      # the public API, hand-written
   reference/lints.md    # every SHnnn code: rule, why, fix

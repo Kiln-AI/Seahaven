@@ -24,6 +24,7 @@ PAGES = (
     "fixtures.md",
     "testing.md",
     "serving.md",
+    "openenv.md",
     "extensions.md",
     "projecttracker.md",
     "reference/api.md",

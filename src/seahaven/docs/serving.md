@@ -2,7 +2,9 @@
 
 Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
 (v0.4.x). There is no other remote API for the agent side: a world is either driven in process
-through `world.instance(...)`, or over OpenEnv.
+through `world.instance(...)`, or over OpenEnv. This page is the server's side of that wire;
+[openenv.md](openenv.md) is the client's — driving a world from an eval, the frames, and what the
+standard does and does not give you.
 
 The server and the client live in Seahaven's `serve` extra, because `openenv`'s dependency tree is
 large and a world used in process should not pay for it.
