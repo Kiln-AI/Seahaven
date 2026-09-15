@@ -43,7 +43,7 @@ from seahaven.composition import (
     resolve,
 )
 from seahaven.ctx import Ctx
-from seahaven.db import build_blank
+from seahaven.db import SCHEMA_CHECK_CLOCK, SCHEMA_CHECK_SEED, build_blank
 from seahaven.errors import WorldBug
 from seahaven.fixtures import Fixture, load_all
 from seahaven.instances import Instance, InstanceManager, calling
@@ -949,7 +949,7 @@ def _prove_the_ddl_executes(name: str, schema: str) -> None:
     long before it lints clean.
     """
     try:
-        build_blank(":memory:", schema).close()
+        build_blank(":memory:", schema, clock=SCHEMA_CHECK_CLOCK, seed=SCHEMA_CHECK_SEED).close()
     except apsw.Error as error:
         raise WorldBug(f"world {name!r} {DDL_DOES_NOT_EXECUTE}: {error}") from error
 

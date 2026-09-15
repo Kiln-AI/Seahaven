@@ -4,7 +4,7 @@ import gc
 import time
 import weakref
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import apsw
 import pytest
@@ -21,6 +21,23 @@ CREATE TABLE notes (id TEXT NOT NULL PRIMARY KEY, body TEXT NOT NULL) STRICT;
 CREATE VIRTUAL TABLE notes_fts USING fts5(body, content='notes');
 CREATE VIRTUAL TABLE memos_fts USING fts5(body);
 """
+
+# A schema that seeds a reference row, which is DML a world's `.sql` file is
+# allowed to run: the row is built from the host's entropy and the host's clock
+# unless the build carries the instance's.
+SEEDED = """
+CREATE TABLE plans (
+    id TEXT NOT NULL PRIMARY KEY,
+    token BLOB NOT NULL,
+    made_at TEXT NOT NULL
+) STRICT;
+INSERT INTO plans (id, token, made_at) VALUES ('free', randomblob(8), CURRENT_TIMESTAMP);
+"""
+
+
+def seeded_plan(conn: apsw.Connection) -> tuple[bytes, str]:
+    """The row the `SEEDED` schema wrote while it was being built."""
+    return cast(tuple[bytes, str], conn.execute("SELECT token, made_at FROM plans").get)
 
 
 @pytest.fixture
@@ -240,7 +257,7 @@ def test_a_dropped_database_does_not_leak_its_connection(
     thousands of instances. `randomblob` reads the connection's length limit and
     holds a weak reference to do it.
     """
-    build_blank(db_path, NOTES).close()
+    build_blank(db_path, NOTES, clock=clock, seed=seed).close()
     database = open_instance(db_path, clock, seed)
     # Drawn first: the reference has to be live where the override uses it, so a
     # weak reference that is never resolvable would fail here rather than pass
@@ -353,7 +370,7 @@ def test_hardening_turns_extension_loading_off_where_it_was_on(
     that tells the call from the default -- without it SQLite gets as far as
     looking for the file, and says so in place of refusing the call.
     """
-    build_blank(db_path, NOTES).close()
+    build_blank(db_path, NOTES, clock=clock, seed=seed).close()
     real_connection = apsw.Connection
 
     def already_loading(*args: Any, **kwargs: Any) -> apsw.Connection:
@@ -418,10 +435,12 @@ def test_inspection_reads_but_does_not_write(
     assert len(notes.rows("SELECT id FROM notes")) == 2
 
 
-def test_build_blank_writes_the_ddl_and_nothing_else(tmp_path: Path) -> None:
+def test_build_blank_writes_the_ddl_and_nothing_else(
+    tmp_path: Path, clock: Clock, seed: bytes
+) -> None:
     path = tmp_path / "blank.sqlite"
 
-    conn = build_blank(path, NOTES)
+    conn = build_blank(path, NOTES, clock=clock, seed=seed)
 
     assert world_tables(conn) == ["notes"]
     assert conn.pragma("foreign_keys") == 1
@@ -429,48 +448,156 @@ def test_build_blank_writes_the_ddl_and_nothing_else(tmp_path: Path) -> None:
     assert path.exists()
 
 
-def test_build_blank_runs_every_statement(tmp_path: Path) -> None:
+def test_build_blank_runs_every_statement(tmp_path: Path, clock: Clock, seed: bytes) -> None:
     # APSW runs a multi-statement string only as far as the first statement that
     # returns a row, unless the cursor is iterated. A world's schema file may
     # hold such a statement, and everything below it has to run.
     ddl = f"SELECT 1;\n{NOTES};\nCREATE TABLE later (x TEXT NOT NULL PRIMARY KEY) STRICT"
 
-    conn = build_blank(tmp_path / "blank.sqlite", ddl)
+    conn = build_blank(tmp_path / "blank.sqlite", ddl, clock=clock, seed=seed)
 
     assert world_tables(conn) == ["later", "notes"]
     conn.close()
 
 
-def test_build_blank_in_memory_needs_no_file(tmp_path: Path) -> None:
-    conn = build_blank(":memory:", NOTES)
+def test_build_blank_in_memory_needs_no_file(tmp_path: Path, clock: Clock, seed: bytes) -> None:
+    conn = build_blank(":memory:", NOTES, clock=clock, seed=seed)
 
     assert world_tables(conn) == ["notes"]
     assert list(tmp_path.iterdir()) == []
     conn.close()
 
 
-def test_build_blank_refuses_to_overwrite(tmp_path: Path) -> None:
+def test_build_blank_refuses_to_overwrite(tmp_path: Path, clock: Clock, seed: bytes) -> None:
     path = tmp_path / "blank.sqlite"
-    path.write_bytes(b"")
+    path.write_bytes(b"not a database")
 
     with pytest.raises(WorldBug, match="existing file"):
-        build_blank(path, NOTES)
+        build_blank(path, NOTES, clock=clock, seed=seed)
+
+    # A refusal is not a delete. The failure path that unlinks the file the
+    # build made is one indentation away from this one, and what is already at
+    # the path is someone else's.
+    assert path.read_bytes() == b"not a database"
 
 
-def test_build_blank_reports_ddl_that_does_not_execute(tmp_path: Path) -> None:
+def test_build_blank_reports_ddl_that_does_not_execute(
+    tmp_path: Path, clock: Clock, seed: bytes
+) -> None:
     path = tmp_path / "blank.sqlite"
 
     with pytest.raises(apsw.SQLError, match="syntax error"):
-        build_blank(path, "CREATE TABLE (")
+        build_blank(path, "CREATE TABLE (", clock=clock, seed=seed)
 
     # Nothing left behind: a retry at the same path reports the DDL's error
     # again rather than "refusing to build over an existing file".
     assert not path.exists()
-    build_blank(path, NOTES).close()
+    build_blank(path, NOTES, clock=clock, seed=seed).close()
 
 
-def test_fts5_shadow_tables_are_found_by_prefix(tmp_path: Path) -> None:
-    conn = build_blank(tmp_path / "blank.sqlite", SEARCHABLE)
+def test_a_seeded_schema_builds_the_same_rows_every_time(clock: Clock, seed: bytes) -> None:
+    """DML in a schema file draws from the build's clock and seed, not from the host.
+
+    Two builds of one schema at one instant and one seed are the same row, and a
+    third at another seed is not -- which is what says the token came from the
+    seed rather than from a constant.
+    """
+    first = build_blank(":memory:", SEEDED, clock=clock, seed=seed)
+    same = build_blank(":memory:", SEEDED, clock=clock, seed=seed)
+    other = build_blank(":memory:", SEEDED, clock=clock, seed=instance_seed("elsewhere"))
+    try:
+        token, made_at = seeded_plan(first)
+
+        assert seeded_plan(same) == (token, made_at)
+        assert seeded_plan(other)[0] != token
+        assert made_at == clock.iso()
+        assert len(token) == 8
+    finally:
+        for conn in (first, same, other):
+            conn.close()
+
+
+def test_a_seeded_schema_does_not_spend_the_bytes_the_instance_draws_first(
+    db_path: Path, clock: Clock, seed: bytes
+) -> None:
+    """The build is a door of its own, drawing from `BUILD_STREAM`.
+
+    Every door draws from the start of its stream each time it is opened, so a
+    build that drew from the instance's stream would hand the schema's seeded
+    row exactly the bytes the world's own first `randomblob` is about to take.
+    """
+    blank = build_blank(db_path, SEEDED, clock=clock, seed=seed)
+    try:
+        token, _made_at = seeded_plan(blank)
+    finally:
+        blank.close()
+    database = open_instance(db_path, clock, seed)
+    try:
+        assert database.one("SELECT randomblob(8) AS drawn") != {"drawn": token}
+    finally:
+        database.close()
+
+
+def test_the_connection_a_build_hands_back_carries_no_overrides(clock: Clock, seed: bytes) -> None:
+    """What comes back is plain: the build's clock and randomness are gone with it.
+
+    A connection that still carried them would draw the same bytes on every
+    build of one seed and answer `CURRENT_TIMESTAMP` with the frozen instant, so
+    the two connections here would agree. SQLite's own functions do not.
+    """
+    first = build_blank(":memory:", NOTES, clock=clock, seed=seed)
+    same = build_blank(":memory:", NOTES, clock=clock, seed=seed)
+    try:
+        drawn = "SELECT randomblob(8), CURRENT_TIMESTAMP"
+
+        assert first.execute(drawn).get != same.execute(drawn).get
+        assert first.execute("SELECT CURRENT_TIMESTAMP").get != clock.iso()
+    finally:
+        first.close()
+        same.close()
+
+
+def is_open(conn: apsw.Connection) -> bool:
+    try:
+        conn.execute("SELECT 1")
+    except apsw.ConnectionClosedError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("in_memory", [True, False])
+def test_a_build_leaves_only_the_connection_it_returns_open(
+    tmp_path: Path, clock: Clock, seed: bytes, monkeypatch: pytest.MonkeyPatch, in_memory: bool
+) -> None:
+    """The builder and the clock's private helper are the build's, and it is over.
+
+    `register_clock_functions` hands its caller a connection to close, and
+    `build_blank` returns a bare `apsw.Connection` with nowhere to keep one. Left
+    open they are two live SQLite connections per node of every blank instance,
+    and an eval run makes thousands of instances.
+    """
+    path: Path | Literal[":memory:"] = ":memory:" if in_memory else tmp_path / "blank.sqlite"
+    real_connection = apsw.Connection
+    opened: list[apsw.Connection] = []
+
+    def recorded(*args: Any, **kwargs: Any) -> apsw.Connection:
+        conn = real_connection(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(apsw, "Connection", recorded)
+    blank = build_blank(path, NOTES, clock=clock, seed=seed)
+    monkeypatch.undo()
+    try:
+        # The builder, the clock's helper, and the one that came back.
+        assert len(opened) == 3
+        assert [conn for conn in opened if is_open(conn)] == [blank]
+    finally:
+        blank.close()
+
+
+def test_fts5_shadow_tables_are_found_by_prefix(tmp_path: Path, clock: Clock, seed: bytes) -> None:
+    conn = build_blank(tmp_path / "blank.sqlite", SEARCHABLE, clock=clock, seed=seed)
 
     shadow = shadow_tables(conn)
 
@@ -487,7 +614,7 @@ def test_world_tables_keep_the_virtual_table_and_drop_the_rest(
     tmp_path: Path, clock: Clock, seed: bytes
 ) -> None:
     path = tmp_path / "state.sqlite"
-    build_blank(path, SEARCHABLE).close()
+    build_blank(path, SEARCHABLE, clock=clock, seed=seed).close()
     db = open_instance(path, clock, seed)
     try:
         assert world_tables(db.conn) == ["memos_fts", "notes", "notes_fts"]

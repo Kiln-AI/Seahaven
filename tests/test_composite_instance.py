@@ -20,7 +20,7 @@ from seahaven.clock import Clock
 from seahaven.ctx import Ctx
 from seahaven.db import open_instance
 from seahaven.errors import WorldBug
-from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, INSTANCE_STREAM, Ids
+from seahaven.ids import BUILD_STREAM, CONTROL_STREAM, INSPECTION_STREAM, INSTANCE_STREAM, Ids
 from seahaven.instances import node_seed
 from seahaven.world import World
 from tests.conftest import INSTANT_ISO, composable_world
@@ -212,7 +212,7 @@ def test_the_roots_sql_stream_is_untouched_by_the_nodes_below_it(tmp_path: Path)
 
 
 def test_a_node_named_after_a_sql_door_does_not_draw_that_doors_stream(tmp_path: Path) -> None:
-    """A child may be called `instance`, `inspection` or `control`; so is each door.
+    """A child may be called `instance`, `inspection`, `control` or `build`; so is each door.
 
     `node_seed` and `ids._stream_seed` both salt the one instance seed as
     `sha256(base + b"\0" + ...)`, and a node's name and a door's label share no
@@ -222,7 +222,7 @@ def test_a_node_named_after_a_sql_door_does_not_draw_that_doors_stream(tmp_path:
     separates the two.
     """
     host = rooted("host", tmp_path)
-    labels = (INSTANCE_STREAM, INSPECTION_STREAM, CONTROL_STREAM)
+    labels = (INSTANCE_STREAM, INSPECTION_STREAM, CONTROL_STREAM, BUILD_STREAM)
     named = [label.decode() for label in labels]
     for name in named:
         host.add_world(composable_world(name), name=name)

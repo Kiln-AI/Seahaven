@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, cast
 
 import apsw
 
-from seahaven.db import build_blank, shadow_tables
+from seahaven.db import SCHEMA_CHECK_CLOCK, SCHEMA_CHECK_SEED, build_blank, shadow_tables
 from seahaven.errors import WorldBug
 
 if TYPE_CHECKING:  # `world.py` imports this module's callers; the annotation is all that is needed
@@ -90,7 +90,7 @@ def check(conn: apsw.Connection, world: World) -> None:
 
 def _expected(world: World) -> dict[str, str]:
     """The world's DDL as SQLite records it, built fresh in memory for the purpose."""
-    conn = build_blank(":memory:", world.schema)
+    conn = build_blank(":memory:", world.schema, clock=SCHEMA_CHECK_CLOCK, seed=SCHEMA_CHECK_SEED)
     try:
         return schema_map(conn)
     finally:

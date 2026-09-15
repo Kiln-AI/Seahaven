@@ -11,6 +11,7 @@ import pytest
 from seahaven import ids
 from seahaven.errors import WorldBug
 from seahaven.ids import (
+    BUILD_STREAM,
     CONTROL_STREAM,
     INSPECTION_STREAM,
     INSTANCE_STREAM,
@@ -147,18 +148,19 @@ def test_no_sql_stream_is_the_one_ctx_ids_draws_from() -> None:
     mirror = Ids(seed)
     from_ids = [mirror.random.randbytes(8) for _ in range(5)]
 
-    for stream in (INSTANCE_STREAM, INSPECTION_STREAM, CONTROL_STREAM):
+    for stream in (INSTANCE_STREAM, INSPECTION_STREAM, CONTROL_STREAM, BUILD_STREAM):
         with seeded_connection(seed, stream) as conn:
             assert [conn.execute("SELECT randomblob(8)").get for _ in range(5)] != from_ids
 
 
 def test_a_door_replays_its_own_stream_and_echoes_no_other(seeded: apsw.Connection) -> None:
-    """The label is what separates the three doors of one instance.
+    """The label is what separates one instance's connections from each other.
 
     Reopening a door replays it from the start rather than continuing it: two
     connections have no deterministic order to continue one stream in. The other
-    two doors, on the same seed, draw something else entirely -- otherwise an
-    eval reading through `inspect()` would see the bytes the world just wrote.
+    other doors, on the same seed, draw something else entirely -- otherwise an
+    eval reading through `inspect()` would see the bytes the world just wrote,
+    and the build that applied the DDL would have spent them first.
     """
     seed = instance_seed("agency")
     drawn = [seeded.execute("SELECT random()").get for _ in range(3)]
@@ -168,7 +170,7 @@ def test_a_door_replays_its_own_stream_and_echoes_no_other(seeded: apsw.Connecti
         # And the door it replays is where it was left, not back at its start.
         assert seeded.execute("SELECT random()").get not in drawn
 
-    for other in (INSPECTION_STREAM, CONTROL_STREAM):
+    for other in (INSPECTION_STREAM, CONTROL_STREAM, BUILD_STREAM):
         with seeded_connection(seed, other) as door:
             assert [door.execute("SELECT random()").get for _ in range(3)] != drawn
 

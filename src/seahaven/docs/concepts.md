@@ -167,6 +167,10 @@ bakes that value into the fixture, where it never moves again. Those two are the
 reads a world makes: a blank instance's default clock, and the `created_at` stamped on a fixture
 when you freeze it.
 
+The clock is fixed *before* the blank database is built, not after, so a schema file that seeds
+reference rows of its own — `INSERT INTO plans VALUES ('free', ...)` — stamps them at that instant
+as well. A fixture frozen from such an instance carries the rows the caller's `now=` dated.
+
 Design around one consequence: **every row that one run writes carries the same timestamp.** A
 timestamp cannot order them. See
 ["Things that go wrong quietly"](authoring.md#things-that-go-wrong-quietly) in authoring.md.
@@ -194,10 +198,11 @@ assert first_issue_id() == first_issue_id()
 
 SQL is seeded from the same place. Every connection an instance opens overrides SQLite's `random()`
 and `randomblob()`, in the same way it overrides the date and time functions. A `DEFAULT
-(randomblob(8))` in a world's schema replays, and so does a `SELECT random()` an agent wrote. Each
-connection draws from a stream of its own, derived from the instance seed and separate from
-`ctx.ids`, so an agent rolling dice in SQL does not shift the identifiers world code mints
-afterwards, and does not read out what an `inspect()` handle will draw.
+(randomblob(8))` in a world's schema replays, and so does a `SELECT random()` an agent wrote. The
+connection that applies the DDL is one of them, so a `randomblob()` a schema file runs while it
+builds replays too. Each connection draws from a stream of its own, derived from the instance seed
+and separate from `ctx.ids`, so an agent rolling dice in SQL does not shift the identifiers world
+code mints afterwards, and does not read out what an `inspect()` handle will draw.
 
 ```python
 import projecttracker

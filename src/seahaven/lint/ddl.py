@@ -21,7 +21,7 @@ from typing import cast
 
 import apsw
 
-from seahaven.db import build_blank, shadow_tables
+from seahaven.db import SCHEMA_CHECK_CLOCK, SCHEMA_CHECK_SEED, build_blank, shadow_tables
 from seahaven.lint import Finding, Target
 from seahaven.world import SQL_SUFFIX
 
@@ -87,7 +87,9 @@ def run(target: Target) -> list[Finding]:
     """SH101 to SH104 over a fresh in-memory build of the world's schema."""
     sources = _sources(target.package_dir)
     try:
-        conn = build_blank(":memory:", target.world.schema)
+        conn = build_blank(
+            ":memory:", target.world.schema, clock=SCHEMA_CHECK_CLOCK, seed=SCHEMA_CHECK_SEED
+        )
     except apsw.Error as error:
         # Unreachable through `check`, which cannot get a `World` whose DDL does
         # not execute: `World.__init__` builds it too, and `cli/check.py` renders

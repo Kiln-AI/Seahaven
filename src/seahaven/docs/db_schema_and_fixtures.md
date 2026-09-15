@@ -73,6 +73,15 @@ There is no Seahaven schema language, and there are no migrations. A world whose
 execute cannot be built at all: `World.__init__` applies the schema to an in-memory database to
 compute its hash, and reports SQLite's own message when that fails.
 
+A schema file may also seed static reference rows — currencies, plans, a lookup table the product
+ships with — and they are part of the schema in the sense that matters: every instance of the world
+starts with them. The connection those `INSERT`s run on carries the instance's clock and its seed,
+so a seeded row built from `randomblob()` or `CURRENT_TIMESTAMP` replays like anything else a world
+writes. The wall-clock rule below is unchanged and still refuses `CURRENT_TIMESTAMP` inside a
+`CREATE` — a column default, a trigger body — so that one timestamp format is written everywhere;
+what is sanctioned here is the `INSERT` the file runs itself. Rows that belong to one *scenario* are
+a fixture's job, not the schema's.
+
 ### Three rules
 
 `seahaven check` enforces these, and each one exists for a failure that is otherwise silent.
