@@ -27,10 +27,20 @@ description: "A three-person startup's tracker: one engineering team, two active
 time, and is one of only two wall-clock reads in a world — the other is a blank instance's default
 clock.
 
+A world that **adds other worlds** freezes one state file per store into that same directory, under
+one sidecar at `format_version: 2` with a `nodes` list describing them. Everything on this page
+holds for it; the extra rules are in [composition.md](composition.md).
+
 ## The rules
 
 **A fixture is never opened, only copied.** The first time a process copies a fixture it verifies
 `file_sha256` and refuses on a mismatch, naming the fixture.
+
+**A fixture's files are the files in its own directory.** A state file that is a symbolic link is
+refused by name before it is hashed — the root's `state.sqlite` and every added node's file alike,
+and `seahaven check` reports it as SH402. Everything that reads a fixture would otherwise follow the
+link, `file_sha256` included, so one planted here would leave every check green while the instance
+ran on a database the fixture does not contain. Copy the file in, or freeze the fixture again.
 
 **Freeze is the only way to mint one.** `inst.freeze(id, description)` checks the instance's schema
 against the world's, checkpoints, vacuums, copies the file into `fixtures/<id>/`, writes the sidecar
@@ -41,7 +51,12 @@ read-only. It refuses if the directory already exists.
 change it, freeze the result under a new id.
 
 **A fixture is addressed by id** everywhere: `world.instance("agency")`, `reset(fixture="agency")`,
-`@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture fork agency ...`.
+`@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture fork agency ...`. The id is the
+directory the fixture lives in and travels with it, so it is the same name rule a world's name is
+held to — 1 to 128 characters of letters, digits, space, `.`, `-` and `_`, no leading or trailing
+space or dot, and no Windows device name — and anything else is refused with `not a fixture id`.
+A fixture frozen under an id this rule now refuses still appears in `world.fixtures()` but no
+longer opens — rename its directory and its sidecar's `id` to reach it again.
 
 ## Building one
 
@@ -51,8 +66,8 @@ value in for ever.
 
 Fill it through the world's own tools when the point is that the data is reachable the way an agent
 would have made it, or through `inst.bulk()` when you are loading thousands of rows and a tool call
-per row would spend its time on argument validation. `bulk()` yields the instance's own context —
-one transaction, under the instance lock, no call attached — and startup hooks do not run again.
+per row would spend its time on argument validation. `bulk()` yields the root node's context — one
+transaction per node, under the instance lock, no call attached — and startup hooks do not run again.
 
 ```python
 from pathlib import Path
@@ -204,7 +219,7 @@ keeping it in step with the package's schema hash. Read
 | Code | What it catches |
 |---|---|
 | `SH401` | a sidecar that does not validate |
-| `SH402` | a state file that does not match its `file_sha256` — it has been edited since it was frozen |
+| `SH402` | a state file that does not match its `file_sha256` — it has been edited since it was frozen, or it is a symbolic link |
 | `SH403` | a fixture frozen from a different schema than the world declares |
 | `SH404` | a `now` that is not a canonical timestamp |
 | `SH405` | a `-wal` or `-shm` file beside the state, so it was opened for writing after freezing |

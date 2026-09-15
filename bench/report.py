@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from bench.baseline import BaselinePoint, Share
+from bench.composite import SETTLE, WRITE, Composite, TreeCost
 from bench.environment import Environment
 from bench.harness import Summary, significant
 from bench.runner import Cache
@@ -44,6 +45,7 @@ class Results:
     share: Share | None = None
     sweep: Sweep | None = None
     isolation: Isolation | None = None
+    composite: Composite | None = None
 
 
 def _wrapped(text: str) -> str:
@@ -62,13 +64,17 @@ def render(results: Results) -> str:
     sections = [
         _caveats(results),
         _environment(results.environment),
-        _method(results),
+        # Only where something it describes was run: it is ProjectTracker's method
+        # section, and a composite-only run would otherwise print the world, the
+        # workloads and the warm-up rule above no table that used any of them.
+        _method(results) if _measured_projecttracker(results) else "",
         *_baseline(results),
         *_share(results),
         *_sweep(results),
         *_isolation(results),
         *_repeatability(results),
         _derived(results),
+        *_composite(results),
     ]
     return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
@@ -503,3 +509,241 @@ def _range(summary: Summary) -> str:
 
 def _point(point: Point) -> str:
     return f"{point.workload}, {point.cache}, {point.workers} sessions, gate {_gate(point.gate)}"
+
+
+def _measured_projecttracker(results: Results) -> bool:
+    """Whether this run drove `agency` at all, which is what `_method` describes."""
+    return bool(results.baseline) or any(
+        part is not None for part in (results.share, results.sweep, results.isolation)
+    )
+
+
+def _composite(results: Results) -> list[str]:
+    """The composite tree: what a node costs to stand up, and what it costs a call."""
+    measured = results.composite
+    if measured is None:
+        return []
+    return [
+        f"""## 7. A composite tree: what a node costs
+
+{_provenance(results)}
+
+`architecture.md` §15 says an idle composite instance is N stores, N connections and N sessions,
+and that until this section the benchmark measured one node per instance, a figure read as a
+per-node floor. Every other measurement here is that one node. These two tables are the floor
+itself, measured on the committed composite tree of `tests/worlds/README.md`: `payments` is a
+leaf of one node, `shop` adds it, and `emporium` adds `payments` twice -- once under a scope --
+and `shop`, sealing to the four nodes `main`, `payments`, `payments_eu` and `shop`, with
+`shop/payments` an alias of `payments` rather than a fifth store.
+
+**These are the smallest worlds in the repository**, and that is what makes them a floor: a
+`payments` node is one table and two tools, so what is measured here is close to what an *empty*
+node costs. It is the wrong shape for a typical store -- a node carrying a real schema costs that
+schema on top of every figure below, and the write rows here are one row into a four-column table
+with no index but its primary key.""",
+        _standing_up(measured),
+        _per_call(measured),
+        _composite_limits(),
+    ]
+
+
+def _provenance(results: Results) -> str:
+    """The machine these tables came from, carried inside the section.
+
+    A section that can be regenerated on its own can also be pasted into a report
+    whose other tables came from another run, and a table whose stated machine is
+    two sections above and is not its own is a table that misleads.
+    """
+    environment = results.environment
+    quoted = _wrapped(
+        f"**Provenance.** These tables were measured by `{results.command}` at {environment.when}, "
+        f"commit {environment.commit}, Python {environment.python}, on {environment.cpu_model}. "
+        "This section carries its own machine because it can be regenerated on its own, and the "
+        "rest of this document may come from a different run."
+    )
+    return "\n".join(f"> {line}" for line in quoted.splitlines())
+
+
+def _standing_up(measured: Composite) -> str:
+    rows = "\n".join(
+        f"| `{cost.tree}` | {cost.nodes} | {cost.stores} | {cost.files} | {_kib(cost.idle_bytes)} "
+        f"| {_ms(cost.seal_seconds)} | {_ms(cost.open_seconds)} | "
+        f"{_ms(cost.open_min)}-{_ms(cost.open_max)} | {_ms(cost.destroy_seconds)} | "
+        f"{_ms(cost.destroy_min)}-{_ms(cost.destroy_max)} |"
+        for cost in measured.trees
+    )
+    method = _wrapped(
+        f"Each tree sealed, opened, measured and destroyed {_times(measured.tree_repeats)}, after "
+        "one discarded open and destroy: a tree's first open in a process costs several "
+        "milliseconds more than its steady state, and timing it would fill the min-max columns "
+        "with that rather than with the pass-to-pass spread they are read as. Every timing is the "
+        "median of the measured passes and each min-max is its own column's spread over them. "
+        "**Stores** is the databases on disk and **Files** is everything the instance "
+        "directory holds -- each store plus the `-wal` and `-shm` SQLite keeps beside it -- both "
+        'counted off a live instance rather than derived from the node count, because "N files" is '
+        "the claim under test. **Idle on disk** is that directory before the instance has served a "
+        "single call. A **seal** is forced by `composition.bump()`, which is what every "
+        "registration verb calls, so each one is a whole walk of the tree and not a cache hit."
+    )
+    return f"""### Standing one up
+
+{method}
+
+| Tree | Nodes | Stores | Files | Idle on disk | Seal | Open | min-max | Destroy | min-max |
+|---|---:|---:|---:|---:|---:|---:|---|---:|---|
+{rows}
+
+{_per_node(measured)}"""
+
+
+def _per_node(measured: Composite) -> str:
+    """The increment per added node, as arithmetic on the rows above."""
+    if not measured.trees:
+        return ""
+    leaf, *rest = measured.trees
+    return "\n".join(
+        [
+            _wrapped(
+                f"Against the one-node leaf, which opens in {_ms(leaf.open_seconds)} and holds "
+                f"{_kib(leaf.idle_bytes)}:"
+            ),
+            "",
+            *(_added_nodes(leaf, cost) for cost in rest if cost.nodes > leaf.nodes),
+        ]
+    )
+
+
+def _added_nodes(leaf: TreeCost, cost: TreeCost) -> str:
+    """One tree against the leaf, with the per-node share where there is more than one."""
+    added = cost.nodes - leaf.nodes
+    opening = cost.open_seconds - leaf.open_seconds
+    on_disk = cost.idle_bytes - leaf.idle_bytes
+    each = (
+        f" ({_ms(opening / added)} and {_kib(on_disk // added)} per added node)"
+        if added > 1
+        else ""
+    )
+    return _bullet(
+        f"**`{cost.tree}`** is {_count(added, 'node')} more than the leaf: "
+        f"+{_ms(opening)} to open, "
+        f"+{_kib(on_disk)} on disk, +{_ms(cost.destroy_seconds - leaf.destroy_seconds)} to "
+        f"destroy{each}."
+    )
+
+
+def _per_call(measured: Composite) -> str:
+    rows = "\n".join(
+        f"| {cost.workload} | `{cost.tree}` | {cost.nodes} | "
+        f"{significant(cost.summary.rate_median)} | {_range(cost.summary)} | "
+        f"{_ms(cost.summary.p50)} | {_ms(cost.summary.p95)} |"
+        for cost in measured.calls
+    )
+    method = _wrapped(
+        f"One thread, warm, {_times(measured.repeats)} over: a pass is {measured.calls_per_pass} "
+        "calls on a fresh instance that has already served one identical pass off the clock, which "
+        "is `bench/runner.py`'s warm-up rule and is applied to both trees alike. A repeat is a "
+        "whole pass over every row of the table, so drift during the run is spread across the "
+        "rows rather than handed to whichever ran last -- which matters here, where the "
+        "difference being looked for is smaller than the machine's noise. The read is an account "
+        "holding exactly one charge, so every call of the pass returns one row. `settle_order` is "
+        "the composite's own: one call that places an order in `shop`, charges `payments` and "
+        "writes the host's own row, through two nested `handle.call`s."
+    )
+    return f"""### What a node costs a call
+
+{method}
+
+| Call | Tree | Nodes | Calls/s | min-max | p50 | p95 |
+|---|---|---:|---:|---|---:|---:|
+{rows}
+
+{_call_deltas(measured)}"""
+
+
+def _call_deltas(measured: Composite) -> str:
+    """What the added nodes did to the same tool, against the repeats' own spread."""
+    lines: list[str] = []
+    for workload in dict.fromkeys(cost.workload for cost in measured.calls):
+        costs = [cost for cost in measured.calls if cost.workload == workload]
+        if len(costs) != 2:
+            continue
+        leaf, host = sorted(costs, key=lambda cost: cost.nodes)
+        delta = host.summary.p50 - leaf.summary.p50
+        relative = abs(delta) / leaf.summary.p50 if leaf.summary.p50 else 0.0
+        noise = max(leaf.summary.spread, host.summary.spread)
+        against_noise = (
+            f"The noisier of the two cells moved {round(noise * 100)}% in *rate* between its own "
+            "repeats -- a proxy for this pair's noise, and not the same statistic as the pooled "
+            "median being compared -- so "
+            + (
+                "the difference is smaller than this run's own noise and cannot be told from zero."
+                if relative <= noise
+                else "the difference is larger than this run's own noise."
+            )
+            if measured.repeats > 1
+            else "A single pass has no spread of its own, so this run cannot say whether that is a "
+            "difference at all."
+        )
+        lines.append(
+            _bullet(
+                f"**{workload}**, the same tool at {_count(leaf.nodes, 'node')} and at "
+                f"{host.nodes}: {_ms(leaf.summary.p50)} against {_ms(host.summary.p50)} at the "
+                f"median, {'+' if delta >= 0 else '-'}{_ms(abs(delta))} "
+                f"({round(relative * 100)}%) for {_count(host.nodes - leaf.nodes, 'added node')}. "
+                f"{against_noise}"
+            )
+        )
+    settle = next((cost for cost in measured.calls if cost.workload == SETTLE), None)
+    write = next(
+        (cost for cost in measured.calls if cost.workload == WRITE and cost.nodes > 1), None
+    )
+    if settle is not None and write is not None and write.summary.p50:
+        lines.append(
+            _bullet(
+                f"**{SETTLE}** is {_ms(settle.summary.p50)} at the median against "
+                f"{_ms(write.summary.p50)} for the one-row write on the same tree -- a fresh "
+                "instance per pass, so the same tree and never the same instance: "
+                f"{settle.summary.p50 / write.summary.p50:.1f}x the cost of one call, for three "
+                "writes to three stores, three transactions and two nested dispatches."
+            )
+        )
+    return "\n".join(lines)
+
+
+def _composite_limits() -> str:
+    return """### What this section does not measure
+
+- **That a seal's cost is bounded.** `composition.resolve` folds a node reached along several routes
+  into one entry rather than concatenating its tools once per route, which is what keeps a diamond
+  of tens of nodes in milliseconds instead of tens of seconds. The largest committed tree is four
+  nodes with one alias, and it seals in microseconds either way. The seal column is a number for a
+  future run to be compared against, not evidence about that bound.
+- **The cost of `World.composition()` on the call path.** Every dispatch reads it, so it is inside
+  every cell of the per-call table, but its hit path is one load and one integer compare under no
+  lock and nothing here can resolve that on its own. The leaf-against-composite rows are the only
+  evidence this run offers about it.
+- **Memory, and the connection and session counts.** One connection and one changeset session per
+  node is what `instances.NodeRuntime` opens. What this section counts is *files*: the connections
+  and the sessions are read off the code as before, paid for inside the Open column, and neither
+  counted nor weighed here.
+- **Concurrency, and cold caches.** One thread, warm, no gate sweep. A per-call cost is a
+  single-threaded number for the reason section 1 gives, and a composite instance offers the gate no
+  question the ProjectTracker sweep does not already ask.
+- **A real node.** See the paragraph above the first table: these worlds are one table and two tools
+  each, which is what makes the figures a floor."""
+
+
+def _kib(count: int) -> str:
+    return f"{significant(count / 1024)} KiB"
+
+
+def _bullet(text: str) -> str:
+    """One list item, re-wrapped with its continuation lines under the text."""
+    return textwrap.fill(
+        " ".join(text.split()), width=96, initial_indent="- ", subsequent_indent="  "
+    )
+
+
+def _count(number: int, noun: str) -> str:
+    """`3 nodes`, and `one node` where a digit would read as a table cell."""
+    return f"one {noun}" if number == 1 else f"{number} {noun}s"

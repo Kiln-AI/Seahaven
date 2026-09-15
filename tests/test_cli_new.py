@@ -119,6 +119,19 @@ def test_a_name_that_is_not_a_package_name_is_refused(tmp_path: Path, name: str)
     assert not (tmp_path / "world").exists()
 
 
+@pytest.mark.parametrize("name", ["café", "con", "trailing.", "x" * 129])
+def test_a_name_that_is_not_a_world_name_is_refused(tmp_path: Path, name: str) -> None:
+    """All four make a legal package name, and none makes a legal `World(name=...)`.
+
+    Refused here or the scaffold renders, exits 0, and fails at the author's first
+    `pytest` with a `WorldBug` from a `world.py` they did not write.
+    """
+    with pytest.raises(CliError) as raised:
+        render(name, tmp_path / "world")
+    assert "is not a world name" in str(raised.value)
+    assert not (tmp_path / "world").exists()
+
+
 def test_hub_adds_five_files_and_nothing_else(tmp_path: Path) -> None:
     """One world, rendered twice: the difference is exactly what `openenv push` wants."""
     plain = render("hubbed", tmp_path / "plain" / "hubbed")

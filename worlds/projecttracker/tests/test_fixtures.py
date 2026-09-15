@@ -382,7 +382,6 @@ def rebuilt(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> tuple[Any, An
     return made, committed
 
 
-@pytest.mark.slow
 def test_the_generator_still_makes_the_fixtures_that_are_committed(
     rebuilt: tuple[Any, Any],
 ) -> None:
@@ -401,7 +400,6 @@ def test_the_generator_still_makes_the_fixtures_that_are_committed(
         assert _dump(rebuilt_fixture.state_path) == _dump(fixture.state_path), fixture_id
 
 
-@pytest.mark.slow
 def test_the_generator_still_makes_the_committed_fixtures_byte_for_byte(
     rebuilt: tuple[Any, Any],
 ) -> None:

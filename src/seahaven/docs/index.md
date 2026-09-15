@@ -59,6 +59,7 @@ out — and adds fixtures, errors and an error handler.
 |---|---|
 | [concepts.md](concepts.md) | World, fixture, instance, tool, clock, reproducibility, changesets |
 | [authoring.md](authoring.md) | Writing tools, errors and the error handler, middleware, startup hooks, schema rules |
+| [composition.md](composition.md) | Adding other worlds: `add_world`, `ctx.worlds`, shared stores, composite fixtures |
 | [fixtures.md](fixtures.md) | Freezing, forking, generators, descriptions for eval authors |
 | [testing.md](testing.md) | The pytest plugin, what to test in a world |
 | [serving.md](serving.md) | `seahaven serve`, the OpenEnv client, control tools, publishing to a hub |

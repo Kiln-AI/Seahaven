@@ -9,7 +9,9 @@ state agree, whatever route they took.
 
 The session is attached to the world's tables at instance creation, after the
 startup hooks have run, so seed rows are starting state rather than agent
-changes.
+changes. A composite instance has one session per node, each over its own world's
+tables and its own `untracked_tables`, and every `Change` says which node it came
+from.
 """
 
 import base64
@@ -36,7 +38,12 @@ _OPS: dict[str, Literal["insert", "update", "delete"]] = {
 
 @dataclass(frozen=True)
 class Change:
-    """One row the instance changed, with its columns named.
+    """One row the instance changed, with its columns named and its node said.
+
+    `world` is the path of the node the row belongs to -- `main` for the root,
+    and the added node's canonical path otherwise -- which is what tells two
+    tables of the same name in two stores apart. A world that adds nothing has
+    one node, so every change it makes says `main`.
 
     `before` and `after` hold only the columns the change carries: a changeset
     marks the rest `apsw.no_change`, which is not the same as `NULL`, and
@@ -46,6 +53,7 @@ class Change:
     primary key either way.
     """
 
+    world: str
     table: str
     op: Literal["insert", "update", "delete"]
     key: dict[str, Any]
@@ -55,6 +63,7 @@ class Change:
     def to_dict(self) -> dict[str, Any]:
         """The wire shape: what `controller_changes` returns and an eval reads."""
         return {
+            "world": self.world,
             "table": self.table,
             "op": self.op,
             "key": self.key,
@@ -81,11 +90,16 @@ def start_session(conn: apsw.Connection, world: World) -> apsw.Session:
     return session
 
 
-def render(changeset: bytes, conn: apsw.Connection) -> list[Change]:
-    """The changeset as `Change` records, in the changeset's own order.
+def render(changeset: bytes, conn: apsw.Connection, world: str) -> list[Change]:
+    """One node's changeset as `Change` records, in the changeset's own order.
 
     That order is by table and then by rowid, which is deterministic for a given
     sequence of writes, so two identical runs render identically.
+
+    `world` is the path of the node `conn` belongs to, stamped on every record.
+    It is a parameter and not a default because every caller is rendering one
+    node of a tree and knows which: a default would be right for the root and
+    quietly wrong for the caller that forgot.
     """
     columns: dict[str, tuple[list[str], list[int]]] = {}
     changes = []
@@ -100,6 +114,7 @@ def render(changeset: bytes, conn: apsw.Connection) -> list[Change]:
         source = change.new if op == "insert" else change.old
         changes.append(
             Change(
+                world=world,
                 table=table,
                 op=op,
                 key=_row(names, source, key_positions) or {},

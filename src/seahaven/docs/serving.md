@@ -1,10 +1,15 @@
 # Serving a world
 
-Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
-(v0.4.x). There is no other remote API for the agent side: a world is either driven in process
-through `world.instance(...)`, or over OpenEnv. This page is the server's side of that wire;
-[openenv.md](openenv.md) is the client's — driving a world from an eval, the frames, and what the
-standard does and does not give you.
+Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/huggingface/OpenEnv)
+(v0.4.x), over its WebSocket endpoint `/ws`. There is no other remote API for the agent side: a
+world is either driven in process through `world.instance(...)`, or over that WebSocket. This page
+is the server's side of that wire; [openenv.md](openenv.md) is the client's — driving a world from
+an eval, the frames, and what the standard does and does not give you.
+
+**In particular there is no MCP server here.** An OpenEnv app publishes a `/mcp` endpoint, but it is
+not the MCP protocol and nothing on it can reach an instance, so Seahaven refuses every method on
+it. That refusal, and why `/ws` is the agent-facing transport in spite of OpenEnv's own advice, are
+under "Rough edges" below.
 
 The server and the client live in Seahaven's `serve` extra, because `openenv`'s dependency tree is
 large and a world used in process should not pay for it.
@@ -93,8 +98,11 @@ prevent. An unexpected Python exception inside a tool is logged with its traceba
 a fixed `{"code": "internal", "message": "internal error"}`, so engine text cannot reach an agent
 even from a world with no error handler.
 
-The `state` message answers `episode_id`, `step_count`, `fixture`, `now` and `world`. Every step
-counts, including one that was refused: the count is of what the session asked for.
+The `state` message answers `episode_id`, `step_count`, `fixture`, `now`, `world` and
+`composition`. Every step counts, including one that was refused: the count is of what the session
+asked for. `composition` is the session's stores — one record per node of a world that adds other
+worlds, `null` before the first `reset` ([composition.md](composition.md)). No observation carries
+any of it: `state` is the eval's, never the agent's.
 
 Metadata is the world's `name` and `version`, and the environment's README is the world's top-level
 `README.md`, the one beside `pyproject.toml`, published whole as the card a hub shows. The one-line
@@ -188,6 +196,30 @@ process, `inst.call("controller_changes")` always reaches them, and `inst.tools(
 memory, and a client that drops without closing holds one for ever. An hour is long enough that no
 live eval is reaped and short enough that a crashed harness does not accumulate instances.
 
+**A disconnect is not an error in the log.** OpenEnv's WebSocket handler closes the connection from
+its own side after the peer has usually already gone, and lets the `WebSocketDisconnect` that raises
+escape into uvicorn's ASGI error path — an `ERROR: Exception in ASGI application` and a full
+traceback for a session that ended perfectly normally. Seahaven closes both halves of that.
+`SeahavenClient` asks the server to close and waits for it to, so the handshake finishes and nothing
+is raised at all; and the app carries ASGI middleware that absorbs a `WebSocketDisconnect` escaping a
+WebSocket route, which covers every client Seahaven does not ship — a stock `GenericEnvClient`, a raw
+socket, a harness that dies mid-session. An absorbed disconnect is one `DEBUG` line on the
+`seahaven.openenv` logger, so it can still be found; the error log is left for errors. The price is
+that a `WebSocketDisconnect` reaching the top of a WebSocket connection is never reported as a server
+error, which is the right trade: it only ever means the peer went away.
+
+**A dropped connection is a lost episode, so `SeahavenClient` waits longer before calling one dead.**
+A session is one connection holding one instance, and there is no resume: any disconnect destroys
+the instance, and reconnecting builds a new one. So a server that stalls at the event-loop level for
+longer than the keepalive timeout loses every episode on the box at once, unrecoverably.
+`SeahavenClient` therefore defaults its WebSocket ping *timeout* to 120 seconds where OpenEnv
+defaults to 20, keeping the ping interval at OpenEnv's 20 — six times the tolerance for a stall,
+without pinging any less often. The price is the other direction: a genuinely dead server or a
+severed network takes up to two minutes to notice instead of twenty seconds. That is the right trade
+for an eval or an RL rollout and the wrong one for a short interactive session, which is why it is a
+default rather than a fixed value — pass `websocket_ping_timeout_s=` to choose your own. A client
+Seahaven does not ship keeps OpenEnv's 20 seconds.
+
 ### The concurrency gate, and what is wrong with it
 
 The gate bounds how many tool calls execute at once. It never bounds admission: calls queue, and
@@ -209,9 +241,8 @@ sessions and a gate of 16 is the ordinary case rather than an edge one.
 
 Nothing is dropped: the promise that calls queue is kept to the letter. But a call that queues for
 seconds behind a thread barging in front of it is not the service that promise implies, and an
-episode whose session is the unlucky one will time out. This is `BACKLOG.md` B20 in the Seahaven
-repository, and the fix is a gate that hands slots out in arrival order rather than a different
-number.
+episode whose session is the unlucky one will time out. The fix is a gate that hands slots out in
+arrival order rather than a different number.
 
 **The gate is not a serving feature.** It is process-wide and on by default in *any* process that
 calls a tool, an in-process eval harness driving instances on threads included; `serve` only gives it
@@ -264,15 +295,113 @@ sign-off and has not happened.
 
 ## Rough edges worth knowing before you meet them
 
-These are real, reproduced, and recorded in the Seahaven repository's `BACKLOG.md`. None of them is
-in the WebSocket path an eval and `SeahavenClient` use.
+These are real and reproduced, and every one of them is OpenEnv's rather than Seahaven's. None of
+them is in the WebSocket path an eval and `SeahavenClient` use.
 
-- **`GET /state` over HTTP answers the base model.** OpenEnv annotates that route with its own
-  `State` type, so `fixture`, `now` and `world` are stripped, and the route is not session-bound
-  either — the numbers it does return are a fresh environment's. Read state over the WebSocket.
-  (B13.)
-- **`GET /schema` publishes the base state model** for the same reason, so a client never sees the
-  state shape it is driving. (B13.)
-- **Every clean client disconnect logs `ERROR: Exception in ASGI application` with a traceback.**
-  OpenEnv closes a socket the client has already closed. The sessions are fine; the log is noisy.
-  (B13.)
+- **`POST /reset`, `POST /step` and `GET /state` over plain HTTP are refused, with a `501`.**
+  OpenEnv builds a brand-new environment inside each of those three handlers and closes it again
+  before replying, so no two requests ever share one: `/reset` resets one instance, `/step` steps a
+  different one, `/state` reads a third, and none of them observes the others. Nothing errors —
+  upstream answers a well-formed `200` describing an environment that is already gone, which is the
+  worst way for an endpoint to be wrong. Seahaven replaces those three handlers with one that says
+  so. The body is FastAPI's `{"detail": ...}` envelope wrapped around the `{"code", "message",
+  "details"}` triple the rest of the framework uses:
+
+  ```json
+  {
+    "detail": {
+      "code": "http_episode_control_unsupported",
+      "message": "GET /state cannot hold an episode, so Seahaven refuses it ...",
+      "details": {
+        "route": "GET /state",
+        "use_instead": "/ws",
+        "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
+        "upstream": {
+          "package": "openenv 0.4.2",
+          "file": "openenv/core/env_server/http_server.py",
+          "regression": "86a222d",
+          "defect": "each handler builds an Environment from the factory and closes it ..."
+        }
+      }
+    }
+  }
+  ```
+
+  The three paths stay in the published OpenAPI schema on purpose. `openenv push` decides what kind
+  of environment a world is by reading path *names*: an app that publishes `/reset` is a simulation
+  environment and must publish `/step` and `/state` beside it, and an app that publishes none of the
+  three is a production environment. Deleting them would pass that check while declaring a Seahaven
+  world to be something it is not, so only the behaviour changes. This is local protection and not a
+  fix: the defect is upstream's, is unfixed there, and a world built on a stock OpenEnv server still
+  has it. Drive episodes over `/ws`.
+  ([huggingface/OpenEnv#1156](https://github.com/huggingface/OpenEnv/issues/1156).)
+- **`POST /mcp` and `ws /mcp` are refused, with a JSON-RPC error inside a `200`.** OpenEnv's `/mcp`
+  is not MCP. It dispatches exactly four methods — `openenv/session/create`,
+  `openenv/session/close`, `tools/list` and `tools/call` — and has no `initialize`, no capability
+  negotiation, no notifications, no SSE, no `Mcp-Session-Id`, no resources and no prompts. An
+  off-the-shelf MCP client (Claude Desktop, Cursor, the `mcp` and `fastmcp` SDKs) opens with
+  `initialize`, gets `-32601 Method not found: initialize`, and never gets further. Upstream says
+  this is deliberate and temporary: its RFC 003 leans on MCP's custom-transports clause, lists "no
+  SSE streaming · no server-initiated messages · **no session management**" as known gaps, and
+  plans standard Streamable HTTP later.
+
+  Underneath that, every door on it is dead for one reason: the dialect has no `reset`, and a
+  Seahaven tool call needs an instance. Left alone, `tools/list` succeeds and advertises every tool
+  the world has, and then every `tools/call` behind it answers `reset first` — with or without an
+  `openenv/session/create` session id, and over the websocket exactly as over `POST`. That is a
+  well-formed answer about nothing, which is what the three HTTP routes above are refused for. So
+  all four methods are refused, on both transports, in one statement.
+
+  **The refusal is an HTTP `200`, not the `501` above**, because `openenv push` probes this exact
+  route: `mcp_endpoint` in `openenv/cli/_validation.py` POSTs `{}` to `/mcp` and passes only on a
+  `200` whose JSON body has `"jsonrpc": "2.0"`. A `501` would fail a push that has nothing wrong
+  with it. The refusal therefore lives in the JSON-RPC envelope, where a JSON-RPC caller looks for
+  it anyway — error code `-32601`, whose definition is "method does not exist / *is not
+  available*" — with the framework's `{"code", "message", "details"}` triple in `data`:
+
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32601,
+      "message": "Method not available: this Seahaven world does not serve OpenEnv's /mcp ...",
+      "data": {
+        "code": "mcp_transport_unsupported",
+        "message": "/mcp is not served here, on either transport, so Seahaven refuses every ...",
+        "details": {
+          "route": "/mcp",
+          "method": "tools/call",
+          "use_instead": "/ws",
+          "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
+          "upstream": {
+            "package": "openenv 0.4.2",
+            "file": "openenv/core/env_server/http_server.py",
+            "dispatches": ["openenv/session/create", "openenv/session/close", "tools/list",
+                           "tools/call"],
+            "missing": ["initialize", "reset"],
+            "defect": "the dialect is not MCP -- there is no initialize ..."
+          }
+        }
+      }
+    }
+  }
+  ```
+
+  `ws /mcp` answers the same frame and then closes normally: every method is refused, so a second
+  frame could only earn the same answer, and a socket left open implies a negotiation that does not
+  exist. `/mcp` stays in the published OpenAPI schema for the same reason the three paths above do.
+
+  **`/ws` is the agent-facing transport, which is a deliberate divergence from OpenEnv's advice.**
+  OpenEnv's own lifecycle guide says `/ws` "is not an agent-facing interface … must not be given
+  directly to agents" and points agents at `/mcp` instead. Seahaven inverts that, on purpose: a
+  Seahaven episode needs a `reset`, the MCP dialect has no verb for one, and a transport an agent
+  cannot start an episode on is not an agent-facing interface either. It is a considered position
+  and not an oversight, and it is not the end of MCP frames — a `{"type": "mcp"}` message on a
+  `/ws` connection reaches the same upstream handler with the *session's* environment, and works
+  correctly once the session has been reset. Anything built on `openenv/session/create` would be
+  thrown away the day upstream ships real Streamable HTTP; a world reached over `/ws` would not.
+- **`GET /schema` publishes the base state model**, so a client never sees the state shape it is
+  driving: `create_app` takes an action class and an observation class and no state class, and the
+  route answers `State.model_json_schema()` for every environment.
+  ([huggingface/OpenEnv#1155](https://github.com/huggingface/OpenEnv/issues/1155).)

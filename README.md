@@ -30,10 +30,10 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   clock is frozen in Python and in SQL.
 - **Changesets.** The net diff between the fixture and what the agent left behind. Grade on state,
   not on transcripts.
-- **Composable worlds.** Add sub-worlds to your world, like a full Stripe or Shopify API. Compose,
-  reuse and share worlds.
-- **[OpenEnv](src/seahaven/docs/openenv.md).** `seahaven serve` is an OpenEnv
-  environment. Drive it with any OpenEnv client, in any language, or publish it to Hugging Face.
+- **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
+  or Shopify API. Compose, reuse and share worlds.
+- **[OpenEnv](src/seahaven/docs/openenv.md).** `seahaven serve` is an OpenEnv environment. Drive
+  it with any OpenEnv client, in any language, or publish it to Hugging Face.
 
 ## Quickstart
 
@@ -114,6 +114,26 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
 
 **Example World:** see [ProjectTracker](worlds/projecttracker/), the reference world: a
 fictional issue tracker with nine tables, 25 tools, search and three fixtures.
+
+## Composing worlds
+
+A world can **add other worlds**. Build a Stripe world once, a Slack world once, and a company world
+that adds both plus its own tables and tools. The agent sees one flat tool list, the company world's
+own tools call the added worlds' tools in process, and an eval inspects every store through one SQL
+connection. See [docs](src/seahaven/docs/composition.md).
+
+```py
+company.add_world(stripe_world.world, name="stripe", tool_prefix="stripe_")
+company.add_world(slack_world.world, name="slack", tool_prefix="slack_")
+
+
+@company.tool
+def refund_order(ctx: seahaven.Ctx, charge_id: str, channel: str) -> dict[str, object]:
+    """Refund a charge and tell the support channel it is done."""
+    refund = ctx.worlds.stripe.call("create_refund", charge_id=charge_id)
+    ctx.worlds.slack.call("post_message", channel=channel, text=f"refunded {refund['amount']}")
+    return refund
+```
 
 ## Serving (OpenEnv)
 

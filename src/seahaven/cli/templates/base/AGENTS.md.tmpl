@@ -3,7 +3,7 @@
 This project is a Seahaven world. Seahaven is not in your training data: read the bundled docs
 before writing code. They ship inside the installed `seahaven` package and match the installed
 version; `seahaven docs` prints the directory. Start at index.md, then concepts.md, authoring.md,
-fixtures.md, testing.md.
+fixtures.md, testing.md; composition.md if this world adds other worlds.
 
 Commands: `uv run seahaven check` (lint; run before every commit), `uv run pytest`,
 `uv run seahaven fixture list`, `uv run seahaven serve`.
@@ -13,6 +13,8 @@ fixture and seed gives the same result; SQL goes through `ctx.db` (`ctx.db.conn`
 connection when you need it; never close it or change its pragmas). Fixtures are immutable: fork,
 never edit.
 Every tool module under tools/ and middleware/ must be imported from the package __init__.
+A world this one adds is reached with `ctx.worlds.<name>`, never by making an instance of it; prefer
+that world's own tools over direct SQL on its store.
 Errors are ToolError subclasses in errors.py; the error handler is the only place engine errors are mapped.
 
 ## About this world

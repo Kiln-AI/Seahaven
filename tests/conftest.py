@@ -26,6 +26,7 @@ from seahaven.clock import Clock
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, open_instance
 from seahaven.errors import ToolError
+from seahaven.handles import unbound
 from seahaven.ids import Ids, instance_seed
 from seahaven.instances import Instance
 from seahaven.lint import Target
@@ -40,6 +41,18 @@ WAIT = 5.0  # every thread test's patience, in seconds
 
 # The small worlds the lints and the CLI are run against (`tests/worlds/README.md`).
 WORLDS = Path(__file__).resolve().parent / "worlds"
+
+# The packages of the two committed trees: `emporium` over `shop` and `payments`,
+# and the composition rules' fixtures over `ledger`. Unlike the lint worlds, these
+# are *imported* by the tests and by each other -- a host adds the `World` object
+# a package exports, which is an ordinary import and not something discovery does
+# -- so their source directories go on the path here, before any test module is
+# collected, rather than in a fixture no import statement can wait for.
+COMPOSITE_WORLDS = ("payments", "shop", "emporium", "ledger", "bazaar", "unsealed")
+for _name in COMPOSITE_WORLDS:
+    _src = str(WORLDS / _name / "src")
+    if _src not in sys.path:
+        sys.path.insert(0, _src)
 
 # Milliseconds on purpose: a clock whose instant is a whole second hides the
 # rounding mistakes that a world's canonical timestamps would trip over.
@@ -111,7 +124,9 @@ def ctx(db: Db, clock: Clock, seed: bytes) -> Ctx:
     """An instance context as a call receives it, without an instance behind it.
 
     Everything in the call path takes a `Ctx` and nothing else, which is what
-    lets it be tested before `instances.py` exists.
+    lets it be tested before `instances.py` exists. Its `worlds` is unbound, as
+    every context with no activation behind it is: reaching another world through
+    it raises, and a chain run with it keeps it in every layer.
     """
     return Ctx(
         db=db,
@@ -119,6 +134,7 @@ def ctx(db: Db, clock: Clock, seed: bytes) -> Ctx:
         ids=Ids(seed),
         state={},
         instance=InstanceInfo(id="i_test", fixture=None, seed=seed),
+        worlds=unbound(),
     )
 
 
@@ -195,6 +211,40 @@ def register_test_tools(world: World) -> None:
         return {"python": ctx.clock.iso(), "sql": str(row["sql_now"])}
 
 
+def composable_world(
+    name: str, *, version: str = "1.0.0", extra_schema: str = "", **options: Any
+) -> World:
+    """A world with a table of its own and the two tools that read and write it.
+
+    Everything is named after the world -- the table, the tools -- so several of
+    these compose into one flat surface with no prefix, and a test can tell which
+    node's store a row landed in by which table holds it.
+
+    `version` and `extra_schema` are what a fixture test varies: two worlds of one
+    name at two versions with one schema, or at one version with two schemas, are
+    the two halves of "the schema hash is the invalidation signal, not the
+    version".
+    """
+    own = f"CREATE TABLE {name}_rows (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;"
+    world = World(name, version, own + extra_schema, **options)
+
+    @world.tool(name=f"{name}_write")
+    def write(ctx: Ctx, value: str) -> dict[str, str]:
+        """Write one row into this world's own store."""
+        row = {"id": ctx.ids.uuid(), "value": value}
+        ctx.db.execute(
+            f"INSERT INTO {name}_rows (id, value) VALUES (?, ?)", row["id"], row["value"]
+        )
+        return row
+
+    @world.tool(name=f"{name}_read")
+    def read(ctx: Ctx) -> list[str]:
+        """Every value in this world's own store, oldest first."""
+        return [row["value"] for row in ctx.db.rows(f"SELECT value FROM {name}_rows ORDER BY id")]
+
+    return world
+
+
 class Boom(ToolError):
     """A world's own error, as every world defines its own."""
 
@@ -224,13 +274,19 @@ def isolated_imports() -> Iterator[None]:
     left in `sys.modules` would make the next test's import of it a no-op -- which
     is exactly the thing SH301 is asking about. Declared with
     `pytestmark = pytest.mark.usefixtures("isolated_imports")` by every module
-    that imports a world.
+    that imports a world *during a test*.
 
     Only worlds are purged. A blanket sweep of everything imported during the
     test would also evict a standard-library or third-party module that happened
     to be imported lazily inside it, and a module re-imported behind objects that
     still hold its old classes fails in a way nobody enjoys debugging. A world
     lives under `tests/worlds/` or in a temporary directory; nothing else does.
+
+    The composite worlds above are the exception where a test module imports one
+    directly: those are imported at collection time, before any test runs, so
+    they are never in the set this purges, and their `World` objects stay the
+    same objects for the run -- which they have to, because node identity is
+    object identity.
     """
     path = list(sys.path)
     modules = set(sys.modules)

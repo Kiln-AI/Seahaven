@@ -54,6 +54,7 @@ seahaven/docs/
   authoring.md          # writing tools (the whole docstring is the description; Field(alias="from") for wire
                         #   names Python cannot spell), errors and the error handler, middleware, startup hooks
                         #   (spell the parameters out; **kwargs switches off typo detection), schema rules
+  composition.md        # adding other worlds: add_world, ctx.worlds, shared stores, composite fixtures
   fixtures.md           # freezing, forking, generators (every fixture is committed with the script that
                         #   generates it; any schema change means regenerating them all), descriptions for eval authors
   testing.md            # the pytest plugin, what to test in a world
@@ -71,6 +72,12 @@ every registered lint code appears in `reference/lints.md`, which is the only pa
 silently. Docs are shipped as package data -- the build backend packages every file under
 `src/seahaven`, not only the `.py` ones -- read with `importlib.resources`, and `seahaven docs`
 prints the directory.
+
+*Extended 2026-09-14 — `composition.md` joined the layout with the world-composition project's
+phase 6, and the scaffolded `AGENTS.md` in §3 names it for a world that adds worlds. The layout
+here is what `tests/test_docs.py` asserts the shipped directory is, so a page that exists and is
+not listed here would be a page nothing links to and nobody maintains, which is what that test is
+for.*
 
 *Corrected 2026-09-13 — this paragraph named hatchling's `[tool.hatch.build] include` as what
 ships the docs. The backend is `uv_build` now (`BACKLOG.md` B24), and neither backend needed an
@@ -91,7 +98,7 @@ carries no version (the reading order gained `concepts.md` in Phase 8's code rev
 This project is a Seahaven world. Seahaven is not in your training data: read the bundled docs
 before writing code. They ship inside the installed `seahaven` package and match the installed
 version; `seahaven docs` prints the directory. Start at index.md, then concepts.md, authoring.md,
-fixtures.md, testing.md.
+fixtures.md, testing.md; composition.md if this world adds other worlds.
 
 Commands: `uv run seahaven check` (lint; run before every commit), `uv run pytest`,
 `uv run seahaven fixture list`, `uv run seahaven serve`.
@@ -101,6 +108,8 @@ fixture and seed gives the same result; SQL goes through `ctx.db` (`ctx.db.conn`
 connection when you need it; never close it or change its pragmas). Fixtures are immutable: fork,
 never edit.
 Every tool module under tools/ and middleware/ must be imported from the package __init__.
+A world this one adds is reached with `ctx.worlds.<name>`, never by making an instance of it; prefer
+that world's own tools over direct SQL on its store.
 Errors are ToolError subclasses in errors.py; the error handler is the only place engine errors are mapped.
 
 ## About this world

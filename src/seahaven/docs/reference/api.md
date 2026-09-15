@@ -24,6 +24,7 @@ Ten names on this page live outside `seahaven/__init__.py`, in two groups:
 import seahaven
 
 seahaven.World, seahaven.Instance, seahaven.Ctx, seahaven.Tool, seahaven.Call
+seahaven.Worlds, seahaven.WorldHandle
 seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.Change, seahaven.Fixture
 seahaven.SeahavenError, seahaven.WorldBug
 seahaven.ToolError, seahaven.ArgumentError, seahaven.DbError, seahaven.UnknownTool
@@ -46,6 +47,18 @@ class World:
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
     ) -> None: ...
+    def add_world(
+        self,
+        world: World,
+        /,
+        *,
+        name: str | None = None,
+        store: str | None = None,
+        tool_prefix: str | None = None,
+        tool_allow_list: Sequence[str] | None = None,
+        tool_block_list: Sequence[str] | None = None,
+        startup: Mapping[str, Any] | None = None,
+    ) -> None: ...
 ```
 
 One per world package, built at import in `world.py`. `schema` is the DDL as one string, usually
@@ -61,25 +74,51 @@ never swept. `untracked_tables` names tables the changeset session does not atta
 
 A `World` whose DDL does not execute cannot be constructed: the schema is built in memory to compute
 the schema hash, and SQLite's own message is reported. Nor is one whose `name` is not a single
-directory name — the name is a path component of the default working directory, so an empty name,
-a separator, a leading dot or a NUL is refused with `not a world name`.
+directory name that every platform carries unchanged — the name is a path component of the default
+working directory, and it travels with every fixture the world freezes. The rule is 1 to 128
+characters of letters, digits, space, `.`, `-` and `_`, not starting or ending with a space or a
+dot, and not a name Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1`–`com9`,
+`lpt1`–`lpt9`, with any extension). Anything else — an empty name, a separator, a drive letter, a
+NUL, an accent or a non-Latin script — is refused with `not a world name` and the clause it broke.
+A **fixture id** is the same rule, refused with `not a fixture id`.
 
 | Member | What it is |
 |---|---|
 | `world.tool(obj=None, *, name=None, description=None, transaction=None)` | register a tool, as a decorator or a call. Passing a built `Tool` and any of the three keywords is refused — a factory decided them |
 | `world.middleware(obj=None)` | register a middleware, as a decorator or a call. Order is registration order, outermost first |
 | `world.instance_startup(obj=None)` | register a startup hook, as a decorator or a call |
+| `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call-only — there is nothing to decorate |
 | `world.instance(fixture=None, *, seed=None, now=None, **startup_kwargs)` | make an instance; a context manager |
 | `world.fixtures()` | every fixture in the fixtures directory, by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
-| `world.tools` | the registry, in registration order. Read-only |
+| `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
+| `world.tools_by_fn` | the registry by the function each tool was built from, multi-valued because one function may be registered as two tools. This world's own tools only, contributed or not. The control tools are not in it |
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |
 | `world.accepted_startup_kwargs` | every keyword some hook names |
+| `world.added_worlds` | what `add_world` recorded, in registration order. Read-only |
+| `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
 | `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir` | as given, plus the hash of the normalised DDL |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
 [../authoring.md](../authoring.md).
+
+### `add_world`
+
+| Parameter | What | Default |
+|---|---|---|
+| first positional | the added world's `World` object, normally the `world` its package exports | required |
+| `name` | this host's internal identity for it — a path segment, a file name, a schema name. `^[a-z][a-z0-9_]*$`, no `__`, not `main` or `temp`. Never agent-visible | the added world's own `name` |
+| `store` | the account scope this world **and its whole subtree** belong to. `None` keeps the adder's scope, which is what shares a store | `None` |
+| `tool_prefix` | prepended to every contributed tool name | none |
+| `tool_allow_list` | only these tools are contributed to the agent's surface, named as the added world contributes them: after any prefix applied inside its own subtree, before this `tool_prefix` | all |
+| `tool_block_list` | every tool but these. Mutually exclusive with the allow list | none |
+| `startup` | keyword arguments bound to that node's startup hooks, not overridable by a `reset()` keyword of the same name | none |
+
+What is checked at the call is what the two `World` objects know: the name, the lists, the scope
+name, the `startup` keywords against the added world's own hooks, and the absence of a cycle.
+Everything that is a property of the whole tree is checked at the first use of it — see
+[../composition.md](../composition.md), and `SH504` in [lints.md](lints.md).
 
 ### `sql_files`
 
@@ -100,9 +139,11 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | Member | What it is |
 |---|---|
 | `inst.call(name, /, **arguments)` | run one tool: validation, the middleware chain, the tool, on the calling thread, under the instance's lock. Raises the world's `ToolError` subclasses |
-| `inst.tools()` | the tool list with JSON schemas, as `{"name", "description", "input_schema"}`. Control tools are never in it |
-| `inst.inspect()` | a read-only `Db` on a second connection: every table, the instance clock, opened once and kept. Never a tool |
-| `inst.changes()` | the cumulative changeset since creation, as `list[Change]` |
+| `inst.call(fn, /, *args, **arguments)` | the same call, named by the tool's own function: the arguments are checked by a type checker and the result is the tool's own object. Resolves over the composite surface, so it reaches a tool of any world this one adds |
+| `inst.tools()` | the tool list with JSON schemas, as `{"name", "description", "input_schema"}`. One flat list over every world this one adds. Control tools are never in it |
+| `inst.inspect()` | a read-only `Db` on a second connection: every table, the instance clock, opened once and kept. Every added world's store is attached read-only under its path. Never a tool |
+| `inst.changes()` | the cumulative changeset since creation, as `list[Change]`, covering every store |
+| `inst.composition()` | what this instance is running against: one `NodeReport` per store, root first |
 | `inst.freeze(id, description)` | mint a fixture from the current state; returns the `Fixture`. Refuses inside `bulk()` |
 | `inst.bulk()` | a context manager yielding the instance's own `Ctx`, in one transaction, for loading rows fast |
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
@@ -124,6 +165,35 @@ directory, no other instance, no process.
 | `ctx.state` | a `dict` that lives as long as the instance |
 | `ctx.call` | the current `Call`, or `None` outside one (a startup hook, `bulk()`) |
 | `ctx.instance` | `id`, `fixture` and `seed`, read-only |
+| `ctx.worlds` | the `Worlds` this node adds, by name. For a world that adds none it answers nothing: every name on it is a `WorldBug` |
+
+`Ctx` is generic in what `ctx.worlds` is: a bare `seahaven.Ctx` annotation is what almost every tool
+writes, and `seahaven.Ctx[CompanyWorlds]` opts into a type checker knowing the child names (below).
+The parameter is annotation-only — nothing in the runtime reads it — and the registration check
+accepts either.
+
+## `Worlds` and `WorldHandle`
+
+`ctx.worlds` is a `Worlds`: attribute access, `ctx.worlds.payments`, and item access,
+`ctx.worlds["payments"]`, both answering the `WorldHandle` for that child. A name no `add_world`
+registered is a `WorldBug`.
+
+| Handle member | What it is |
+|---|---|
+| `handle.call(name, /, **arguments)` | run one tool of that node, by the added world's **own** unprefixed name. Neither list filters this: host code can call every tool of a world it adds |
+| `handle.call(fn, /, *args, **arguments)` | the same, named by the function, resolved over that handle's whole subtree |
+| `handle.db` | that node's `Db`, `conn` included |
+| `handle.state` | that node's own `ctx.state` dict |
+| `handle.worlds` | that node's own children |
+
+A handle belongs to one **activation** of the instance — the outermost call, or the `bulk()` block,
+that was running when it was made — and every member raises `WorldBug` after that activation ends.
+A handle is not a reference to keep.
+
+`Worlds` is also the base a world subclasses to declare its children to a type checker — one
+`<name>: seahaven.WorldHandle` annotation per child, on a class that is never instantiated, named in
+a `Ctx[...]`. `seahaven check` binds it to the registrations (`SH502`, `SH503`). The worked example
+is in [../composition.md](../composition.md), which is the page for all of this.
 
 ## `Db`
 
@@ -188,6 +258,7 @@ so SQLite asks them for every call.
 call.name  # the name the caller asked for
 call.arguments  # raw until validation runs inside the chain, validated after
 call.tool  # the Tool that was found
+call.node  # the canonical path of the node that owns the tool; "main" for a world that adds none
 call.with_arguments(**changes)  # a copy with changes merged over the arguments
 ```
 
@@ -218,17 +289,40 @@ the framework's own flag for the control tools and cannot be set through it.
 ## `Change`
 
 ```py
+change.world  # the store: the node's path, "main" for the root
 change.table  # the table
 change.op  # "insert" | "update" | "delete"
 change.key  # the row's primary key columns, as a dict
 change.before, change.after  # row dicts, or None where not applicable
-change.to_dict()  # the wire shape an eval reads
+change.to_dict()  # the wire shape an eval reads, with "world" first
 ```
+
+`world` is `main` on every record of a world that adds none, and the owning node's canonical path
+otherwise — which is what tells two tables of the same name in two stores apart
+([../composition.md](../composition.md)).
 
 `before` and `after` hold only the columns the change carries. A changeset marks the rest
 `apsw.no_change`, which is not the same as `NULL`, so an update's `before` holds the key columns and
 the old values of what changed — flattening the two would turn "changed the assignee" into "rewrote
 the row".
+
+## The composition report
+
+`inst.composition()` returns one record per store, root first, in `seahaven.composition`:
+
+```py
+report.path  # the node's canonical path, "main" for the root
+report.world, report.world_version  # the world there, at the version installed
+report.scope  # the account scope it resolved into, or None for the unnamed one
+report.aliases  # every other route that reaches it, as "<parent path>/<name>"
+report.schema_hash  # that world's schema hash
+report.frozen_world_version  # what the fixture recorded, when that is not what is installed
+```
+
+It describes the stores this instance holds, which is the set it was created with rather than
+whatever the world's seal says now. `frozen_world_version` is `None` for a blank instance and
+wherever the fixture and the installed world agree: a version difference under a matching schema
+hash is reported, never refused. Over OpenEnv the same list is the `state` message's `composition`.
 
 ## `Fixture`
 
@@ -255,9 +349,10 @@ def freeze(
 The fixture directory read directly, for tooling that works on fixtures rather than on a world:
 `load` reads one sidecar without opening the state file, `load_all` returns every fixture in a
 directory by id (an empty directory is not an error and dot-directories are skipped, a `.pending-*`
-freeze in flight among them; two fixtures claiming one id is an error), `verify` raises unless the
-state file is the one its sidecar's `file_sha256` describes, and `freeze` is what `Instance.freeze`
-delegates to.
+freeze in flight among them; two fixtures claiming one id is an error), `verify` raises unless every
+state file is a real file in the fixture's own directory rather than a symbolic link of any kind and
+is the one its sidecar's `file_sha256` describes, and `freeze` is what `Instance.freeze` delegates
+to.
 
 A world does not need these — `world.fixtures()`, `world.instance(id)` and `inst.freeze(...)` are
 the ordinary path, and `world.instance(id)` verifies for you. Listing deliberately does not:

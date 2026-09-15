@@ -25,6 +25,7 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
+from openenv.core.env_client import EnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 
 from seahaven.openenv import SeahavenClient, SeahavenObservation, SeahavenState
@@ -37,6 +38,18 @@ UNCONNECTED = "http://127.0.0.1:1"
 def client() -> SeahavenClient:
     """A client that never connects: enough to drive the three parsers."""
     return SeahavenClient(base_url=UNCONNECTED)
+
+
+def test_the_ping_timeout_defaults_to_two_minutes(client: SeahavenClient) -> None:
+    """Wider than OpenEnv's stock `20.0`: see `SeahavenClient.__init__` for why."""
+    assert client._websocket_ping_timeout_s == 120.0
+    # The interval is untouched -- only the timeout gets a different default.
+    assert client._websocket_ping_interval_s == 20.0
+
+
+def test_an_explicit_ping_timeout_still_wins(client: SeahavenClient) -> None:
+    explicit = SeahavenClient(base_url=UNCONNECTED, websocket_ping_timeout_s=5.0)
+    assert explicit._websocket_ping_timeout_s == 5.0
 
 
 # --- the parsers -----------------------------------------------------------
@@ -202,3 +215,22 @@ def test_the_client_is_a_context_manager_that_closes_its_session(world: World) -
         with SeahavenClient(base_url=url) as second:
             second.reset()
             assert second.call("rows", sql="SELECT * FROM notes").result == []
+
+
+# --- the seam under the polite close ---------------------------------------
+
+
+def test_the_disconnect_hook_this_client_overrides_is_still_there() -> None:
+    """The check that fails loudly if OpenEnv ever moves this seam.
+
+    `SeahavenClient._disconnect_async` overrides a *private* method of
+    `EnvClient` so that a close waits for the server, which is what keeps a
+    server's log free of a traceback per session; its docstring has the whole
+    story. An OpenEnv that renamed or dropped the method would leave the override
+    defining something nobody calls, and the only symptom would be the noise
+    coming back in somebody else's log. This says so here instead.
+    """
+    assert hasattr(EnvClient, "_disconnect_async"), (
+        "openenv no longer has the disconnect hook SeahavenClient overrides"
+    )
+    assert SeahavenClient._disconnect_async is not EnvClient._disconnect_async

@@ -1,9 +1,10 @@
 # OpenEnv
 
 Seahaven is an OpenEnv environment. `seahaven serve` speaks
-[OpenEnv](https://github.com/meta-pytorch/OpenEnv) (v0.4.x) and nothing else: a world is either
-driven in process through `world.instance(...)`, or over OpenEnv. There is no Seahaven-specific
-remote API to learn, no SDK to install to talk to a world, and nothing per-world to generate.
+[OpenEnv](https://github.com/huggingface/OpenEnv) (v0.4.x) over its WebSocket endpoint `/ws`,
+and nothing else: a world is either driven in process through `world.instance(...)`, or over that
+WebSocket. There is no Seahaven-specific remote API to learn, no SDK to install to talk to a world,
+and nothing per-world to generate.
 
 **OpenEnv** is an open standard for connecting to reinforcement-learning environments: a server
 hosts an environment, a client connects, and the session is `reset` / `step` / `state` / `close`
@@ -109,7 +110,7 @@ language needs only these frames on `ws://host:port/ws`.
 | `{"type": "reset", "data": {...}}` | make the instance; `data` holds the arguments in the table above |
 | `{"type": "step", "data": {"type": "call_tool", "tool_name": "...", "arguments": {...}}}` | call a tool |
 | `{"type": "step", "data": {"type": "list_tools"}}` | the world's tools; needs no `reset` |
-| `{"type": "state"}` | the session's state |
+| `{"type": "state"}` | the session's state: `episode_id`, `step_count`, `fixture`, `now`, `world`, `composition` |
 | `{"type": "close"}` | end the session and destroy the instance |
 
 **Server to client:**
@@ -135,10 +136,12 @@ The `error` frame is OpenEnv's own, and its `code` is one of `INVALID_JSON`, `UN
 means the frame or the session failed — a malformed action, a server at capacity, a world that
 raised a `WorldBug`. It is never how a tool reports that an issue does not exist.
 
-**Read state over the WebSocket, not over HTTP.** `GET /state` and `GET /schema` exist and answer
-OpenEnv's base models, so a client reading them sees neither Seahaven's state fields nor a
-session's own numbers. That is `BACKLOG.md` B13 in the Seahaven repository, and
-[serving.md](serving.md) lists it beside the other rough edges.
+**`/ws` is the only path an episode travels.** `POST /reset`, `POST /step` and `GET /state` are
+refused with a `501`, because OpenEnv builds a fresh environment inside each of those handlers and
+closes it before replying — three requests, three instances, none of them the session's. They stay
+in the published schema, since `openenv push` reads path names to decide what kind of environment a
+world is, but only `/ws` holds an episode. "Rough edges" in [serving.md](serving.md) has the
+refusal body and the upstream issue.
 
 ## What the OpenEnv model means here
 
@@ -149,7 +152,9 @@ worker. That is the shape hubs expect — one environment per image or Space —
 limitation Seahaven can lift from the inside: a session's instance is in-process state, so a second
 worker would answer a session's second frame with an environment that has never seen its first.
 Several worlds means several processes. Scaling one world out means more processes behind a load
-balancer with connection affinity.
+balancer with connection affinity. One world is not one *package*, though: a world that adds other
+worlds serves their tools as part of its own surface, under whatever names it publishes them as, so
+a composite world is still one environment on the wire ([composition.md](composition.md)).
 
 **One instance per connection.** A WebSocket connection is a session, and a session holds exactly
 one instance: its own SQLite database, its own frozen clock, its own seeded ids. Sessions do not
@@ -171,8 +176,8 @@ tool list belongs to the world rather than to the episode. Control tools are nev
 
 An eval grades the state the episode left behind, and that state is a **changeset**: the net
 difference between the fixture and the database as the agent left it — a list of
-`{table, op, key, before, after}` records, where `op` is `insert`, `update` or `delete`. Net, not a
-log: a write that changes nothing records nothing, an insert then an update of the same row is one
+`{world, table, op, key, before, after}` records, where `op` is `insert`, `update` or `delete` and
+`world` is the node the row belongs to (`main` for a world that adds none). Net, not a log: a write that changes nothing records nothing, an insert then an update of the same row is one
 insert, and a rolled-back call leaves no trace. [concepts.md](concepts.md) has the full semantics.
 
 **`state` is changing, and this section with it.** Today the `state` frame answers the session's
@@ -261,9 +266,16 @@ other's writes.
 
 It does not make sense to add MCP support to Seahaven until there is upstream support for stateful
 servers — support that does not mutate the tool interface, and does not require passing a
-non-standard session id alongside every call. For now: **use the standard WebSocket API and
-clients.** They are what every example on this page uses, and they are what `SeahavenClient` and
-every other OpenEnv client speak.
+non-standard session id alongside every call.
+
+So an OpenEnv app's `/mcp` endpoint is refused here, on both of its transports and for every method
+it dispatches, rather than left to answer well-formed nothings: its dialect has no `reset`, and
+without one every `tools/call` behind a successful `tools/list` can only answer `reset first`.
+"Rough edges" in [serving.md](serving.md) has the refusal, its JSON-RPC envelope, and why `/ws` is
+the agent-facing transport in spite of OpenEnv's own advice to the contrary.
+
+For now: **use the standard WebSocket API and clients.** They are what every example on this page
+uses, and they are what `SeahavenClient` and every other OpenEnv client speak.
 
 ## Publishing to a hub
 
@@ -288,9 +300,9 @@ Seahaven is built by the Kiln AI team.
 
 ## Rough edges, and one install trap
 
-OpenEnv's own rough edges under Seahaven — the two HTTP routes above, and a traceback logged on
-every clean disconnect — are listed at the end of [serving.md](serving.md), with the `BACKLOG.md`
-entry for each. None of them is in the WebSocket path an eval uses.
+OpenEnv's own rough edges under Seahaven — the three HTTP episode-control routes and `/mcp`,
+both refused above — are listed at the end of [serving.md](serving.md), with the upstream issue for
+each. None of them is in the WebSocket path an eval uses.
 
 One install note that bites before any of this: **do not `pip install "seahaven[serve]"`.** The
 framework is not published yet, and the `seahaven` name on PyPI holds a placeholder that has no

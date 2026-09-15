@@ -1,10 +1,11 @@
-"""Seahaven's benchmark: two workloads over ProjectTracker `agency`, and a gate sweep.
+"""Seahaven's benchmark: ProjectTracker workloads, a gate sweep, and a composite tree.
 
 Run by hand and before a release (`architecture.md` §10), never in CI and never
 as a gate: nothing here fails a build, and no number here is a threshold. What it
-is for is the two questions the framework cares about -- what a call costs, and
-what the concurrency gate's size does to a process serving many sessions -- asked
-the same way twice so that two runs on one machine can be compared.
+is for is the three questions the framework cares about -- what a call costs,
+what the concurrency gate's size does to a process serving many sessions, and
+what a second node of a composite world costs -- asked the same way twice so that
+two runs on one machine can be compared.
 
 Read the output the way the output asks to be read. A benchmark run on a shared
 virtual machine measures that machine on that afternoon; `bench/results/latest.md`

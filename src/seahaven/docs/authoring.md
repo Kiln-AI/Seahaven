@@ -236,6 +236,15 @@ A middleware is refused if it is not callable with three positional arguments. A
 refused unless the context is its one and only positional parameter — none, or two, or a `*args` is
 refused alike — and if it names a parameter `fixture`, `seed` or `now`.
 
+An `add_world` is refused when its `name` is not `^[a-z][a-z0-9_]*$`, contains `__`, or is `main` or
+`temp`; when this world already adds one under that name; when `tool_allow_list` and
+`tool_block_list` are both given, or either is a bare string; when `store` is given as anything but
+a scope name; when a `startup` keyword is one the added world's own hooks do not accept; and when
+the added world's tree contains this one. Everything that is a property of the whole tree — a list
+naming a tool that does not exist, two routes producing one tool name, the attach bound — is checked
+at the first use of the tree instead, and `seahaven check` is where you meet it
+([composition.md](composition.md)).
+
 All of these raise `seahaven.WorldBug`, which is the framework's word for "the author has a
 mistake". A `WorldBug` is never shown to an agent.
 
@@ -459,6 +468,42 @@ session is attached after the hooks have run.
 If a hook cannot do its job — a `user_id` naming nobody — raise `seahaven.WorldBug`. Instance
 creation fails, and an episode never runs against state that was set up wrong.
 
+## Adding another world
+
+`world.add_world(other.world, name="payments", tool_prefix="pay_")` is the fourth registration verb:
+the added world's tools join this world's agent surface under a name of your choosing, its store
+becomes a second SQLite file in every instance, and your own tools reach it through
+`ctx.worlds.payments`. [composition.md](composition.md) is the page; four rules belong here, because
+they are authoring decisions and not mechanism.
+
+**Prefer the added world's tools over direct SQL on its store.** `ctx.worlds.payments.db` is a full
+read-write `Db` and it is there because a framework cannot predict every use — but a write through
+it bypasses that world's handlers and therefore its invariants: clock stamps, id streams, audit
+rows, FTS triggers. Call the tool where a tool exists, even when you have hidden it from the agent
+with a `tool_allow_list`; host code can call every tool of a world it adds. Keep raw SQL for what no
+tool covers, and expect the rows it writes to be missing whatever the world's own code would have
+written alongside them.
+
+**Declare prefixes and lists to match the client's real surface.** A composite has no single real
+product to be faithful to; the real client's agent surface is an assembly too. So faithfulness
+splits: each added world is faithful to its own vendor, and you are faithful to what the client's
+agent actually sees — your own tools, your composite tools, and the names, the filtering and the
+*order* you declare for the added worlds. A prefix nobody's client uses, or a tool left visible that
+the real integration never exposes, is your infidelity and not the added world's.
+
+**Never assume you are the only writer to a world you add.** Sharing is the default: two worlds that
+add the same package land on the same store, exactly as two integrations share one real account. A
+tool that assumes every row in that store came from its own calls — a counter it believes it owns, a
+"the last charge is mine" read — is wrong the first time a sibling writes there. Query for what you
+put in, by id.
+
+**Return models, not bare dicts.** An in-process call returns the tool's own object, so a tool
+answering with a pydantic model hands its caller that model, with its fields completing and its
+types checked; a tool answering with `dict[str, object]` hands over something a caller has to index
+blind. It costs nothing over the wire — the OpenEnv layer serialises either — and it is what makes
+`inst.call(create_charge, amount=500)` a typed call rather than a typed call site with an `Any` on
+the end of it.
+
 ## Schema
 
 Raw SQLite DDL in `schema/`, applied in filename order, hence the `001_`, `002_` prefixes. There is
@@ -558,11 +603,10 @@ generates it. See [fixtures.md](fixtures.md).
 
 **Ordering within one episode.** The clock does not move, so every row one episode writes carries
 the same `created_at`, and ordering by it is not an order. For raw SQL the answer is `ORDER BY
-created_at, rowid`. For a *tool* there is no complete answer today: a keyset cursor has to carry its
-tiebreaker as a value, and `rowid` is not a column a world projects. Order by `(created_at, id)`,
-say so in the tool's docstring, and grade evals on state and changesets rather than on the order of
-an activity feed. The framework-level question — whether `ctx` should offer a monotonic per-instance
-counter — is open, and is `BACKLOG.md` B23 in the Seahaven repository.
+created_at, rowid`. For a *tool* there is no complete answer: a keyset cursor has to carry its
+tiebreaker as a value, `rowid` is not a column a world projects, and `ctx` offers no monotonic
+per-instance counter to page on instead. Order by `(created_at, id)`, say so in the tool's
+docstring, and grade evals on state and changesets rather than on the order of an activity feed.
 
 **Lists without a tiebreak.** `ORDER BY created_at DESC` over rows that share an instant is not
 deterministic. Always order by a column *and* by the id.

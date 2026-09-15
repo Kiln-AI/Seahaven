@@ -29,13 +29,21 @@ written against `SH203` in a world's history always means the same rule.
 | SH201 | warning | a wall-clock call in world code, outside `middleware/` |
 | SH203 | warning | `random` or `uuid.uuid4()` in world code |
 | SH205 | warning | a tool with an empty description |
+| SH206 | warning | a prefixed world's description names a sibling tool the agent cannot call |
+| SH207 | warning | one tool of a shared node contributed under two names |
+| SH208 | error | `.instance(` in a module under `tools/` or `middleware/` |
+| SH209 | error | `ctx.worlds` naming something that is not a registered child |
 | SH301 | error | a module under `tools/` or `middleware/` that is never imported |
 | SH401 | error | a fixture sidecar that does not validate |
 | SH402 | error | a fixture's `file_sha256` does not match its state file |
 | SH403 | error | a fixture's `schema_hash` does not match the world |
 | SH404 | error | a fixture's `now` is not canonical |
 | SH405 | error | a fixture's state file has `-wal` or `-shm` companions |
+| SH406 | error | a composite sidecar's `nodes` disagrees with the world's composition |
 | SH501 | error | the package does not export a `World` named `world` |
+| SH502 | error | a `Worlds` subclass annotates a name no `add_world` registered |
+| SH503 | warning | a registered child name no declared `Worlds` subclass annotates |
+| SH504 | error | the world's composition does not seal |
 
 The schema rules are asked of a real database rather than of the text: the DDL is built in memory
 and interrogated with `PRAGMA table_list`, `PRAGMA table_info` and `sqlite_master`, so a `STRICT`
@@ -153,6 +161,68 @@ to @world.tool`.
 
 **A warning**, because a world under development has tools that do not have one yet.
 
+## SH206 — a prefixed world's description names a sibling tool the agent cannot call
+
+**Rule.** When an added world is contributed under a `tool_prefix`, no contributed tool's
+description names another of that node's tools by its unprefixed name.
+
+**Why.** A prefix renames the tool and never the text. An added world whose
+descriptions cross-reference each other — "call `create_customer` first" — keeps saying
+`create_customer` on a surface where the agent can only call `stripe_create_customer`. The agent
+reads the description, calls the name in it, and gets `unknown_tool`.
+
+**Fix.** `drop the tool_prefix on that add_world, or accept the mention: check never rewrites a
+description`. Rewriting the text is deliberately not on the table: the description is the added
+world's statement about its own product, and a host that edits it is no longer serving that world.
+
+The finding is reported against the host's own `world.py`, where the `add_world` is, and names the
+added world's file in the message: for a world installed from PyPI the description is inside
+`site-packages`, which is not a file the host's author can edit or should.
+
+**A tool named after a common word will produce noise.** The match is the tool's registered name on a
+word boundary and nothing more, so a vendor world with a tool called `list`, `close`, `search` or
+`note` earns a warning for every description that uses the word in a sentence — "returns a list of
+notes" names the tool `list`. There is no way to tell the two apart from the text, and inventing one
+would make the rule guess. It is a warning for this reason: accept the mention and move on.
+
+## SH207 — one tool of a shared node contributed under two names
+
+**Rule.** No node contributes one of its tools under more than one name on the composite surface.
+
+**Why.** Two routes to one shared store each carry their own prefix and lists, which is two
+declarations rather than a collision. The result is an agent that sees `stripe_create_charge` and
+`billing_create_charge`, both writing to one account, with nothing in either listing saying so.
+Sometimes that is the client's real surface, which is why it is a warning.
+
+**Fix.** `give every route but one tool_allow_list=[] or a tool_block_list naming it, or accept that
+the agent sees one account twice`.
+
+## SH208 — `.instance(` in a module under `tools/` or `middleware/`
+
+**Rule.** No call of an attribute named `instance` in a module under either registering directory.
+
+**Why.** Creating an instance from inside a call is a `WorldBug` the moment the line runs: the
+dispatcher sets a per-thread flag and `World.instance(...)` refuses. A world reaches another world's
+store through `ctx.worlds.<name>`, which the framework resolves per instance — that is what makes
+sharing by identity work at all, and a handler holding a store of its own defeats it.
+
+**Fix.** `reach an added world with ctx.worlds.<name>.call(...); world.instance(...) belongs in an
+eval or a test, never in a call`.
+
+## SH209 — `ctx.worlds` naming something that is not a registered child
+
+**Rule.** Every literal `ctx.worlds.<name>` and `ctx.worlds["<name>"]` in the world's package names
+a `name=` some `add_world` on this world registered.
+
+**Why.** The container answers any attribute for a type checker's sake and refuses an unregistered
+one at run time, so a misspelt child is a `WorldBug` in an eval rather than a `NameError` in
+development.
+
+**Fix.** `name one of the worlds it adds (<names>), or add the one it means`. Only the literal
+spelling is checked: a name computed at run time is outside what a lint can see, and
+`ctx.worlds.<child>.worlds.<grandchild>` is a child's registrations rather than this world's and is
+left alone.
+
 ## SH301 — a module under `tools/` or `middleware/` that is never imported
 
 **Rule.** Every module under those two directories is in `sys.modules` after the world's package has
@@ -169,9 +239,10 @@ import from the module that uses it, which is what puts it in `sys.modules`.
 
 ## SH401 — a fixture sidecar that does not validate
 
-**Rule.** `fixture.yaml` parses as YAML, carries `format_version: 1`, and validates against the
-sidecar model. Checked first and alone: the other fixture rules read fields a broken sidecar does not
-have, so a fixture that fails this is reported once and left.
+**Rule.** `fixture.yaml` parses as YAML, carries `format_version: 1` or `2`, and validates against
+the sidecar model — including, at version 2, every entry of `nodes`: no two may share a
+`path`, and no two may name one state file, the root's `state.sqlite` included. Checked first and alone: the other fixture rules read fields a broken sidecar
+does not have, so a fixture that fails this is reported once and left.
 
 **Why.** The sidecar is what says where the state came from. Without it, nothing can say whether the
 file matches the world.
@@ -181,16 +252,23 @@ hand-edited: everything in it is derived from the instance that was frozen.
 
 ## SH402 — a fixture's `file_sha256` does not match its state file
 
-**Rule.** `state.sqlite` exists and hashes to what the sidecar says.
+**Rule.** `state.sqlite` exists, is a real file rather than a symbolic link, and hashes to what the
+sidecar says.
 
 **Why.** A fixture is immutable, and this is how that is enforced against the file rather than
 against a convention. A mismatch means the file was changed after it was frozen — usually by opening
-it and writing to it — and every eval that used it since started from state nobody meant. The
-framework makes the same check the first time it copies a fixture in a process; this rule finds it
-before a commit rather than in a run.
+it and writing to it — and every eval that used it since started from state nobody meant. A link is
+the same defect by another route: everything that reads a fixture would otherwise follow it, the
+hash included, so a link out of the directory with the target's digest in the sidecar would agree
+with itself while the instance ran on a database the fixture does not contain. The framework makes
+the same checks when it copies a fixture; this rule finds them before a commit rather than in a
+run.
 
 **Fix.** `fixtures are immutable: fork it, change the fork, and freeze that`. If the file is simply
-missing, the fix is to regenerate it.
+missing, or is a link, the fix is to regenerate it.
+
+**Per node.** A composite fixture holds one state file per store, and each is checked against its
+own `file_sha256` with the node's path in the message.
 
 ## SH403 — a fixture's `schema_hash` does not match the world
 
@@ -204,6 +282,11 @@ before a commit.
 the world, in parent order, because they all conform to one schema. This is the cost a schema change
 carries, and it is why the generator script is committed.
 
+**Per node.** Each store of a composite fixture is checked against the hash of *its own* world's
+DDL, with the node's path in the message — so a dependency whose schema moved is reported as that
+node and not as the host's. That half of the rule needs the tree, and is the only part of it that
+says nothing when the composition does not seal.
+
 ## SH404 — a fixture's `now` is not canonical
 
 **Rule.** `now` round-trips through the clock's own formatter unchanged: UTC, milliseconds, trailing
@@ -216,9 +299,13 @@ row in the fixture.
 **Fix.** `canonical is 2026-06-01T09:00:00.000Z: UTC, milliseconds, trailing Z`. In practice: pass
 `--now` in that format to `seahaven fixture freeze`.
 
+Whole-sidecar even for a composite fixture, unlike the three rules around it: there is one clock per
+instance and no store has a `now` of its own.
+
 ## SH405 — a fixture's state file has `-wal` or `-shm` companions
 
-**Rule.** No `state.sqlite-wal` or `state.sqlite-shm` beside the state file.
+**Rule.** No `state.sqlite-wal` or `state.sqlite-shm` beside the state file, and none beside any of
+the per-node state files a composite fixture holds.
 
 **Why.** A fixture is checkpointed and vacuumed before it is sealed, so either file means the
 database was opened for writing after it was frozen — and whatever the fixture's hash covers, it does
@@ -232,6 +319,19 @@ and a mode check would fire on every correct world after every clone. What the s
 is the file changing, and that is SH402, over a hash version control does preserve. Sealing the file
 is still what stops a live instance writing a fixture in place, so `freeze` still does it; it is
 only the *check* that cannot ask.
+
+## SH406 — a composite sidecar's `nodes` disagrees with the world's composition
+
+**Rule.** The sidecar describes the tree the world resolves to now: the same added nodes, each in the
+same scope, reached by the same alias edges, and a version-2 sidecar for a composite world and a
+version-1 one for a world with a single store.
+
+**Why.** A fixture holds one file per node, and a node added, removed or moved into another scope
+makes the set of files it holds the wrong set. Instance creation refuses such a fixture with this
+same sentence; this rule says it before a commit rather than in a run.
+
+**Fix.** `regenerate it with seahaven fixture freeze or seahaven fixture fork`. A node's *schema*
+drifting is SH403 instead, per node, because that is one world changing rather than the tree.
 
 ## SH501 — the package does not export a `World` named `world`
 
@@ -249,3 +349,50 @@ misses.
 
 An import that fails for another reason is reported here too, with the exception's own last line:
 what `check` will not do is answer with a traceback.
+
+## SH502 — a `Worlds` subclass annotates a name no `add_world` registered
+
+**Rule.** Every attribute annotated on a `seahaven.Worlds` subclass declared in the world's package
+is the `name=` of an `add_world` on that world.
+
+**Why.** The subclass is never instantiated: it exists so that a type checker knows which children
+`ctx.worlds` has, and `Worlds.__getattr__` satisfies any name at all. Nothing but this rule binds the
+declaration to the registrations, so an attribute that outlived the `add_world` it was written for
+type-checks perfectly and fails in an eval.
+
+**Fix.** `annotate one of the names it does add (<names>), or drop the attribute`.
+
+Names beginning with an underscore are not declarations and are never reported: no child can be
+spelled that way, and `Worlds.__getattr__` lets such a name fall to ordinary attribute lookup so that
+a subclass may carry `__slots__` or a private field. An ordinary name *is* reported whatever its
+annotation says — a `ClassVar[str]` on a `Worlds` subclass is flagged like any other — because the
+class exists to declare handles and nothing else.
+
+## SH503 — a registered child name no declared `Worlds` subclass annotates
+
+**Rule.** When the world declares a `Worlds` subclass, every registered child name is annotated on
+one.
+
+**Why.** A half-declared class is worse than none: the children it lists are checked and the one it
+forgot is not, silently, in exactly the world whose author asked for the checking. Declaring the
+class at all stays optional, which is why nothing is said about a world that declares none.
+
+**Fix.** ``add `<name>: seahaven.WorldHandle` to <class>``.
+
+## SH504 — the world's composition does not seal
+
+**Rule.** The world resolves to a tree: no list naming a tool the added world does not contribute,
+no two routes producing one tool name, no contributed name that is reserved or is not a valid tool
+name, no `startup` keyword bound to two values, and no more added stores than SQLite can attach.
+
+**Why.** A composition is sealed lazily, at the first use of the tree, because a host's own tools are
+registered by imports that run after its `add_world` lines and a world can never be told what added
+it. So these are registration errors that raise from `world.instance(...)`, `inst.tools()`, a call,
+a freeze — or from here. `check` seals as its first act, which is what turns each of them into a line
+with the offending `add_world` on it rather than a traceback out of the first run.
+
+**Fix.** `correct the add_world the message names; nothing can use this world until it seals`. The
+message is the seal's own and names the path and the declaration that caused it. A world that does
+not seal still gets every rule that needs no tree: only SH206, SH207, SH406 and the per-node half of
+SH403 ask for one, so the DDL, coverage and declaration rules, the rest of the code rules and the
+rest of the fixture rules all report in the same run.

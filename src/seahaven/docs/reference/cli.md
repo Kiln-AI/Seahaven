@@ -60,7 +60,9 @@ seahaven new notes
 seahaven new notes --dir ~/projects --hub
 ```
 
-It refuses an existing directory rather than merging into one.
+It refuses an existing directory rather than merging into one, a name that does not make a Python
+package name, and a name `World(name=...)` would not accept — the name reaches the scaffolded
+`world.py` verbatim, so a world it cannot import is refused before the directory is written.
 
 ## `seahaven check`
 

@@ -1,8 +1,8 @@
 # The benchmark
 
-Two workloads over ProjectTracker `agency`, and a sweep of the concurrency gate. Run by hand and
-before a release (`architecture.md` §10). **Never a gate:** it is not in CI, nothing fails on a
-number, and no threshold is asserted anywhere.
+Two workloads over ProjectTracker `agency`, a sweep of the concurrency gate, and what a node of a
+composite world costs. Run by hand and before a release (`architecture.md` §10). **Never a gate:**
+it is not in CI, nothing fails on a number, and no threshold is asserted anywhere.
 
 The committed results are [`results/latest.md`](results/latest.md). Read the top of that document
 before reading any number in it.
@@ -16,6 +16,7 @@ uv run python -m bench all --out bench/results/latest.md    # everything, ~10 mi
 uv run python -m bench baseline                             # one thread, ~1 min
 uv run python -m bench sweep --progress                     # the gate sweep, ~9 min
 uv run python -m bench isolation                            # the slow-call probe, ~1 min
+uv run python -m bench composite                            # what a node costs, ~10 s
 ```
 
 With no `--out` the report goes to stdout. `--progress` prints a line per point on stderr, which
@@ -23,7 +24,8 @@ is worth having on the sweep. `--quick` shrinks every count to something that fi
 and measures nothing: it is for checking that the harness runs.
 
 Useful knobs: `--repeats`, `--calls`, `--baseline-calls`, `--gates 1 2 4 0`, `--workers 4 32`,
-`--seconds`, `--readers`, `--seed`, `--warm-only`. `python -m bench --help` lists them all.
+`--seconds`, `--readers`, `--composite-calls`, `--tree-repeats`, `--seed`, `--warm-only`.
+`python -m bench --help` lists them all.
 
 ## Before you believe a number
 
@@ -49,6 +51,14 @@ what the tables mean, what was confirmed or changed, and what an operator should
 the file refuses to clobber that section unless you pass `--force` — and if you pass it, write the
 reading again from the new tables rather than keeping the old one.
 
+**Section 7 of the committed report was measured on its own** and pasted in above `## Reading`,
+because the sections before it are an older run that this repository's environment note says is a
+maintainer's call to replace. That is why the composite section carries a provenance line naming its
+own command, commit and machine: a section that can be regenerated alone (`python -m bench
+composite`) can end up beside tables from another run, and it has to say so. A full
+`all --force` run regenerates every section together, and the provenance line then repeats what the
+Environment table already says.
+
 ## Layout
 
 | File | What it holds |
@@ -58,6 +68,7 @@ reading again from the new tables rather than keeping the old one.
 | `runner.py` | one measured point: N sessions, a cache state, a fixed number of calls |
 | `baseline.py` | one thread: what a call costs, and how much of it is SQLite |
 | `sweep.py` | the gate sweep, and the slow-call isolation probe |
+| `composite.py` | what a node costs: the `tests/worlds/` ladder stood up, and driven |
 | `environment.py` | what the numbers were produced on |
 | `report.py` | the markdown, caveats first |
 | `__main__.py` | the CLI |

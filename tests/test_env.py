@@ -6,11 +6,14 @@ environment object standing for one session -- and `test_server.py` proves the
 same behaviour arrives over a real socket.
 """
 
+import copy
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import emporium
 import pytest
 
 from seahaven.ctx import Ctx
@@ -223,6 +226,29 @@ def test_list_tools_answers_before_a_reset_and_agrees_with_the_instance(env: Sea
     assert before[0]["description"]
 
 
+def test_list_tools_serves_the_composite_surface_before_a_reset(tmp_path: Path) -> None:
+    """A world that adds worlds has one flat surface, episode or no episode.
+
+    Lives here rather than in `test_composition.py` because it needs the `serve`
+    extra, which this module is the one that skips without.
+    """
+    host = build_world(tmp_path, name="host")
+    host.add_world(
+        build_world(tmp_path / "added", name="added"),
+        name="payments",
+        tool_prefix="pay_",
+        tool_allow_list=["mint"],
+    )
+    env = SeahavenEnv(host, include_control_tools=False)
+    before = [tool.model_dump() for tool in listing(env).tools]
+    env.reset()
+    instance = env.instance
+    assert instance is not None
+    after = [tool.model_dump() for tool in listing(env).tools]
+    assert before[-1]["name"] == "pay_mint"
+    assert before == after == instance.tools()
+
+
 def test_a_listed_tool_carries_its_json_schema(env: SeahavenEnv) -> None:
     env.reset()
     rows = next(tool for tool in listing(env).tools if tool.name == "rows")
@@ -245,6 +271,29 @@ def test_a_call_answers_the_tools_result(env: SeahavenEnv) -> None:
     assert observation.result == {"rowcount": 1}
     assert observation.error is None
     assert call(env, "rows", sql="SELECT id FROM notes").result == [{"id": "n1"}]
+
+
+def test_a_model_a_tool_returned_is_rendered_onto_the_observation(world: World) -> None:
+    """`invoke` answers with the tool's own object; this layer owes the wire its rendering.
+
+    Architecture section 8.4. In process a host tool receiving a model receives
+    the model; over OpenEnv the observation carries data, exactly as it did when
+    `invoke` rendered it.
+    """
+
+    class Note(BaseModel):
+        id: str
+        at: datetime
+
+    @world.tool
+    def note(ctx: Ctx) -> Note:
+        """A tool that answers with a model rather than a bare dict."""
+        return Note(id="n1", at=datetime(2024, 3, 5, 12, tzinfo=UTC))
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset(now=INSTANT_ISO)
+
+    assert call(env, "note").result == {"id": "n1", "at": "2024-03-05T12:00:00Z"}
 
 
 def test_timeout_s_is_accepted_and_ignored(env: SeahavenEnv) -> None:
@@ -407,8 +456,27 @@ def test_state_before_reset_names_the_world_and_nothing_else(
     assert state.world == world.name
     assert state.fixture is None
     assert state.now is None
+    assert state.composition is None
     assert state.episode_id is None
     assert state.step_count == 0
+
+
+def test_state_after_reset_carries_the_one_node_a_leaf_world_is(
+    env: SeahavenEnv, world: World
+) -> None:
+    """A leaf world is a composition of one node, and `state` says so rather than nothing."""
+    env.reset()
+    assert env.state.composition == [
+        {
+            "path": "main",
+            "world": world.name,
+            "world_version": world.version,
+            "scope": None,
+            "aliases": [],
+            "schema_hash": world.schema_hash,
+            "frozen_world_version": None,
+        }
+    ]
 
 
 def test_state_after_reset_carries_the_fixture_and_the_clock(
@@ -479,6 +547,10 @@ DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
         "fixture": "The fixture the instance was made from, or null for a blank one.",
         "now": "The instance's clock as an ISO-8601 instant, or null before the first reset.",
         "world": "The world this session is connected to. Known before any reset.",
+        "composition": (
+            "Every node of the instance's composition -- path, world, version, scope, aliases "
+            "and schema hash -- or null before the first reset. Never agent-facing."
+        ),
     },
 }
 
@@ -499,7 +571,7 @@ def test_every_declared_field_publishes_a_description(model: type[BaseModel]) ->
     model without a description fails here. `test_server.py` asserts the
     observation's texts really reach a client over `GET /schema`; the state's
     cannot be checked that way, because that endpoint answers
-    `State.model_json_schema()` and never sees a subclass (`BACKLOG.md` B13).
+    `State.model_json_schema()` and never sees a subclass.
     """
     expected = DECLARED_DESCRIPTIONS[model]
     assert set(model.__annotations__) == set(expected)
@@ -611,3 +683,113 @@ def test_get_metadata_survives_a_readme_that_is_a_directory(
 ) -> None:
     (tmp_path / "README.md").mkdir()
     assert env.get_metadata().readme_content == ""
+
+
+# --- a composite world, end to end -----------------------------------------
+
+# The committed tree of `tests/worlds/README.md`: `emporium` over two payments
+# accounts and a shop that shares one of them.
+COMPOSITE_TOOLS = [
+    "record_charge_owner",
+    "settle_order",
+    "pay_create_charge",
+    "pay_list_charges",
+    "eu_create_charge",
+    "eu_list_charges",
+    "shop_place_order",
+]
+
+
+def charges(env: SeahavenEnv, tool: str) -> list[dict[str, Any]]:
+    """One account's charges, as the wire carries them."""
+    listed = call(env, tool).result
+    assert isinstance(listed, list)
+    return listed
+
+
+@pytest.fixture
+def composite(tmp_path: Path) -> SeahavenEnv:
+    """A session on the committed composite world, on its own working directory."""
+    world = copy.copy(emporium.world)
+    world.work_dir = tmp_path / "work"
+    return SeahavenEnv(world, include_control_tools=False)
+
+
+def test_a_composite_serves_one_flat_tool_list_in_declared_order(
+    composite: SeahavenEnv,
+) -> None:
+    """The host's own tools first, then each added world's, in `add_world` order."""
+    composite.reset()
+    assert [tool.name for tool in listing(composite).tools] == COMPOSITE_TOOLS
+
+
+def test_a_composite_never_lists_or_serves_a_control_tool(composite: SeahavenEnv) -> None:
+    """The control tools are the root's and cover every node; the agent hears of neither."""
+    composite.reset()
+    assert not any(tool.name.startswith("controller_") for tool in listing(composite).tools)
+    refused = call(composite, "controller_run_sql", sql="SELECT 1")
+    assert refused.error is not None and refused.error["code"] == "unknown_tool"
+
+
+def test_a_call_to_a_contributed_tool_runs_against_the_owning_node(
+    composite: SeahavenEnv,
+) -> None:
+    """`pay_` and `eu_` are two accounts of one world: a charge lands in exactly one."""
+    composite.reset()
+    charge = call(composite, "pay_create_charge", amount=250)
+    assert charge.error is None
+    created = charge.result
+    assert isinstance(created, dict)
+    assert [row["id"] for row in charges(composite, "pay_list_charges")] == [created["id"]]
+    assert charges(composite, "eu_list_charges") == []
+
+
+def test_a_composite_tool_reaching_two_nodes_answers_over_the_wire(
+    composite: SeahavenEnv,
+) -> None:
+    """`settle_order` places an order in the shop and charges the company account."""
+    composite.reset()
+    settled = call(composite, "settle_order", total=40)
+    assert settled.error is None
+    result = settled.result
+    assert isinstance(result, dict)
+    assert set(result) == {"order", "charge", "total"}
+    assert [row["id"] for row in charges(composite, "pay_list_charges")] == [result["charge"]]
+
+
+def test_state_carries_every_node_of_a_composite(composite: SeahavenEnv) -> None:
+    """What an eval reads to tell what it is running against (architecture section 12)."""
+    composite.reset()
+    reported = composite.state.composition
+    assert reported is not None
+    assert [node["path"] for node in reported] == ["main", "payments", "payments_eu", "shop"]
+    assert [node["world"] for node in reported] == ["emporium", "payments", "payments", "shop"]
+    assert [node["scope"] for node in reported] == [None, None, "eu", None]
+    assert [node["aliases"] for node in reported] == [[], ["shop/payments"], [], []]
+
+
+def test_the_composition_in_state_is_json(composite: SeahavenEnv) -> None:
+    """`state` travels over a wire, so every value in it has to survive the trip."""
+    composite.reset()
+    assert json.loads(json.dumps(composite.state.composition)) == composite.state.composition
+
+
+def test_nothing_agent_facing_carries_the_composition(composite: SeahavenEnv) -> None:
+    """A contributed tool reveals nothing about its origin, listing included."""
+    composite.reset()
+    listed = [tool.model_dump() for tool in listing(composite).tools]
+    assert not any("payments" in json.dumps(tool) for tool in listed)
+    assert call(composite, "shop_place_order", total=5).result is not None
+
+
+def test_resetting_a_composite_session_destroys_every_nodes_directory(
+    composite: SeahavenEnv,
+) -> None:
+    composite.reset()
+    first = composite.instance
+    assert first is not None
+    directory = first.dir
+    assert len(list(directory.glob("state*.sqlite"))) == 4
+    composite.reset()
+    assert not directory.exists()
+    assert composite.instance is not None and composite.instance.dir != directory

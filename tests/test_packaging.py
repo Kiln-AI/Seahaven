@@ -9,10 +9,10 @@ other test in this suite, and fail for the first person who ran `seahaven docs`
 or `seahaven new` out of a released wheel.
 
 That is the failure these tests exist to catch, and the only way to catch it is
-to build the artefact and look inside it. The backend is `uv_build` (`BACKLOG.md`
-B24); it packages every file under the module directory rather than only the
-`.py` ones, which is what makes the arrangement work and is exactly the
-assumption worth holding a backend to.
+to build the artefact and look inside it. The backend is `uv_build`; it packages
+every file under the module directory rather than only the `.py` ones, which is
+what makes the arrangement work and is exactly the assumption worth holding a
+backend to.
 
 The strongest statement here is the parity one: every file under `src/<module>`
 is in the wheel, and nothing else is. A page or a template added to the source
@@ -146,7 +146,7 @@ def test_the_framework_wheel_declares_both_entry_points(wheels: dict[str, Path])
 
 
 def test_the_worlds_schema_travels_and_its_fixtures_do_not(wheels: dict[str, Path]) -> None:
-    """`sql_files` reads the schema out of the installed package; B11 keeps fixtures out."""
+    """`sql_files` reads the schema out of the installed package; `fixtures/` is outside it."""
     packaged = members(wheels["projecttracker"])
     schema = {name for name in packaged if name.endswith(".sql")}
     assert schema == {
