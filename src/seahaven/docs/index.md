@@ -63,6 +63,7 @@ out — and adds fixtures, errors and an error handler.
 | [fixtures.md](fixtures.md) | Freezing, forking, generators, descriptions for eval authors |
 | [testing.md](testing.md) | The pytest plugin, what to test in a world |
 | [serving.md](serving.md) | `seahaven serve`, the OpenEnv client, control tools, publishing to a hub |
+| [openenv.md](openenv.md) | OpenEnv compatibility: driving a world from any client, the wire, why there are no rewards |
 | [extensions.md](extensions.md) | The extension contract, the XML-RPC example |
 | [projecttracker.md](projecttracker.md) | A walkthrough of the reference world |
 

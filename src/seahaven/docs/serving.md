@@ -2,7 +2,9 @@
 
 Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/huggingface/OpenEnv)
 (v0.4.x), over its WebSocket endpoint `/ws`. There is no other remote API for the agent side: a
-world is either driven in process through `world.instance(...)`, or over that WebSocket.
+world is either driven in process through `world.instance(...)`, or over that WebSocket. This page
+is the server's side of that wire; [openenv.md](openenv.md) is the client's — driving a world from
+an eval, the frames, and what the standard does and does not give you.
 
 **In particular there is no MCP server here.** An OpenEnv app publishes a `/mcp` endpoint, but it is
 not the MCP protocol and nothing on it can reach an instance, so Seahaven refuses every method on
