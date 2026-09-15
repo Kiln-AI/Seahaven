@@ -23,8 +23,8 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   instance is its own SQLite database.
 - **[Fixtures](src/seahaven/docs/db_schema_and_fixtures.md).** Freeze known starting states like
   `small_startup`, `agency` or `big_co`, and reuse them across evals. Immutable and hash-verified.
-- **[Any interface](src/seahaven/docs/authoring.md#writing-a-tool).** Expose tools that match REST
-  APIs, sandboxed SQL, search, or any custom protocol.
+- **[Any interface](src/seahaven/docs/authoring.md#writing-a-tool).** Tools for REST
+  APIs, sandboxed SQL, search, or any custom format.
 - **[Serving](src/seahaven/docs/serving_and_openenv.md).** Hundreds of instances per process, one
   private instance per session, thousands of tool calls per second.
 - **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same fixture, same frozen
