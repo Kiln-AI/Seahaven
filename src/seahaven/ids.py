@@ -6,7 +6,8 @@ changeset to changeset. That rules out `uuid.uuid4`, which reads the OS entropy
 pool. World code draws from `ctx.ids` instead.
 
 SQL is the other door. `random()` and `randomblob()` are overridden on every
-connection an instance opens, the way `clock.py` overrides the date and time
+connection Seahaven opens over an instance's file -- the one that builds it from
+the world's DDL included -- the way `clock.py` overrides the date and time
 functions, so that SQL an agent wrote and a `DEFAULT` clause a world wrote are
 both seeded rather than denied. Each connection draws from a stream of its own,
 named by the door it is, so no two of them and not `ctx.ids` either hand out the
@@ -29,6 +30,7 @@ if TYPE_CHECKING:  # names that live in apsw's stubs, not in the extension modul
     from apsw import ScalarProtocol, SQLiteValue
 
 __all__ = [
+    "BUILD_STREAM",
     "CONTROL_STREAM",
     "INSPECTION_STREAM",
     "INSTANCE_STREAM",
@@ -86,16 +88,24 @@ class Ids:
         return str(uuid.UUID(int=self.random.getrandbits(128), version=4))
 
 
-# The door each connection of an instance opens, as the label its stream carries.
-# A stream is derived from the instance seed by `instance_seed`'s shape -- sha256
-# over NUL-separated inputs -- while `ctx.ids` takes the instance seed itself, so
-# a run is still determined by the seed and the fixture alone and no two of these
-# hand out the same bytes. That is what stops an agent's `SELECT random()`
-# shifting the identifiers world code mints after it, or reading out what they
-# will be, and what stops the read-only doors echoing the writable one.
+# The door each of an instance's connections opens, as the label its stream
+# carries. A stream is derived from the instance seed by `instance_seed`'s shape
+# -- sha256 over NUL-separated inputs -- while `ctx.ids` takes the instance seed
+# itself, so a run is still determined by the seed and the fixture alone and no
+# two of these hand out the same bytes. That is what stops an agent's
+# `SELECT random()` shifting the identifiers world code mints after it, or
+# reading out what they will be, and what stops the read-only doors echoing the
+# writable one.
+#
+# `BUILD_STREAM` is the odd one: its connection is gone before the instance is
+# open, and it exists so that a schema file that seeds rows draws bytes no later
+# door redraws. Every door draws from the start of its stream each time it is
+# opened, so a build that drew from `INSTANCE_STREAM` would hand a schema-seeded
+# row exactly the bytes the world's own first draw is about to take.
 INSTANCE_STREAM = b"instance"
 INSPECTION_STREAM = b"inspection"
 CONTROL_STREAM = b"control"
+BUILD_STREAM = b"build"
 
 # Registered on connections that have SQLITE_DBCONFIG_TRUSTED_SCHEMA off, where
 # INNOCUOUS is what keeps them callable from a DEFAULT clause or a trigger.
@@ -116,7 +126,7 @@ def register_random_functions(conn: apsw.Connection, seed: bytes, stream: bytes)
     """Point `random()` and `randomblob()` on `conn` at a stream of its own.
 
     `seed` is the instance's and `stream` names the door this connection is, one
-    of the three labels above. The seed says which run this is and the label
+    of the four labels above. The seed says which run this is and the label
     which door, so a door replays value for value across two runs of one seed
     and no two doors of one instance hand out the same bytes. A door draws from
     the start of its stream every time it is opened: two connections have no

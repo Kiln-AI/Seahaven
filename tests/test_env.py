@@ -124,7 +124,11 @@ def test_reset_without_a_fixture_is_a_blank_instance_at_the_wall_clock(env: Seah
     instance = env.instance
     assert instance is not None
     assert instance.fixture is None
-    assert before <= instance.clock.now() <= datetime.now(UTC)
+    # `before` is truncated the way a `Clock` truncates its instant: the clock is
+    # read before the instance's files are built, so there is no elapsed time to
+    # hide a comparison against a microsecond the clock cannot show.
+    assert before.replace(microsecond=before.microsecond // 1000 * 1000) <= instance.clock.now()
+    assert instance.clock.now() <= datetime.now(UTC)
     assert instance.call("rows", sql="SELECT * FROM notes") == []
 
 

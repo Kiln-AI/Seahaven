@@ -8,12 +8,11 @@ Three doors are opened here. `build_blank` writes a fresh database from a world'
 DDL, `open_instance` opens the writable connection an instance serves calls from,
 and `open_inspection` opens a second, read-only view of the same file -- and of
 every other node's file, attached -- for looking at state without disturbing it.
-Every connection an instance opens carries its clock and its own seeded
-`random()`; `build_blank` carries neither, because it predates the instance --
-there is no instant and no seed yet, and the database it writes is the world's
-schema rather than any one run of it. A world whose schema files draw randomness
-or read the clock while they run therefore writes a blank database that is not
-reproducible, which is the same gap on both.
+All three carry the clock and a seeded `random()`, so nothing a world's SQL runs
+reads the host. `build_blank` runs before the instance exists, so its caller
+derives the instant and the seed first and hands them over; what comes back is a
+plain connection, because the overrides belong to the build and a world's schema
+is not a door anyone keeps open.
 """
 
 import re
@@ -28,9 +27,11 @@ import apsw
 
 from seahaven.clock import Clock, register_clock_functions
 from seahaven.errors import DbError, WorldBug
-from seahaven.ids import INSTANCE_STREAM, register_random_functions
+from seahaven.ids import BUILD_STREAM, INSTANCE_STREAM, register_random_functions
 
 __all__ = [
+    "SCHEMA_CHECK_CLOCK",
+    "SCHEMA_CHECK_SEED",
     "Db",
     "Exec",
     "SqlValue",
@@ -326,32 +327,94 @@ def _read_only_uri(path: Path) -> str:
     return f"file:{quote(Path(path).as_posix())}?mode=ro"
 
 
-def build_blank(path: Path | Literal[":memory:"], ddl: str) -> apsw.Connection:
+# What a build with no instance behind it runs on. `world.py` proves the DDL
+# executes, `lint/ddl.py` interrogates the schema and `conformance.py` compares
+# against it; none of the three keeps a row, and all three would otherwise read
+# the host to throw the answer away. They are passed explicitly at each call
+# site rather than defaulted here, so that a caller who does have an instance
+# cannot reach them by forgetting.
+SCHEMA_CHECK_CLOCK = Clock.from_iso("1970-01-01T00:00:00.000Z")
+SCHEMA_CHECK_SEED = b"schema check"
+
+
+def build_blank(
+    path: Path | Literal[":memory:"], ddl: str, *, clock: Clock, seed: bytes
+) -> apsw.Connection:
     """Create a database holding a world's schema and nothing else.
 
     Returns the open connection. Pass `":memory:"` to build one for comparison
     without touching the filesystem. The framework owns no tables of its own, so
     what comes back is exactly what the DDL says.
+
+    A schema file may seed reference rows, and that DML runs here rather than on
+    an instance's connection: `clock` and `seed` are what make it replay. `seed`
+    is the node's, drawn from `BUILD_STREAM` so that a row the schema seeded and
+    the first value the instance's own connection draws are different bytes.
+
+    The connection that comes back carries neither override. Nothing can restore
+    SQLite's own `random()` on a connection that has shadowed it -- registering
+    `None` over an override leaves the name unresolvable rather than built in --
+    so the build runs on a connection of its own, and what the caller gets is a
+    second, plain connection onto what that one wrote.
     """
     if path != MEMORY and Path(path).exists():
         raise WorldBug(f"refusing to build a blank database over an existing file: {path}")
-    conn = apsw.Connection(str(path))
     try:
-        conn.pragma("foreign_keys", "ON")
-        with conn:
-            # Iterated, not just executed: APSW runs a multi-statement string
-            # lazily, stopping at the first statement that returns a row, so a
-            # DDL file with a `SELECT` or a `RETURNING` in it would leave
-            # everything below that statement unrun and report nothing.
-            for _ in conn.execute(ddl):
-                pass
+        return _build(path, ddl, clock, seed)
     except Exception:
         # SQLite created the file the moment the connection opened. Leaving it
         # there would turn the next attempt at this path into "refusing to build
         # over an existing file", hiding the error the DDL actually has.
-        conn.close()
         if path != MEMORY:
             Path(path).unlink(missing_ok=True)
+        raise
+
+
+def _build(
+    path: Path | Literal[":memory:"], ddl: str, clock: Clock, seed: bytes
+) -> apsw.Connection:
+    """Run the DDL on a connection carrying the overrides; hand back a plain one."""
+    builder = apsw.Connection(str(path))
+    try:
+        helper = register_clock_functions(builder, clock)
+        try:
+            register_random_functions(builder, seed, BUILD_STREAM)
+            builder.pragma("foreign_keys", "ON")
+            with builder:
+                # Iterated, not just executed: APSW runs a multi-statement string
+                # lazily, stopping at the first statement that returns a row, so a
+                # DDL file with a `SELECT` or a `RETURNING` in it would leave
+                # everything below that statement unrun and report nothing.
+                for _ in builder.execute(ddl):
+                    pass
+            return _plain_connection(path, builder)
+        finally:
+            # The helper is nothing else's and nothing else closes it, so it goes
+            # whatever the build did -- and whatever closing it does, the builder
+            # goes too: it holds the file open, and the caller is about to unlink
+            # it on the failure path.
+            helper.close()
+    finally:
+        builder.close()
+
+
+def _plain_connection(
+    path: Path | Literal[":memory:"], builder: apsw.Connection
+) -> apsw.Connection:
+    """A second connection onto what `builder` wrote, with none of its overrides.
+
+    A file is simply reopened. `":memory:"` has no path to reopen, so the pages
+    are carried across instead -- `serialize` names the built database whole and
+    `deserialize` makes it this connection's, which is the same database rather
+    than a second build of it.
+    """
+    conn = apsw.Connection(str(path))
+    try:
+        if path == MEMORY:
+            conn.deserialize("main", builder.serialize("main"))
+        conn.pragma("foreign_keys", "ON")
+    except Exception:
+        conn.close()
         raise
     return conn
 

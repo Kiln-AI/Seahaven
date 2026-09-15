@@ -521,6 +521,15 @@ CREATE TABLE notes (
 A world whose DDL does not execute cannot be constructed: `World.__init__` builds the schema in
 memory to compute the schema hash, and reports SQLite's own message when that fails.
 
+A schema file may also seed static reference rows — currencies, plans, a lookup table the product
+ships with — and they are part of the schema in the sense that matters: every instance of the world
+starts with them. The connection those `INSERT`s run on carries the instance's clock and its seed,
+so a seeded row built from `randomblob()` or `CURRENT_TIMESTAMP` replays like anything else a world
+writes. SH103 is unchanged and still refuses `CURRENT_TIMESTAMP` inside a `CREATE` — a column
+default, a trigger body — so that one timestamp format is written everywhere; what is sanctioned
+here is the `INSERT` the file runs itself. Rows that belong to one *scenario* are a fixture's job,
+not the schema's.
+
 Connection setup is the framework's — WAL, foreign keys on, defensive mode, the clock overrides.
 World code never sets a pragma.
 

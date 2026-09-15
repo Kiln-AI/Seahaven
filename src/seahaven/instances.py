@@ -772,19 +772,28 @@ class InstanceManager:
         directory = self._make_instance_dir(instance_id)
         runtime: dict[NodeKey, NodeRuntime] = {}
         try:
+            # The clock and the seed first, before anything is opened or built.
+            # Every connection of the instance carries a stream of the seed --
+            # `random()` and `randomblob()` are registered on each one from that
+            # node's own seed -- and so does the connection that applies a node's
+            # DDL, because a schema file that seeds reference rows is DML this
+            # instance runs and has to replay like any other.
+            #
+            # The fixture id, or the world's name for a blank instance, so one
+            # caller seed against two fixtures gives two streams.
+            base = instance_seed(fixture_id if fixture_id is not None else world.name, seed)
             if fixture is None:
-                for node in composition.nodes:
-                    build_blank(directory / node.file_name, node.world.schema).close()
                 clock = _clock_from(now) if now is not None else Clock.wall()
+                for node in composition.nodes:
+                    build_blank(
+                        directory / node.file_name,
+                        node.world.schema,
+                        clock=clock,
+                        seed=node_seed(base, node.path),
+                    ).close()
             else:
                 _copy_fixture(fixture, composition, directory)
                 clock = Clock.from_iso(fixture.now)
-            # The fixture id, or the world's name for a blank instance, so one
-            # caller seed against two fixtures gives two streams. Derived before
-            # any connection is opened, because every node's connection carries a
-            # stream of it too: `random()` and `randomblob()` are registered on
-            # each one from that node's own seed.
-            base = instance_seed(fixture_id if fixture_id is not None else world.name, seed)
             info = InstanceInfo(id=instance_id, fixture=fixture_id, seed=base)
             for node in composition.nodes:
                 runtime[node.key] = _open_node(node, directory, clock, base, info)
@@ -1034,11 +1043,11 @@ def node_seed(base: bytes, path: str) -> bytes:
 
     The `node` tag is domain separation against `ids._stream_seed`, which derives
     a connection's `random()` stream as `sha256(seed + b"\0" + label)` over the
-    same base. A child may be named anything `^[a-z][a-z0-9_]*$` matches, `control`,
-    `inspection` and `instance` included, so without the tag a node of that name
-    would draw its identifiers from the very stream one of the root's three doors
-    hands to SQL -- and an agent's `SELECT random()` would read out the ids that
-    node is about to mint. Pinned by
+    same base. A child may be named anything `^[a-z][a-z0-9_]*$` matches, `build`,
+    `control`, `inspection` and `instance` included, so without the tag a node of
+    that name would draw its identifiers from the very stream one of the root's
+    connections hands to SQL -- and an agent's `SELECT random()` would read out
+    the ids that node is about to mint. Pinned by
     `test_composite_instance.py::test_a_node_named_after_a_sql_door_does_not_draw_that_doors_stream`.
     """
     if path == ROOT_PATH:

@@ -44,6 +44,26 @@ def add(instance: Instance, id: str, body: str = "a body") -> None:
     instance.call("execute", sql=f"INSERT INTO notes VALUES ('{id}', '{body}', 0)")
 
 
+# A world whose schema seeds a reference row. That DML is the world's, it runs
+# while the blank file is built, and `randomblob` and `CURRENT_TIMESTAMP` in it
+# read the host unless the build carries the instance's seed and clock.
+SEEDING_SCHEMA = """
+CREATE TABLE plans (
+    id TEXT PRIMARY KEY,
+    token BLOB NOT NULL,
+    made_at TEXT NOT NULL
+) STRICT;
+INSERT INTO plans (id, token, made_at) VALUES ('free', randomblob(8), CURRENT_TIMESTAMP);
+"""
+
+
+def seeded_plan(instance: Instance) -> dict[str, Any]:
+    """The row a `SEEDING_SCHEMA` world's schema wrote for itself."""
+    row = instance.inspect().one("SELECT token, made_at FROM plans")
+    assert row is not None
+    return row
+
+
 def frozen_fixture(world: World, fixture_id: str = "start", notes: int = 1) -> str:
     """A world with one fixture in it, made the only way fixtures are made."""
     with world.instance(None, now=INSTANT_ISO) as instance:
@@ -93,6 +113,63 @@ def test_an_explicit_now_is_the_instances_clock(world: World, given: str | datet
     with world.instance(None, now=given) as instance:
         assert instance.clock.iso() == INSTANT_ISO
         assert instance.call("now") == {"python": INSTANT_ISO, "sql": INSTANT_ISO}
+
+
+def test_a_row_the_schema_seeds_is_stamped_with_the_instances_clock(tmp_path: Path) -> None:
+    """The end of the thread: `now=` reaches the DML a schema file runs on itself.
+
+    The clock is derived before the blank file is built rather than after, so a
+    world that seeds reference rows dates them at the instant its caller named
+    instead of at whatever the host's clock said while the build ran.
+    """
+    world = build_world(tmp_path, SEEDING_SCHEMA)
+
+    with world.instance(None, now=INSTANT_ISO) as instance:
+        assert seeded_plan(instance)["made_at"] == INSTANT_ISO
+
+
+def test_two_blank_instances_of_a_seeding_world_seed_the_same_row(tmp_path: Path) -> None:
+    world = build_world(tmp_path, SEEDING_SCHEMA)
+
+    def seeded() -> dict[str, Any]:
+        with world.instance(None, now=INSTANT_ISO, seed=11) as instance:
+            return seeded_plan(instance)
+
+    first = seeded()
+    assert seeded() == first
+    # And the seed is what it came from, not a constant the build wrote.
+    with world.instance(None, now=INSTANT_ISO, seed=12) as other:
+        assert seeded_plan(other)["token"] != first["token"]
+
+
+def test_a_seeded_row_does_not_hold_the_bytes_the_world_draws_first(tmp_path: Path) -> None:
+    """The build is a door of its own. See `ids.BUILD_STREAM`."""
+    world = build_world(tmp_path, SEEDING_SCHEMA)
+
+    with world.instance(None, now=INSTANT_ISO, seed=11) as instance:
+        # Hex, because a tool result may not carry bytes.
+        drawn = instance.call("rows", sql="SELECT hex(randomblob(8)) AS drawn")
+
+        assert drawn != [{"drawn": seeded_plan(instance)["token"].hex().upper()}]
+
+
+def test_a_fixture_carries_the_rows_its_schema_seeded_at_the_pinned_instant(
+    tmp_path: Path,
+) -> None:
+    """Freeze and create back: the seeded row is data in the frozen file by then.
+
+    A blank instance built on the wall clock would date the row at whatever the
+    host said when the fixture was minted, and every instance made from that
+    fixture would replay that accident for good.
+    """
+    world = build_world(tmp_path, SEEDING_SCHEMA)
+    with world.instance(None, now=INSTANT_ISO, seed=11) as origin:
+        frozen = seeded_plan(origin)
+        origin.freeze("seeded", "The plans the schema writes for itself.")
+
+    assert frozen["made_at"] == INSTANT_ISO
+    with world.instance("seeded") as replayed:
+        assert seeded_plan(replayed) == frozen
 
 
 def test_now_with_a_fixture_is_refused(world: World) -> None:

@@ -142,6 +142,10 @@ A blank instance's clock defaults to the wall time at creation, and `now=` overr
 bakes that value into the fixture, so it never moves again. Those two — a blank instance's default
 and the `created_at` a freeze stamps on the sidecar — are the only wall-clock reads in a world.
 
+The clock is fixed *before* the blank database is built, not after, so a schema file that seeds
+reference rows of its own — `INSERT INTO plans VALUES ('free', ...)` — stamps them at that instant
+as well. A fixture frozen from such an instance carries the rows the caller's `now=` dated.
+
 The consequence to design around: **every row one episode writes carries the same timestamp**. A
 timestamp does not order them. See "Ordering within an episode" in [authoring.md](authoring.md).
 
@@ -166,12 +170,13 @@ def first_issue_id() -> str:
 assert first_issue_id() == first_issue_id()
 ```
 
-SQL is seeded from the same place. Every connection an instance opens overrides SQLite's `random()`
-and `randomblob()`, the way it overrides the date and time functions, so a `DEFAULT (randomblob(8))`
-in a world's schema and a `SELECT random()` an agent wrote both replay. Each connection draws from a
-stream of its own, derived from the instance seed and separate from `ctx.ids`, so an agent rolling
-dice in SQL neither shifts the identifiers world code mints after it nor reads out what an
-`inspect()` handle will draw.
+SQL is seeded from the same place. Every connection Seahaven opens over an instance's file overrides
+SQLite's `random()` and `randomblob()`, the way it overrides the date and time functions, so a
+`DEFAULT (randomblob(8))` in a world's schema and a `SELECT random()` an agent wrote both replay.
+The connection that applies the DDL is one of them, so a `randomblob()` a schema file runs while it
+builds replays too. Each connection draws from a stream of its own, derived from the instance seed
+and separate from `ctx.ids`, so an agent rolling dice in SQL neither shifts the identifiers world
+code mints after it nor reads out what an `inspect()` handle will draw.
 
 ```python
 import projecttracker

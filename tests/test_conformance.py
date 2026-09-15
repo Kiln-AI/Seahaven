@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from seahaven import conformance
-from seahaven.db import build_blank
+from seahaven.db import SCHEMA_CHECK_CLOCK, SCHEMA_CHECK_SEED, build_blank
 from seahaven.errors import WorldBug
 from seahaven.world import World
 from tests.conftest import NOTES_SCHEMA, build_world
@@ -125,7 +125,7 @@ def test_a_world_with_an_fts5_table_conforms_to_itself(tmp_path: Path) -> None:
 
 
 def test_shadow_tables_are_in_no_schema_map() -> None:
-    conn = build_blank(":memory:", FTS_SCHEMA)
+    conn = build_blank(":memory:", FTS_SCHEMA, clock=SCHEMA_CHECK_CLOCK, seed=SCHEMA_CHECK_SEED)
     try:
         mapped = conformance.schema_map(conn)
     finally:
@@ -136,7 +136,12 @@ def test_shadow_tables_are_in_no_schema_map() -> None:
 
 def test_sqlite_s_own_objects_are_in_no_schema_map(tmp_path: Path) -> None:
     """An autoindex is SQLite's, not the world's, and is on both sides of every comparison."""
-    conn = build_blank(":memory:", "CREATE TABLE t (a TEXT, b TEXT, UNIQUE (a, b)) STRICT;")
+    conn = build_blank(
+        ":memory:",
+        "CREATE TABLE t (a TEXT, b TEXT, UNIQUE (a, b)) STRICT;",
+        clock=SCHEMA_CHECK_CLOCK,
+        seed=SCHEMA_CHECK_SEED,
+    )
     try:
         assert set(conformance.schema_map(conn)) == {"t"}
     finally:
