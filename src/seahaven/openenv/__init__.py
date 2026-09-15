@@ -17,14 +17,16 @@ app, mounted at `/`, which is the shape a hub expects.
 """
 
 import functools
+import json
 import logging
 from typing import Any, NoReturn
 
-from fastapi import FastAPI, HTTPException, WebSocketDisconnect
-from fastapi.routing import APIRoute
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.routing import APIRoute, APIWebSocketRoute
 from openenv.core.env_server.http_server import create_app
 from openenv.core.env_server.mcp_types import (
     CallToolAction,
+    JsonRpcErrorCode,
     ListToolsAction,
     ListToolsObservation,
 )
@@ -63,10 +65,12 @@ DEFAULT_SESSION_TIMEOUT = 3600.0
 class _SwallowWebSocketDisconnect:
     """ASGI middleware: a peer that has gone away is not a server error.
 
-    OpenEnv's websocket handlers close the connection in a `finally` guarded by
+    OpenEnv's `/ws` handler closes the connection in a `finally` guarded by
     `except RuntimeError`, and closing one whose peer has already closed raises
-    `WebSocketDisconnect` instead -- `http_server.py` lines 1694 (`/ws`) and 1254
-    (`/mcp`) in openenv 0.4.2. It escapes the app, and uvicorn logs `ERROR:
+    `WebSocketDisconnect` instead -- `http_server.py` line 1694 in openenv 0.4.2.
+    Upstream's `ws /mcp` did the same at line 1254; that handler is replaced by
+    the refusal below, whose own `close()` is unguarded, so this still covers it.
+    It escapes the app, and uvicorn logs `ERROR:
     Exception in ASGI application` with a full traceback for a session that ended
     perfectly normally. On a 500-session server that buries the errors an
     operator is actually looking for.
@@ -229,6 +233,210 @@ def _refuse_http_episode_control(served: FastAPI) -> None:
             served.router.routes[index] = _refusing_route(route)
 
 
+# OpenEnv's `/mcp`, on both transports: a `POST` route and a websocket route at
+# the same path. Every method on both is refused. `mcp_handler`
+# (`http_server.py:736` in openenv 0.4.2) dispatches exactly four --
+# `openenv/session/create`, `openenv/session/close`, `tools/list` and
+# `tools/call` -- and none of the four is usable here. `tools/list` answers a
+# full tool list that no caller can then use; `tools/call` answers `reset first`
+# whether or not it carries a session id, because a Seahaven tool needs an
+# instance and this dialect has no verb that creates one; `openenv/session/create`
+# hands out an id that buys nothing. With create refused, the only session ids
+# left belong to `/ws` connections, so `openenv/session/close` is refused with
+# the rest rather than left as a way to close a stranger's episode by guessing a
+# uuid. `/ws` itself is untouched, including the `{"type": "mcp"}` frame it
+# carries, which reaches the same upstream handler with a session environment
+# and works correctly once the session has been reset.
+_MCP_ROUTE = "/mcp"
+
+# 200, and not the 501 the HTTP episode-control routes answer. `openenv push`
+# probes this exact route: `mcp_endpoint` in `openenv/cli/_validation.py` POSTs
+# `{}` to `/mcp` and passes only on HTTP 200 with a JSON body whose `jsonrpc` is
+# `"2.0"`, so a 501 here would fail a push that has nothing wrong with it. The
+# refusal therefore lives in the JSON-RPC envelope rather than in the HTTP
+# status, which is also where a JSON-RPC caller looks for it.
+_MCP_TRANSPORT_STATUS = 200
+
+# -32601, upstream's own `METHOD_NOT_FOUND`, whose JSON-RPC definition is "Method
+# does not exist / **is not available**" -- the second half of which is exactly
+# this. `INTERNAL_ERROR` (-32603, what upstream answers a `tools/call` today)
+# would claim the server broke, and `INVALID_REQUEST` would blame a request that
+# is well formed.
+_MCP_TRANSPORT_ERROR_CODE = int(JsonRpcErrorCode.METHOD_NOT_FOUND)
+
+_MCP_TRANSPORT_CODE = "mcp_transport_unsupported"
+
+# JSON-RPC asks for a short single sentence in `error.message` and gives `data`
+# for the rest, so the sentence points at the prose rather than being it.
+_MCP_TRANSPORT_SUMMARY = (
+    "Method not available: this Seahaven world does not serve OpenEnv's /mcp transport. "
+    "See error.data for why, and use the WebSocket transport at /ws."
+)
+
+
+def _mcp_transport_message() -> str:
+    """The refusal in prose: what happened, whose limitation, which door instead.
+
+    One statement for every method rather than a per-method matrix, because the
+    thing being said is about the transport and not about any one call.
+    """
+    return (
+        "/mcp is not served here, on either transport, so Seahaven refuses every method on it "
+        "rather than advertise a tool list whose every entry fails when called. Two things are "
+        "true of it and neither is a Seahaven limitation. First, OpenEnv's /mcp is not the MCP "
+        "protocol: it dispatches exactly openenv/session/create, openenv/session/close, "
+        "tools/list and tools/call, and answers 'Method not found' to the initialize an MCP "
+        "client opens with, so no off-the-shelf MCP client can speak it at all. Upstream says so "
+        "itself -- RFC 003 leans on MCP's custom-transports clause and lists no SSE streaming, no "
+        "server-initiated messages and no session management as known gaps, with standard "
+        "Streamable HTTP planned for later. Second, a Seahaven world is stateful: a tool call "
+        "runs against an instance, an instance comes from a reset, and this dialect has no reset "
+        "verb -- which is why every tools/call on it answers 'reset first', with or without an "
+        "openenv/session/create session id. Drive the episode over the WebSocket transport at "
+        "/ws instead, which is genuinely session-bound: one connection is one session holding "
+        "one instance. seahaven.openenv.SeahavenClient speaks it, and so does the stock OpenEnv "
+        'EnvClient. A /ws connection also carries MCP frames as {"type": "mcp"} messages, '
+        "and those work correctly, because by then the session has an instance to call."
+    )
+
+
+def _mcp_transport_refusal(method: str | None) -> dict[str, Any]:
+    """Seahaven's `{"code", "message", "details"}` triple, for the JSON-RPC `data`."""
+    return {
+        "code": _MCP_TRANSPORT_CODE,
+        "message": _mcp_transport_message(),
+        "details": {
+            "route": _MCP_ROUTE,
+            "method": method,
+            "use_instead": "/ws",
+            "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
+            "upstream": {
+                "package": "openenv 0.4.2",
+                "file": "openenv/core/env_server/http_server.py",
+                "dispatches": [
+                    "openenv/session/create",
+                    "openenv/session/close",
+                    "tools/list",
+                    "tools/call",
+                ],
+                "missing": ["initialize", "reset"],
+                "defect": (
+                    "the dialect is not MCP -- there is no initialize, so no MCP client can "
+                    "connect -- and it has no reset, so no call on it can reach an instance"
+                ),
+            },
+        },
+    }
+
+
+def _mcp_envelope(body: bytes | str) -> tuple[str | int | None, str | None]:
+    """The `id` to echo and the `method` to name back, out of whatever arrived.
+
+    Deliberately lenient where upstream's `JsonRpcRequest` is strict: `openenv
+    push` probes this route with `{}`, which that model rejects outright, and the
+    refusal has to answer the validator's probe rather than argue with it.
+    Anything unreadable yields a null id, which is what JSON-RPC 2.0 asks for
+    when the id cannot be determined.
+    """
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    request_id = payload.get("id")
+    method = payload.get("method")
+    # `bool` is a subclass of `int` in Python and is not a JSON-RPC id, so it is
+    # excluded rather than echoed back as one.
+    is_id = isinstance(request_id, str | int) and not isinstance(request_id, bool)
+    return (request_id if is_id else None), (method if isinstance(method, str) else None)
+
+
+def _mcp_refusal_frame(body: bytes | str) -> dict[str, Any]:
+    """The whole JSON-RPC 2.0 response both `/mcp` transports answer."""
+    request_id, method = _mcp_envelope(body)
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": _MCP_TRANSPORT_ERROR_CODE,
+            "message": _MCP_TRANSPORT_SUMMARY,
+            "data": _mcp_transport_refusal(method),
+        },
+    }
+
+
+def _refusing_mcp_route(route: APIRoute) -> APIRoute:
+    """The same `POST /mcp`, answering the refusal instead of dispatching."""
+
+    # The raw request and no declared model, for the reason the episode-control
+    # refusal declares none either: a body that upstream's model rejects must
+    # reach the refusal rather than a 422 about the shape of a request that was
+    # never going to be served.
+    async def refuse(request: Request) -> dict[str, Any]:
+        return _mcp_refusal_frame(await request.body())
+
+    return APIRoute(
+        route.path,
+        refuse,
+        methods=sorted(route.methods or {"POST"}),
+        name=route.name,
+        tags=route.tags,
+        summary="Refused: /mcp is not the MCP protocol and cannot hold an episode",
+        description=_mcp_transport_message(),
+        status_code=_MCP_TRANSPORT_STATUS,
+        response_model=None,
+        responses={
+            _MCP_TRANSPORT_STATUS: {
+                "description": (
+                    "Refused: a JSON-RPC 2.0 error, code -32601. Use the WebSocket transport "
+                    "at /ws."
+                ),
+            }
+        },
+    )
+
+
+def _refusing_mcp_websocket(route: APIWebSocketRoute) -> APIWebSocketRoute:
+    """The same `ws /mcp`, answering one refusal frame and then closing."""
+
+    async def refuse(websocket: WebSocket) -> None:
+        await websocket.accept()
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
+        # Either key, because upstream's `receive_text` raises on a binary frame
+        # and a caller who sent one still deserves the refusal.
+        raw = message.get("text") or message.get("bytes") or b""
+        await websocket.send_text(json.dumps(_mcp_refusal_frame(raw), ensure_ascii=False))
+        # Closed rather than left open answering frame after frame. Every method
+        # on this transport is refused, so a second frame could only earn the
+        # same answer, and a socket that stays open implies a negotiation that
+        # does not exist -- an MCP client would sit there waiting for one. The
+        # refusal is stated once, in full, and the connection ends normally.
+        await websocket.close()
+
+    return APIWebSocketRoute(route.path, refuse, name=route.name)
+
+
+def _refuse_mcp_transport(served: FastAPI) -> None:
+    """Swap both `/mcp` handlers for one that refuses, keeping the path registered.
+
+    Registered and not deleted, for the reason the episode-control paths are
+    kept: `openenv push` reads an app by its path names, and `mcp_endpoint` in
+    `openenv/cli/_validation.py` requires a `/mcp` that answers 200 with a
+    JSON-RPC body. The path and that contract are honoured; only the four
+    methods behind them are refused.
+    """
+    for index, route in enumerate(served.router.routes):
+        if getattr(route, "path", None) != _MCP_ROUTE:
+            continue
+        if isinstance(route, APIRoute):
+            served.router.routes[index] = _refusing_mcp_route(route)
+        elif isinstance(route, APIWebSocketRoute):
+            served.router.routes[index] = _refusing_mcp_websocket(route)
+
+
 def app(
     world: World,
     *,
@@ -245,8 +453,10 @@ def app(
 
     OpenEnv's plain-HTTP `/reset`, `/step` and `/state` are replaced by a route
     that refuses them, because upstream cannot hold an episode over HTTP and
-    answers a throwaway environment instead. The websocket transport is the
-    product and is untouched.
+    answers a throwaway environment instead. Both `/mcp` routes are replaced the
+    same way: that dialect is not MCP, and it has no reset, so nothing on it can
+    reach an instance. The websocket transport at `/ws` is the product and is
+    untouched, `{"type": "mcp"}` frames included.
 
     `session_timeout` is seconds of inactivity before OpenEnv reaps a session,
     or `None` for no reaper. It is passed as part of a `ConcurrencyConfig`
@@ -270,4 +480,5 @@ def app(
     # of them remembering to wrap.
     served.add_middleware(_SwallowWebSocketDisconnect)
     _refuse_http_episode_control(served)
+    _refuse_mcp_transport(served)
     return served

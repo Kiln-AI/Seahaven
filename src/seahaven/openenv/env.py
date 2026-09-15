@@ -63,7 +63,10 @@ class SeahavenObservation(CallToolObservation):
     """What a tool call answers with: exactly one of `result` and `error`.
 
     It subclasses OpenEnv's `CallToolObservation` rather than `Observation` so
-    that the `/mcp` `tools/call` path, which checks for that type, keeps working.
+    that upstream's MCP `tools/call` path, which checks for that type, keeps
+    working. `/mcp` itself is refused, but a `{"type": "mcp"}` frame on a `/ws`
+    connection reaches the same check (`http_server.py` line 985 in openenv
+    0.4.2), which answers an internal error to anything that is not one.
 
     `error` is a tool's own error, which diverges from OpenEnv's convention that
     `error` is a transport failure and a tool's error travels inside `result`.

@@ -46,6 +46,7 @@ from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from openenv.core.utils import convert_to_ws_url
 from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import ConnectionClosedOK
 
 from seahaven.openenv import SeahavenClient, _SwallowWebSocketDisconnect
 from seahaven.openenv.env import SeahavenObservation
@@ -70,6 +71,11 @@ REAP_DEADLINE = 30.0
 
 # OpenEnv's episode-control routes over plain HTTP, and the verb each answers.
 HTTP_EPISODE_CONTROL = (("POST", "/reset"), ("POST", "/step"), ("GET", "/state"))
+
+# Every method OpenEnv's `/mcp` dispatches -- `mcp_handler` in
+# `openenv/core/env_server/http_server.py` handles these four and nothing
+# else. All four are refused, so all four are asserted.
+MCP_METHODS = ("tools/list", "tools/call", "openenv/session/create", "openenv/session/close")
 
 
 def insert(id: str) -> str:
@@ -399,6 +405,169 @@ def test_a_websocket_session_is_untouched_by_the_refusal(world: World) -> None:
         state = env.state()
         assert (state.world, state.step_count) == (world.name, 1)
         assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n1"]
+
+
+# --- the refused /mcp transport --------------------------------------------
+
+
+def _mcp_request(method: str, request_id: int = 1) -> dict[str, Any]:
+    """A well-formed JSON-RPC request for one of the four methods upstream dispatches."""
+    params: dict[str, Any] = {}
+    if method == "tools/call":
+        params = {"name": "rows", "arguments": {"sql": "SELECT 1 AS n"}}
+    elif method == "openenv/session/close":
+        params = {"session_id": "00000000-0000-0000-0000-000000000000"}
+    return {"jsonrpc": "2.0", "method": method, "params": params, "id": request_id}
+
+
+def _assert_refused(frame: dict[str, Any], *, method: str | None, request_id: Any) -> None:
+    """One refusal frame, asserted the way a JSON-RPC caller reads one.
+
+    The id is echoed because that is how a caller matches a response to its
+    request; `result` is absent because JSON-RPC 2.0 forbids both halves in one
+    response and a client that checks for `result` first must not find one.
+    """
+    assert frame["jsonrpc"] == "2.0"
+    assert frame["id"] == request_id
+    assert "result" not in frame
+    error = frame["error"]
+    assert error["code"] == -32601, error
+    assert "/ws" in error["message"]
+    refusal = error["data"]
+    assert refusal["code"] == "mcp_transport_unsupported"
+    assert sorted(refusal) == ["code", "details", "message"]
+    assert refusal["details"]["method"] == method
+    assert refusal["details"]["route"] == "/mcp"
+    assert refusal["details"]["use_instead"] == "/ws"
+    assert refusal["details"]["upstream"]["missing"] == ["initialize", "reset"]
+    # The three claims the prose has to keep making: it is not MCP, a world
+    # needs a reset this dialect cannot ask for, and here is the door instead.
+    assert "initialize" in refusal["message"]
+    assert "reset" in refusal["message"]
+    assert "SeahavenClient" in refusal["message"]
+
+
+def test_every_mcp_method_is_refused_over_http_as_a_json_rpc_error(world: World) -> None:
+    """The four methods OpenEnv's `/mcp` dispatches, all refused in one voice.
+
+    `tools/list` is the one that makes this worth doing: upstream answers it
+    happily, with every tool the world has, and then every `tools/call` behind
+    it fails `reset first` -- a well-formed answer about nothing, which is the
+    same thing `POST /reset` was refused for. `openenv/session/create` is refused
+    with them because the id it hands out buys nothing, and `openenv/session/close`
+    because with create gone the only ids left belong to `/ws` sessions.
+    """
+    with serving(world) as url:
+        for request_id, method in enumerate(MCP_METHODS, start=1):
+            request = json.dumps(_mcp_request(method, request_id=request_id)).encode()
+            status, frame = _request(url + "/mcp", method="POST", data=request)
+            assert status == 200, (method, frame)
+            _assert_refused(frame, method=method, request_id=request_id)
+
+
+def test_a_real_mcp_clients_handshake_is_refused_in_the_same_words(world: World) -> None:
+    """`initialize` is not one of the four, and earns no different answer.
+
+    It is the frame an actual MCP client opens with, so it is the one most
+    likely to arrive here from somebody who believed the path name. Upstream
+    answers it a bare `-32601 Method not found: initialize`, which reads like a
+    typo; the refusal has to say why no MCP client can speak this at all.
+    """
+    request = json.dumps({"jsonrpc": "2.0", "method": "initialize", "id": "handshake"}).encode()
+    with serving(world) as url:
+        status, frame = _request(url + "/mcp", method="POST", data=request)
+    assert status == 200
+    _assert_refused(frame, method="initialize", request_id="handshake")
+
+
+def test_the_push_validators_probe_of_mcp_still_answers_a_json_rpc_payload(world: World) -> None:
+    """The hard constraint: `openenv push` must still pass.
+
+    `mcp_endpoint` in `openenv/cli/_validation.py` POSTs `{}` to `/mcp` and
+    passes only on HTTP 200 with a JSON body whose `jsonrpc` is `"2.0"`. That is
+    why this refusal is a JSON-RPC error inside a 200 and not the 501 the HTTP
+    episode-control routes answer. A body that is not JSON at all takes the same
+    path, with the null id JSON-RPC asks for when the id cannot be determined.
+    """
+    with serving(world) as url:
+        probe = _request(url + "/mcp", method="POST", data=b"{}")
+        nonsense = _request(url + "/mcp", method="POST", data=b"not json at all")
+    assert probe[0] == 200
+    assert probe[1]["jsonrpc"] == "2.0"
+    _assert_refused(probe[1], method=None, request_id=None)
+    assert nonsense == probe
+
+
+def test_the_mcp_websocket_refuses_the_same_way_and_then_closes(world: World) -> None:
+    """The second `/mcp` door, which is exactly as dead as the first.
+
+    `ws /mcp` reaches the same upstream handler with a session environment that
+    has never been reset, so `tools/call` on it answers `reset first` too. It
+    answers the same refusal frame and then closes: every method here is
+    refused, so a second frame could only earn the same answer, and a socket
+    left open implies a negotiation that does not exist. The close is normal
+    (1000) because nothing failed -- the transport is simply not served.
+    """
+    with serving(world) as url:
+        frame, close_code = asyncio.run(
+            _refused_over_the_mcp_websocket(url, _mcp_request("tools/call", request_id=9))
+        )
+    _assert_refused(frame, method="tools/call", request_id=9)
+    assert close_code == 1000
+
+
+def test_mcp_frames_over_a_websocket_session_still_work(world: World) -> None:
+    """The door that stays open, pinned because one careless route swap closes it.
+
+    `{"type": "mcp"}` on a `/ws` connection routes into the same upstream MCP
+    handler, but with the session's own environment -- so after a real `reset`
+    it has an instance and the call works. That is the whole difference between
+    this and `/mcp`, and it must keep working.
+    """
+    with serving(world) as url:
+        frame = asyncio.run(_mcp_frame_over_a_session(url))
+    assert frame["type"] == "mcp"
+    assert frame["data"]["id"] == 11
+    assert frame["data"]["result"]["result"] == [{"n": 1}]
+    assert frame["data"]["result"]["error"] is None
+
+
+def test_mcp_is_still_published_as_an_openapi_path(world: World) -> None:
+    """Refused and not removed, because `openenv push` reads path names.
+
+    The validator probes `/mcp` directly rather than reading it off the schema,
+    but the schema is what a reader and a generated client see, and a path that
+    answers has to be in it. What it promises there is the refusal: one 200,
+    described as one.
+    """
+    with serving(world) as url:
+        status, document = _request(url + "/openapi.json")
+    assert status == 200
+    assert "/mcp" in document["paths"], sorted(document["paths"])
+    assert sorted(document["paths"]["/mcp"]["post"]["responses"]) == ["200"]
+
+
+async def _refused_over_the_mcp_websocket(
+    url: str, request: dict[str, Any]
+) -> tuple[dict[str, Any], int | None]:
+    """One frame to `ws /mcp`: the reply, and the code the server closed with."""
+    async with ws_connect(convert_to_ws_url(url) + "/mcp", proxy=None) as sock:
+        await sock.send(json.dumps(request))
+        reply = json.loads(await sock.recv())
+        with pytest.raises(ConnectionClosedOK):
+            await sock.recv()
+        return reply, sock.close_code
+
+
+async def _mcp_frame_over_a_session(url: str) -> dict[str, Any]:
+    """Reset a `/ws` session and call a tool through its MCP frame, raw."""
+    async with ws_connect(convert_to_ws_url(url) + "/ws", proxy=None) as sock:
+        await sock.send(json.dumps({"type": "reset", "data": {}}))
+        await sock.recv()
+        await sock.send(
+            json.dumps({"type": "mcp", "data": _mcp_request("tools/call", request_id=11)})
+        )
+        return json.loads(await sock.recv())
 
 
 # --- the published schema --------------------------------------------------
