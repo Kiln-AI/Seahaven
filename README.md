@@ -19,21 +19,25 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
 
 ## Features
 
-- **Stateful.** Writes change every later read. Each instance is its own SQLite database.
-- **Fixtures.** Freeze known starting states like `small_startup`, `agency` or `big_co`, and reuse
-  them across evals. Immutable and hash-verified.
-- **Any interface.** Expose tools that match REST APIs, sandboxed SQL, search, or any custom
-  protocol.
-- **Serving.** Hundreds of instances per process, one private instance per session, thousands of
-  tool calls per second.
-- **Reproducible.** Same fixture, same frozen clock, same seeded ids: the same run, every time. The
-  clock is frozen in Python and in SQL.
-- **Changesets.** The net diff between the fixture and what the agent left behind. Grade on state,
-  not on transcripts.
+- **[Stateful](src/seahaven/docs/concepts.md#instance).** Writes change every later read. Each
+  instance is its own SQLite database.
+- **[Fixtures](src/seahaven/docs/fixtures.md).** Freeze known starting states like
+  `small_startup`, `agency` or `big_co`, and reuse them across evals. Immutable and hash-verified.
+- **[Any interface](src/seahaven/docs/authoring.md#writing-a-tool).** Expose tools that match REST
+  APIs, sandboxed SQL, search, or any custom protocol.
+- **[Serving](src/seahaven/docs/serving.md).** Hundreds of instances per process, one private
+  instance per session, thousands of tool calls per second.
+- **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same fixture, same frozen
+  clock, same seeded ids: the same run, every time. The clock is frozen in Python and in SQL.
+- **[Changesets](src/seahaven/docs/concepts.md#changeset).** The net diff between the fixture and
+  what the agent left behind. Grade on state, not on transcripts.
 - **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
   or Shopify API. Compose, reuse and share worlds.
 - **[OpenEnv](src/seahaven/docs/serving_and_openenv.md).** `seahaven serve` is an OpenEnv
   environment. Drive it with any OpenEnv client, in any language, or publish it to Hugging Face.
+
+The [docs index](src/seahaven/docs/index.md) has the full set, and `seahaven docs` prints the
+copy that ships with your install.
 
 ## Quickstart
 
