@@ -88,24 +88,26 @@ confirmation:**
   diff (the diff is a fold of the log; the log cannot be recovered from the diff), it answers
   intermediate-value and ordering questions, and it attributes every row change to the call that
   made it, which the diff cannot. Each entry is tagged with the call ordinal `i` from `calls`.
-- **The net diff is also in the document, derived by the producer.** Most judges want final
-  state, and the exact-match use ("carry the diff from a known-good run") needs a canonical form
-  that every consumer computes identically. The fold has enough rules (insert+update = insert,
-  insert+delete = nothing, update+update with columns that returned to their original value
-  dropped, delete+insert = update, PK rewrite = delete+insert) that N judge implementations in N
-  languages would disagree at the edges. The producer already has the exact net diff for free:
-  it is what `inst.changes()` returns from the cumulative session. Stated invariant: `diff ==
-  fold(log)`, and a helper can verify it. Cost is at most a doubling of a small block.
+- **The document carries the log only; no net diff beside it.** Decided 2026-09-15: one source of
+  truth, no invariant between two blocks to keep for ever. The net diff is defined, not shipped:
+  the format spec states the fold exactly (insert+update = insert, insert+delete = nothing,
+  update+update with columns that returned to their original value dropped, delete+insert = update
+  or nothing, a key rewrite = delete+insert; sorted by table and key), which is SQLite's own
+  changeset semantics, and `inst.changes()` stays as the live reference implementation. A test in
+  Seahaven checks `fold(log) == changes()` on every episode shape the suite exercises, so the fold
+  is pinned even before a public helper exists. Two consequences the docs must carry: a judge that
+  counts rows straight off the log overcounts rows touched more than once and must fold or
+  deduplicate by key first; and comparing two runs for the same end state is a comparison of their
+  folds, never of their logs, because equal end states can have different logs.
 - **`indirect` stays**: a boolean per record, SQLite's own flag, free.
-- **Composition**: every log and diff record carries a field naming the sub-world it belongs to,
-  `null` for the root, so a composed world's document is one flat list that still materialises to
-  one table. Name to be chosen (`world` collides with the root provenance field; `scope` or
-  `namespace` are candidates). Tool names in `calls` and `counters` need the same treatment.
-- **A judge helper ships with Seahaven** (Python; other languages are the judge system's): load a
-  document, fold the log and check it against the diff, materialise both into SQLite tables, and
-  given the fixture file, overlay the log to produce full before and after rows or the full final
-  database. This is the "reassemble the whole DB from fixture plus log" path, done once in one
-  place rather than by every judge.
+- **Composition**: every log record carries `subworld`, `null` for the root, naming the sub-world
+  the table belongs to, so a composed world's document is one flat list that still materialises to
+  one table. `calls` entries carry `subworld` too, for the tool. How `counters.by_tool` keys a
+  namespaced tool is settled with the composition design, not here.
+- **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
+  fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
+  the log to produce full before and after rows or the whole final database. The fold test above is
+  the seed of it.
 
 ## 1. Versioning: producer-side formatters, pinned per world
 
