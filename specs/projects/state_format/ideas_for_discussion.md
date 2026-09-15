@@ -46,8 +46,22 @@ it. Sections below are left as argued; where a decision overrides a section, the
   never moves is a constant a future maintainer will be tempted to bump. A world that gives none
   fails at construction with a message naming the current format. The scaffold (`seahaven new`)
   writes the current format into the new world, so a pin is chosen once, at creation, the way the
-  fixture sidecar's `format_version` is. Changing a world's pin is a change to the world, and the
-  docs say so.
+  fixture sidecar's `format_version` is. Changing a world's pin is a change to the world: the docs
+  say it should come with a `World.version` bump. Not enforceable, so recommended rather than
+  checked.
+
+**Batch 2 (2026-09-15), §2 provenance:**
+
+- The provenance block is in: `world` (name, version), `fixture` (id, `file_sha256`), `seed`,
+  `now`, `episode_id`, `seahaven_version`.
+- No schema fingerprint. It would be a partial world check, covering the schema and not the tools
+  or the code, so a judge would still have to trust `World.version` for everything else. If the
+  version is trusted, the fingerprint adds nothing; if it is not, the fingerprint does not rescue
+  it. `World.version` is the world's identity, and the docs say a schema, tool or state-format
+  change bumps it. The fixture's `file_sha256` stays because it already exists and catches the one
+  drift the version does not cover, a regenerated fixture under the same id.
+- A full `schema` block (tables and columns, for judge tooling to type-check expressions at
+  authoring time) stays a P2 format option, not part of v1.
 
 ## 1. Versioning: producer-side formatters, pinned per world
 
