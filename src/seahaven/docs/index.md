@@ -24,7 +24,7 @@ When a client such as an RL runner or an eval case starts a run, Seahaven create
 the world: an isolated copy of one fixture that lasts for that run or episode. The client drives the
 instance through tool calls, then grades the state the agent left behind.
 
-## A small world, end to end
+## Minimal World Example
 
 ```python
 import seahaven
@@ -63,8 +63,8 @@ with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
 
 Five things in that example are worth naming, because the rest of these pages use them constantly.
 `World` is the declaration. `@world.tool` publishes a function to the agent; its signature becomes
-the JSON schema the agent sees, and its docstring becomes the description. `inst` is a private
-database copy. `ctx.clock` is frozen, so the timestamp is the same on every replay. `inst.changes()`
+the JSON schema the agent sees, and its docstring becomes the description. `inst` is an instance of
+the world. `ctx.clock` is frozen, so the timestamp is the same on every replay. `inst.changes()`
 is the difference between the starting state and the state the run left behind, which is what an
 eval grades.
 
@@ -111,10 +111,9 @@ Reference pages, for looking things up rather than reading through:
 
 ## A note for agents
 
-If you are an agent asked to build or extend a world, read [concepts.md](concepts.md) and
-[authoring.md](authoring.md) before writing anything, and keep
-[reference/lints.md](reference/lints.md) open beside you. Every rule in it is a mistake that is
-otherwise easy to make and hard to notice.
+If you are an agent asked to build or extend a world, read [concepts.md](concepts.md),
+[authoring.md](authoring.md) and [reference/lints.md](reference/lints.md) before writing anything.
+Every rule in the lint reference is a mistake that is otherwise easy to make and hard to notice.
 
 These pages ship inside the installed `seahaven` package, so they always describe the version you
 have. `seahaven docs` prints the directory they are in.
