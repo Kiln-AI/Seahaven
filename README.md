@@ -100,7 +100,7 @@ for rollout in range(100):
         reward = grade(world_instance.changes())  # the net diff the agent left behind
 ```
 
-**Serve it:** Host and OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.
+**Serve it:** Host an OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.
 
 ```sh
 uv run seahaven serve
