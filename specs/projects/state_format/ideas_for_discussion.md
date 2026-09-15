@@ -72,8 +72,7 @@ it. Sections below are left as argued; where a decision overrides a section, the
 - Whole rows, `changed`, `indirect`, ordering and the net-versus-log question are under
   discussion; the briefing in Appendix A is the material for it.
 
-**Batch 4 (2026-09-15), §3 the diff, second pass. Positions proposed in discussion, pending
-confirmation:**
+**Batch 4 (2026-09-15), §3 the diff, second pass** (confirmed in batch 5 except where noted):
 
 - **No whole database.** Zero upside: the starting state is a lookup by world name, world version,
   fixture id and fixture hash, and a judge that has it can rebuild anything from it plus the log.
@@ -99,11 +98,27 @@ confirmation:**
   counts rows straight off the log overcounts rows touched more than once and must fold or
   deduplicate by key first; and comparing two runs for the same end state is a comparison of their
   folds, never of their logs, because equal end states can have different logs.
-- **`indirect` stays**: a boolean per record, SQLite's own flag, free.
+- **`indirect`**: proposed as a boolean per record. It is SQLite's own flag on each change in a
+  changeset, set when a trigger or a foreign-key action (`ON DELETE CASCADE`, for one) made the
+  change rather than the statement the tool ran. Free to carry; awaiting a decision.
 - **Composition**: every log record carries `subworld`, `null` for the root, naming the sub-world
   the table belongs to, so a composed world's document is one flat list that still materialises to
   one table. `calls` entries carry `subworld` too, for the tool. How `counters.by_tool` keys a
   namespaced tool is settled with the composition design, not here.
+**Batch 5 (2026-09-15), §3 closed for the database block** (the `calls` block is §5's and is not
+approved yet; the example in Appendix B is the agreed shape for `db.log`):
+
+- The log is ordered by call. Within a call, records are sorted by `(subworld, table, key)`, for
+  consistency rather than meaning.
+- One flat list; every record carries `i`. No per-call grouping.
+- No `summary` block. Counts are derivable.
+- Every write after startup is in the log. Startup hooks run before the session attaches and are
+  out, as today. Writes made with no call in flight (`inst.bulk()`, the authoring path that writes
+  straight into an instance under one transaction, used to generate fixtures) are in, with `i`
+  `null`.
+- Confirmed from batch 4: no whole database, no whole rows, key separate with changed non-key
+  columns only on updates, log only with the fold defined in the spec, `subworld` on every record.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is
@@ -562,3 +577,55 @@ and the shape has to be designed so that a document can carry more than one such
 that the database group can be split further if a world ever has more than one database or more
 than one namespace of tables. That is a §3 decision still to be made, and it constrains (a)
 versus (b): (b) already has a natural place to put a namespace; (a) needs a field for it.
+
+## Appendix B: the agreed `db.log` shape
+
+Illustrative, on ProjectTracker. Three calls: a read, a transition that the tool records in
+`issue_events` itself, and a delete where a foreign-key cascade removes a label row. The `calls`
+block is shown for the ordinals only; its shape is §5's and not yet agreed.
+
+```jsonc
+"calls": [
+  {"i": 0, "tool": "search_issues", "args": {"query": "login"}, "ok": true},
+  {"i": 1, "tool": "transition_issue", "args": {"issue_id": "iss_3", "status": "done"}, "ok": true},
+  {"i": 2, "tool": "delete_issue", "args": {"issue_id": "iss_7"}, "ok": true}
+],
+"db": {
+  "log": [
+    // call 0 read only: no records
+
+    // call 1: the tool updated the issue and inserted an event row itself
+    {"i": 1, "subworld": null, "table": "issue_events", "op": "insert", "indirect": false,
+     "key": {"id": "ev_41"},
+     "before": null,
+     "after": {"id": "ev_41", "issue_id": "iss_3", "kind": "status", "value": "done", "created_at": "2026-03-04T09:00:00Z"}},
+    {"i": 1, "subworld": null, "table": "issues", "op": "update", "indirect": false,
+     "key": {"id": "iss_3"},
+     "before": {"status": "open", "updated_at": "2026-03-01T14:22:10Z"},
+     "after":  {"status": "done", "updated_at": "2026-03-04T09:00:00Z"}},
+
+    // call 2: the tool deleted the issue; ON DELETE CASCADE removed its label row
+    {"i": 2, "subworld": null, "table": "issue_labels", "op": "delete", "indirect": true,
+     "key": {"issue_id": "iss_7", "label_id": "lbl_2"},
+     "before": {"issue_id": "iss_7", "label_id": "lbl_2"},
+     "after": null},
+    {"i": 2, "subworld": null, "table": "issues", "op": "delete", "indirect": false,
+     "key": {"id": "iss_7"},
+     "before": {"id": "iss_7", "key": "ENG-7", "title": "Flaky login test", "status": "open", "assignee_id": null, "project_id": "prj_1", "created_at": "…", "updated_at": "…"},
+     "after": null}
+  ]
+}
+```
+
+What it commits to:
+
+- One flat list, one record per row per call, ordered by call, sorted within a call by
+  `(subworld, table, key)`.
+- `key` is separate and never repeated inside `before` or `after` on an update. An update's
+  `before` and `after` hold exactly the changed non-key columns, so `updated_at` appears because the
+  tool wrote it. An insert's `after` and a delete's `before` are whole rows.
+- `indirect: true` on the cascade row and nowhere else (pending the decision on `indirect`).
+- Values are JSON values: NULL is `null`, a blob is base64 text, everything else as SQLite stores it.
+- A call that changed nothing has no records. The same row touched in two calls appears twice, once
+  per call.
+- A write with no call in flight carries `i: null`.
