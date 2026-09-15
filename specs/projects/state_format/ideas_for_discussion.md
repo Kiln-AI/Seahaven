@@ -60,8 +60,9 @@ it. Sections below are left as argued; where a decision overrides a section, the
   it. `World.version` is the world's identity, and the docs say a schema, tool or state-format
   change bumps it. The fixture's `file_sha256` stays because it already exists and catches the one
   drift the version does not cover, a regenerated fixture under the same id.
-- A full `schema` block (tables and columns, for judge tooling to type-check expressions at
-  authoring time) stays a P2 format option, not part of v1.
+- No `schema` block, in v1 or as a later format option. A judge author can get the world's schema
+  by other means (the world package, `describe_schema`, the fixture); a state document is produced
+  once per episode and is not the place to repeat it.
 
 ## 1. Versioning: producer-side formatters, pinned per world
 
