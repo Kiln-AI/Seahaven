@@ -98,9 +98,9 @@ it. Sections below are left as argued; where a decision overrides a section, the
   counts rows straight off the log overcounts rows touched more than once and must fold or
   deduplicate by key first; and comparing two runs for the same end state is a comparison of their
   folds, never of their logs, because equal end states can have different logs.
-- **`indirect`**: proposed as a boolean per record. It is SQLite's own flag on each change in a
-  changeset, set when a trigger or a foreign-key action (`ON DELETE CASCADE`, for one) made the
-  change rather than the statement the tool ran. Free to carry; awaiting a decision.
+- **No `indirect`.** Decided 2026-09-15. It is SQLite's flag marking a change made by a trigger or
+  a foreign-key action rather than by the tool's own statement. The log records state; why a row
+  changed is the trace's business, not the state's. §3 is closed for the database block.
 - **Composition**: every log record carries `subworld`, `null` for the root, naming the sub-world
   the table belongs to, so a composed world's document is one flat list that still materialises to
   one table. `calls` entries carry `subworld` too, for the tool. How `counters.by_tool` keys a
@@ -108,6 +108,7 @@ it. Sections below are left as argued; where a decision overrides a section, the
 **Batch 5 (2026-09-15), §3 closed for the database block** (the `calls` block is §5's and is not
 approved yet; the example in Appendix B is the agreed shape for `db.log`):
 
+- No `indirect` field (see batch 4).
 - The log is ordered by call. Within a call, records are sorted by `(subworld, table, key)`, for
   consistency rather than meaning.
 - One flat list; every record carries `i`. No per-call grouping.
@@ -595,21 +596,21 @@ block is shown for the ordinals only; its shape is §5's and not yet agreed.
     // call 0 read only: no records
 
     // call 1: the tool updated the issue and inserted an event row itself
-    {"i": 1, "subworld": null, "table": "issue_events", "op": "insert", "indirect": false,
+    {"i": 1, "subworld": null, "table": "issue_events", "op": "insert",
      "key": {"id": "ev_41"},
      "before": null,
      "after": {"id": "ev_41", "issue_id": "iss_3", "kind": "status", "value": "done", "created_at": "2026-03-04T09:00:00Z"}},
-    {"i": 1, "subworld": null, "table": "issues", "op": "update", "indirect": false,
+    {"i": 1, "subworld": null, "table": "issues", "op": "update",
      "key": {"id": "iss_3"},
      "before": {"status": "open", "updated_at": "2026-03-01T14:22:10Z"},
      "after":  {"status": "done", "updated_at": "2026-03-04T09:00:00Z"}},
 
     // call 2: the tool deleted the issue; ON DELETE CASCADE removed its label row
-    {"i": 2, "subworld": null, "table": "issue_labels", "op": "delete", "indirect": true,
+    {"i": 2, "subworld": null, "table": "issue_labels", "op": "delete",
      "key": {"issue_id": "iss_7", "label_id": "lbl_2"},
      "before": {"issue_id": "iss_7", "label_id": "lbl_2"},
      "after": null},
-    {"i": 2, "subworld": null, "table": "issues", "op": "delete", "indirect": false,
+    {"i": 2, "subworld": null, "table": "issues", "op": "delete",
      "key": {"id": "iss_7"},
      "before": {"id": "iss_7", "key": "ENG-7", "title": "Flaky login test", "status": "open", "assignee_id": null, "project_id": "prj_1", "created_at": "…", "updated_at": "…"},
      "after": null}
@@ -624,7 +625,8 @@ What it commits to:
 - `key` is separate and never repeated inside `before` or `after` on an update. An update's
   `before` and `after` hold exactly the changed non-key columns, so `updated_at` appears because the
   tool wrote it. An insert's `after` and a delete's `before` are whole rows.
-- `indirect: true` on the cascade row and nowhere else (pending the decision on `indirect`).
+- The cascade-deleted label row looks exactly like a row the tool deleted: the log records state,
+  not reason.
 - Values are JSON values: NULL is `null`, a blob is base64 text, everything else as SQLite stores it.
 - A call that changed nothing has no records. The same row touched in two calls appears twice, once
   per call.
