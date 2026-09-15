@@ -1,24 +1,44 @@
 # API reference
 
 The public API is the names exported from `seahaven`, the `seahaven.helpers`, `seahaven.sandbox` and
-`seahaven.fixtures` modules, the type aliases in `seahaven.world`, `seahaven.openenv` (in the `serve`
-extra), and the pytest plugin's two fixtures. A name that is not below is internal and may change
-without notice.
+`seahaven.fixtures` modules, the type aliases in `seahaven.world`, `seahaven.openenv` (in the
+`serve` extra), and the pytest plugin's two fixtures. A name that is not below is internal and may
+change without notice.
 
-Ten names on this page live outside `seahaven/__init__.py`, in two groups:
+| Section | What it covers |
+|---|---|
+| [`World`](#world) | The declaration, and `add_world` |
+| [`Instance`](#instance) | What `world.instance(...)` returns |
+| [`Ctx`](#ctx) | What every tool receives |
+| [`Worlds` and `WorldHandle`](#worlds-and-worldhandle) | Reaching an added world |
+| [`Db`](#db), [`Clock`](#clock), [`Ids`](#ids) | The database, the time and the seeded stream |
+| [`Call`](#call), [`Tool`](#tool), [`Change`](#change) | One call, one tool, one row's difference |
+| [The composition report](#the-composition-report) | The stores one instance holds |
+| [`Fixture`](#fixture), [`seahaven.fixtures`](#seahavenfixtures) | Fixtures, and the module that reads them |
+| [Errors](#errors) | The exception hierarchy |
+| [`seahaven.helpers`](#seahavenhelpers) | `run_sql` and `describe_schema` |
+| [`seahaven.sandbox`](#seahavensandbox) | Agent SQL containment |
+| [`seahaven.openenv`](#seahavenopenenv-the-serve-extra) | The server and the client |
+| [The pytest plugin](#the-pytest-plugin) | Two fixtures, one marker, one option |
+| [The concurrency gate](#the-concurrency-gate) | `set_concurrency` and friends |
+| [Middleware and hook types](#middleware-and-hook-types) | `Handler`, `Middleware` and `StartupHook` |
 
-- `seahaven.world.Handler`, `Middleware` and `StartupHook` — the type aliases the scaffolded error
-  handler imports — and `seahaven.fixtures.load`, `load_all`, `verify` and `freeze`. Both sets are
-  part of their module's stated interface in the repository's `components/world_and_dispatch.md` §1
-  and `components/fixtures_instances.md` §1, and `architecture.md` §1 makes that the rule: a name
-  the component document section covering a module lists as part of that module's interface is
-  public, and `seahaven/__init__.py` re-exports only the subset worth a short import.
-- `seahaven.instances.default_concurrency`, `concurrency` and `set_concurrency` — the concurrency
-  gate, which no component document lists. **This page declares them public on its own authority**,
-  because the gate is on in every process and `serve --concurrency` is otherwise the only documented
-  way to touch it, which leaves an in-process harness with a real knob and no name for it. It is
-  going further than the specification, and says so here rather than implying the rule above
-  covers it.
+Ten names on this page are not exported from `seahaven/__init__.py`, and there are two reasons for
+that:
+
+- Seven of them are public by the repository's own rule. `seahaven.world.Handler`, `Middleware` and
+  `StartupHook` are the type aliases the scaffolded error handler imports, and
+  `seahaven.fixtures.load`, `load_all`, `verify` and `freeze` read a fixture directory. Both sets
+  are part of their module's stated interface, in `components/world_and_dispatch.md` §1 and
+  `components/fixtures_instances.md` §1. `architecture.md` §1 makes that the rule: a name the
+  component document lists as part of a module's interface is public, and `seahaven/__init__.py`
+  re-exports only the subset worth a short import.
+- The other three are `seahaven.instances.default_concurrency`, `concurrency` and `set_concurrency`,
+  the concurrency gate. No component document lists them, so **this page declares them public on its
+  own authority**. The gate is on in every process, and `serve --concurrency` is otherwise the only
+  documented way to change it, which leaves an in-process harness with a real control and no name
+  for it. That goes further than the specification, and this page says so rather than implying the
+  rule above covers it.
 
 ```py
 import seahaven
@@ -61,35 +81,38 @@ class World:
     ) -> None: ...
 ```
 
-One per world package, built at import in `world.py`. `schema` is the DDL as one string, usually
-from `sql_files`. `name` and `version` are informational and appear in the OpenEnv metadata and in
-every fixture's sidecar. `description` is the one-line description the OpenEnv metadata publishes —
-a free string, unvalidated, and the only thing that sets it; a world that gives none, or gives a
-string that is blank, publishes `Seahaven world <name>`. `fixtures_dir` defaults to `fixtures/` at the
-project root, found by walking up from the constructing module to the directory holding
-`pyproject.toml`, and to `fixtures/` beside the package where there is none. `work_dir` is where
-instance copies live; the default is a per-process directory under the system temp directory, which
-is swept of previous processes' leftovers, and a directory you name is used exactly as given and
-never swept. `untracked_tables` names tables the changeset session does not attach.
+One per world package, built at import in `world.py`. `schema` is the world's `CREATE TABLE`
+statements as one string, usually from `sql_files`. `name` and `version` are informational and
+appear in the OpenEnv metadata and in every fixture's sidecar. `description` is the one-line
+description the OpenEnv metadata publishes. It is a free string, unvalidated, and the only thing
+that sets that line; a world that gives none, or gives a blank string, publishes `Seahaven world
+<name>`. `fixtures_dir` defaults to `fixtures/` at the project root, found by walking up from the
+constructing module to the directory holding `pyproject.toml`, and to `fixtures/` beside the package
+where there is none. `work_dir` is where instance copies are kept; the default is a per-process
+directory under the system temp directory, which is swept of previous processes' leftovers, and a
+directory you name is used exactly as given and never swept. `untracked_tables` names tables the
+changeset session does not attach.
 
-A `World` whose DDL does not execute cannot be constructed: the schema is built in memory to compute
-the schema hash, and SQLite's own message is reported. Nor is one whose `name` is not a single
-directory name that every platform carries unchanged — the name is a path component of the default
-working directory, and it travels with every fixture the world freezes. The rule is 1 to 128
-characters of letters, digits, space, `.`, `-` and `_`, not starting or ending with a space or a
-dot, and not a name Windows reserves for a device (`con`, `prn`, `aux`, `nul`, `com1`–`com9`,
-`lpt1`–`lpt9`, with any extension). Anything else — an empty name, a separator, a drive letter, a
-NUL, an accent or a non-Latin script — is refused with `not a world name` and the clause it broke.
-A **fixture id** is the same rule, refused with `not a fixture id`.
+A `World` whose schema does not execute cannot be constructed: the schema is built in memory to
+compute the schema hash, and SQLite's own message is reported.
+
+Nor can one be constructed whose `name` is not a single directory name that every platform carries
+unchanged. The name is a path component of the default working directory, and it travels with every
+fixture the world freezes. The rule is 1 to 128 characters of letters, digits, space, `.`, `-` and
+`_`, not starting or ending with a space or a dot, and not a name Windows reserves for a device
+(`con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`, with any extension). Anything else is
+refused with `not a world name` and the clause it broke: an empty name, a separator, a drive letter,
+a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, and is refused with
+`not a fixture id`.
 
 | Member | What it is |
 |---|---|
-| `world.tool(obj=None, *, name=None, description=None, transaction=None)` | register a tool, as a decorator or a call. Passing a built `Tool` and any of the three keywords is refused — a factory decided them |
+| `world.tool(obj=None, *, name=None, description=None, transaction=None)` | register a tool, as a decorator or a call. Passing a built `Tool` together with any of the three keywords is refused, because the factory that built it decided them |
 | `world.middleware(obj=None)` | register a middleware, as a decorator or a call. Order is registration order, outermost first |
 | `world.instance_startup(obj=None)` | register a startup hook, as a decorator or a call |
-| `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call-only — there is nothing to decorate |
+| `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call it; there is nothing to decorate |
 | `world.instance(fixture=None, *, seed=None, now=None, **startup_kwargs)` | make an instance; a context manager |
-| `world.fixtures()` | every fixture in the fixtures directory, by id. A world with no fixtures directory has none, which is not an error |
+| `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
 | `world.tools_by_fn` | the registry by the function each tool was built from, multi-valued because one function may be registered as two tools. This world's own tools only, contributed or not. The control tools are not in it |
@@ -98,7 +121,7 @@ A **fixture id** is the same rule, refused with `not a fixture id`.
 | `world.accepted_startup_kwargs` | every keyword some hook names |
 | `world.added_worlds` | what `add_world` recorded, in registration order. Read-only |
 | `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
-| `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir` | as given, plus the hash of the normalised DDL |
+| `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir` | as given, plus the hash of the normalised schema |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
 [../authoring.md](../authoring.md).
@@ -108,7 +131,7 @@ Registration validates immediately and raises `WorldBug`; the full list of what 
 | Parameter | What | Default |
 |---|---|---|
 | first positional | the added world's `World` object, normally the `world` its package exports | required |
-| `name` | this host's internal identity for it — a path segment, a file name, a schema name. `^[a-z][a-z0-9_]*$`, no `__`, not `main` or `temp`. Never agent-visible | the added world's own `name` |
+| `name` | this host's internal identity for it, used as a path segment, a file name and a schema name. `^[a-z][a-z0-9_]*$`, no `__`, not `main` or `temp`. Never agent-visible | the added world's own `name` |
 | `store` | the account scope this world **and its whole subtree** belong to. `None` keeps the adder's scope, which is what shares a store | `None` |
 | `tool_prefix` | prepended to every contributed tool name | none |
 | `tool_allow_list` | only these tools are contributed to the agent's surface, named as the added world contributes them: after any prefix applied inside its own subtree, before this `tool_prefix` | all |
@@ -117,7 +140,7 @@ Registration validates immediately and raises `WorldBug`; the full list of what 
 
 What is checked at the call is what the two `World` objects know: the name, the lists, the scope
 name, the `startup` keywords against the added world's own hooks, and the absence of a cycle.
-Everything that is a property of the whole tree is checked at the first use of it — see
+Everything that is a property of the whole tree is checked at the first use of it. See
 [../composition.md](../composition.md), and `SH504` in [lints.md](lints.md).
 
 ### `sql_files`
@@ -126,11 +149,11 @@ Everything that is a property of the whole tree is checked at the first use of i
 def sql_files(package: str | None, directory: str) -> str: ...
 ```
 
-Every `*.sql` in a package directory, in sorted filename order, joined with newlines — which is what
-the `001_`, `002_` prefix convention is for. Read through `importlib.resources`, so a world works
-the same from a checkout, an installed wheel or a zip. `seahaven.sql_files(__package__, "schema")`
-is the spelling; `__name__` is a module inside the package and is refused, as is a directory that
-leaves the package.
+Every `*.sql` in a package directory, in sorted filename order, joined with newlines. Sorted order
+is what the `001_`, `002_` prefix convention is for. The files are read through
+`importlib.resources`, so a world works the same from a checkout, an installed wheel or a zip.
+`seahaven.sql_files(__package__, "schema")` is the spelling. `__name__` is a module inside the
+package and is refused, as is a directory that leaves the package.
 
 ## `Instance`
 
@@ -167,10 +190,10 @@ directory, no other instance, no process.
 | `ctx.instance` | `id`, `fixture` and `seed`, read-only |
 | `ctx.worlds` | the `Worlds` this node adds, by name. For a world that adds none it answers nothing: every name on it is a `WorldBug` |
 
-`Ctx` is generic in what `ctx.worlds` is: a bare `seahaven.Ctx` annotation is what almost every tool
-writes, and `seahaven.Ctx[CompanyWorlds]` opts into a type checker knowing the child names (below).
-The parameter is annotation-only — nothing in the runtime reads it — and the registration check
-accepts either.
+`Ctx` is generic in what `ctx.worlds` is. Almost every tool writes a bare `seahaven.Ctx` annotation,
+and `seahaven.Ctx[CompanyWorlds]` opts into a type checker knowing the child names (below). The
+parameter is annotation-only, nothing in the runtime reads it, and the registration check accepts
+either.
 
 ## `Worlds` and `WorldHandle`
 
@@ -186,14 +209,14 @@ registered is a `WorldBug`.
 | `handle.state` | that node's own `ctx.state` dict |
 | `handle.worlds` | that node's own children |
 
-A handle belongs to one **activation** of the instance — the outermost call, or the `bulk()` block,
-that was running when it was made — and every member raises `WorldBug` after that activation ends.
-A handle is not a reference to keep.
+A handle belongs to one **activation** of the instance: the outermost call, or the `bulk()` block,
+that was running when the handle was made. Every member raises `WorldBug` after that activation
+ends, so a handle is not a reference to keep.
 
-`Worlds` is also the base a world subclasses to declare its children to a type checker — one
-`<name>: seahaven.WorldHandle` annotation per child, on a class that is never instantiated, named in
-a `Ctx[...]`. `seahaven check` binds it to the registrations (`SH502`, `SH503`). The worked example
-is in [../composition.md](../composition.md), which is the page for all of this.
+`Worlds` is also the base a world subclasses to declare its children to a type checker. The subclass
+carries one `<name>: seahaven.WorldHandle` annotation per child, is never instantiated, and is named
+in a `Ctx[...]`. `seahaven check` binds it to the registrations (`SH502`, `SH503`). The worked
+example is in [../composition.md](../composition.md), which is the page for all of this.
 
 ## `Db`
 
@@ -215,10 +238,10 @@ code catches one type.
 `Exec.last_rowid` is `sqlite3_last_insert_rowid` as SQLite reports it: it belongs to the connection
 rather than the statement, so read it straight after an `INSERT`.
 
-`db.conn` is there for what the wrapper does not cover — blob I/O, an exec trace. The invariants:
-**do not close it, change its pragmas or its authorizer, or open a second connection to the instance
-file.** The clock functions, the changeset session and the per-call transaction all live on that one
-connection.
+`db.conn` is there for what the wrapper does not cover, such as blob I/O or an exec trace. The
+invariants: **do not close it, change its pragmas or its authorizer, or open a second connection to
+the instance file.** The clock functions, the changeset session and the per-call transaction all use
+that one connection.
 
 ## `Clock`
 
@@ -243,14 +266,14 @@ class Ids:
     random: random.Random  # seeded per instance
 ```
 
-Product-shaped keys — `ENG-13`, a sequential invoice number — are the world's own business, built on
-`ids.random` or on its tables. This is the stream they draw from.
+Product-shaped keys are the world's own business. `ENG-13` and a sequential invoice number are built
+on `ids.random` or on the world's own tables, and this is the stream they draw from.
 
 SQLite's `random()` and `randomblob()` are overridden on every connection an instance opens, each
-from a stream of its own derived from the instance seed, so SQL replays as `ctx.ids` does — and no
-two doors onto one instance, nor `ctx.ids`, hand out the same values. They are registered as
-innocuous, so a `DEFAULT` clause and a trigger may call them, and deliberately not as deterministic,
-so SQLite asks them for every call.
+from a stream of its own derived from the instance seed, so SQL replays as `ctx.ids` does. No two
+doors onto one instance hand out the same values, and neither does `ctx.ids`. The overrides are
+registered as innocuous, so a `DEFAULT` clause and a trigger may call them, and deliberately not as
+deterministic, so SQLite asks them for every call.
 
 ## `Call`
 
@@ -262,8 +285,8 @@ call.node  # the canonical path of the node that owns the tool; "main" for a wor
 call.with_arguments(**changes)  # a copy with changes merged over the arguments
 ```
 
-Frozen. A middleware that wants typed arguments before validation calls
-`call.tool.validate(call.arguments)` itself; the model is built once at registration, so that is
+A `Call` is frozen. A middleware that wants typed arguments before validation calls
+`call.tool.validate(call.arguments)` itself. The model is built once at registration, so that is
 cheap.
 
 ## `Tool`
@@ -283,8 +306,9 @@ class Tool:
     transaction: bool
 ```
 
-`from_function` is what a tool factory — a helper, an extension — builds its tool with. `control` is
-the framework's own flag for the control tools and cannot be set through it.
+`from_function` is what a tool factory builds its tool with, whether that factory is one of
+Seahaven's helpers or an extension's. `control` is Seahaven's own flag for the control tools and
+cannot be set through it.
 
 ## `Change`
 
@@ -298,12 +322,12 @@ change.to_dict()  # the wire shape an eval reads, with "world" first
 ```
 
 `world` is `main` on every record of a world that adds none, and the owning node's canonical path
-otherwise — which is what tells two tables of the same name in two stores apart
+otherwise. That is what tells two tables of the same name in two stores apart
 ([../composition.md](../composition.md)).
 
 `before` and `after` hold only the columns the change carries. A changeset marks the rest
 `apsw.no_change`, which is not the same as `NULL`, so an update's `before` holds the key columns and
-the old values of what changed — flattening the two would turn "changed the assignee" into "rewrote
+the old values of what changed. Flattening the two would turn "changed the assignee" into "rewrote
 the row".
 
 ## The composition report
@@ -320,8 +344,8 @@ report.frozen_world_version  # what the fixture recorded, when that is not what 
 ```
 
 It describes the stores this instance holds, which is the set it was created with rather than
-whatever the world's seal says now. `frozen_world_version` is `None` for a blank instance and
-wherever the fixture and the installed world agree: a version difference under a matching schema
+whatever the world's seal says now. `frozen_world_version` is `None` for a blank instance, and also
+wherever the fixture and the installed world agree. A version difference under a matching schema
 hash is reported, never refused. Over OpenEnv the same list is the `state` message's `composition`.
 
 ## `Fixture`
@@ -346,22 +370,21 @@ def freeze(
 ) -> Fixture: ...
 ```
 
-The fixture directory read directly, for tooling that works on fixtures rather than on a world:
-`load` reads one sidecar without opening the state file, `load_all` returns every fixture in a
-directory by id (an empty directory is not an error and dot-directories are skipped, a `.pending-*`
-freeze in flight among them; two fixtures claiming one id is an error), `verify` raises unless every
-state file is a real file in the fixture's own directory rather than a symbolic link of any kind and
-is the one its sidecar's `file_sha256` describes, and `freeze` is what `Instance.freeze` delegates
-to.
+These read a fixture directory directly, for tooling that works on fixtures rather than on a world.
+`load` reads one sidecar without opening the state file. `load_all` returns every fixture in a
+directory, keyed by id; an empty directory is not an error, dot-directories are skipped (including a
+`.pending-*` freeze in flight), and two fixtures claiming one id is an error. `verify` raises unless
+every state file is a real file in the fixture's own directory, rather than a symbolic link of any
+kind, and is the one its sidecar's `file_sha256` describes. `freeze` is what `Instance.freeze`
+delegates to.
 
-A world does not need these — `world.fixtures()`, `world.instance(id)` and `inst.freeze(...)` are
-the ordinary path, and `world.instance(id)` verifies for you. Listing deliberately does not:
-`world.fixtures()` is `load_all`, and `load` never opens the state file, so a fixture whose
-`state.sqlite` was modified is listed without complaint and is refused when an instance is made
-from it. Reach for the module when you are checking a fixture
-directory in a test or a script, as the reference world's own `tests/test_fixtures.py` does. A
-malformed sidecar, an unknown `format_version`, a duplicate id and a modified state file are each a
-`WorldBug` naming the file.
+A world does not need any of them. `world.fixtures()`, `world.instance(id)` and `inst.freeze(...)`
+are the ordinary path, and `world.instance(id)` verifies for you. Listing deliberately does not
+verify: `world.fixtures()` is `load_all`, and `load` never opens the state file, so a fixture whose
+`state.sqlite` was modified is listed without complaint and is refused when an instance is made from
+it. Reach for the module when you are checking a fixture directory in a test or a script, as the
+reference world's own `tests/test_fixtures.py` does. A malformed sidecar, an unknown
+`format_version`, a duplicate id and a modified state file are each a `WorldBug` naming the file.
 
 ## Errors
 
@@ -374,14 +397,14 @@ SeahavenError
     └── UnknownTool           .details["name"]
 ```
 
-`ToolError.to_dict()` is `{"code", "message", "details"}` — the same shape in process and over the
-wire. The framework's own three codes are `invalid_arguments`, `db_error` and `unknown_tool`; a
-world's codes are its own.
+`ToolError.to_dict()` is `{"code", "message", "details"}`, the same shape in process and over the
+wire. Seahaven's own three codes are `invalid_arguments`, `db_error` and `unknown_tool`. A world's
+codes are its own.
 
-`DbError` carries SQLite's text but never puts it in the agent-facing message by itself: a world's
-SQL door is where engine text is the right answer, and `run_sql`'s own tool puts SQLite's message on
-the error it raises before the error handler ever sees it. Elsewhere, `error.sqlite_message` is
-there for a handler that wants to log it.
+`DbError` carries SQLite's text but never puts it in the agent-facing message by itself. A world's
+SQL door is where engine text is the right answer, and the `run_sql` tool puts SQLite's message on
+the error it raises before the error handler ever sees it. Everywhere else, `error.sqlite_message`
+is there for a handler that wants to log it.
 
 ## `seahaven.helpers`
 
@@ -398,28 +421,27 @@ def run_sql(
 ) -> Tool: ...
 ```
 
-A tool taking one `query` string in the SQLite dialect and returning
-`{"columns": [...], "rows": [[...]], "row_count": n, "truncated": bool}`. Exactly one statement per
-call.
+A tool taking one `query` string in the SQLite dialect and returning `{"columns": [...], "rows":
+[[...]], "row_count": n, "truncated": bool}`. Exactly one statement per call.
 
-Containment is the framework's: a SQLite authorizer that allows the listed tables plus
-`sqlite_master`, `sqlite_schema`, `json_each` and `json_tree`, and **denies** everything else —
-never ignores. `ATTACH`, `PRAGMA`, `load_extension` and schema changes are refused whatever
-`read_only` says, and with it, every write is. A statement-level check backs the authorizer, and a
-fixed, non-configurable cap on the size of a single SQL value stops a query materialising an
-enormous one. `read_only=False` allows writes to the listed tables, which commit with the call like
-any other tool's.
+Seahaven owns the containment. A SQLite authorizer allows the listed tables plus `sqlite_master`,
+`sqlite_schema`, `json_each` and `json_tree`, and **denies** everything else. It denies rather than
+ignores. `ATTACH`, `PRAGMA`, `load_extension` and schema changes are refused whatever `read_only`
+says, and with `read_only=True` every write is refused as well. A statement-level check backs the
+authorizer, and a fixed, non-configurable cap on the size of a single SQL value stops a query
+materialising an enormous one. `read_only=False` allows writes to the listed tables, which commit
+with the call like any other tool's.
 
 `max_rows` and `max_bytes` are the world's truncation policy, for a product that truncates; unset
 means the whole result. `functions` allows SQLite functions beyond the default list. `random()` and
 `randomblob()` are on that list: an agent may draw from them because what it draws is the instance's
 seeded stream, not the host's entropy.
 
-Nothing is inferred from a name: an FTS5 virtual table and its shadow tables are denied like any
-other table the world did not list, and allowed when it does list them. Full-text `MATCH` therefore
-does not work through a door that lists only the world's ordinary tables — which is the default, and
-why a world's own search tool is the usual path — but a world that wants `MATCH` here lists the
-virtual table **and its shadow tables** and adds the search functions. The recipe, with a worked
+Nothing is inferred from a name. An FTS5 virtual table and its shadow tables are denied like any
+other table the world did not list, and allowed when it does list them. So full-text `MATCH` does
+not work through a door that lists only the world's ordinary tables, which is the default and the
+reason a world's own search tool is the usual path. A world that wants `MATCH` here lists the
+virtual table **and its shadow tables**, and adds the search functions. The recipe, with a worked
 example, is in [../authoring.md](../authoring.md).
 
 ```py
@@ -428,15 +450,15 @@ def describe_schema(
 ) -> Tool: ...
 ```
 
-No arguments, writes nothing, and returns, from the live schema:
-`{"tables": [{"name", "columns": [{"name", "type", "nullable", "primary_key"}], "foreign_keys":
-[{"columns", "references_table", "references_columns"}]}]}`. The companion every real SQL tool ships
-with.
+No arguments, writes nothing, and returns, from the live schema: `{"tables": [{"name", "columns":
+[{"name", "type", "nullable", "primary_key"}], "foreign_keys": [{"columns", "references_table",
+"references_columns"}]}]}`. Register it beside any SQL door, so that an agent can read the tables
+before it queries them.
 
 ## `seahaven.sandbox`
 
-Public so that an extension serving another SQL dialect runs its translated statement through the
-same containment the framework's own helper uses.
+These names are public so that an extension serving another SQL dialect can run its translated
+statement through the same containment Seahaven's own helper uses.
 
 ```py
 class Authorizer:
@@ -462,9 +484,9 @@ ALLOWED_FUNCTIONS: frozenset[str]
 MAX_VALUE_BYTES: int
 ```
 
-A refusal is classified by what the authorizer recorded, not by the message text: SQLite reports its
-own refusals inconsistently — a denied table read raises `apsw.AuthError` and a denied function
-raises `apsw.SQLError` — and the two are siblings in APSW's flat hierarchy.
+A refusal is classified by what the authorizer recorded, not by the message text. SQLite reports its
+own refusals inconsistently: a denied table read raises `apsw.AuthError` and a denied function
+raises `apsw.SQLError`, and the two are siblings in APSW's flat hierarchy.
 
 ## `seahaven.openenv` (the `serve` extra)
 
@@ -482,13 +504,14 @@ class SeahavenClient:  # .reset(...), .call(tool, /, **arguments), .list_tools()
 # CallToolAction, ListToolsAction and ListToolsObservation.
 ```
 
-See [../serving.md](../serving.md).
+See [../serving_and_openenv.md](../serving_and_openenv.md).
 
 ## The pytest plugin
 
-Activated by installing `seahaven`. Two fixtures — `world` (session-scoped) and `instance` (one per
-test) — one marker, `@pytest.mark.seahaven(fixture, seed=None, now=None, **startup_kwargs)`, and one
-option, `--seahaven-world module:attr`. See [../testing.md](../testing.md).
+Installing `seahaven` activates the plugin. It adds two fixtures, `world` (session-scoped) and
+`instance` (one per test); one marker, `@pytest.mark.seahaven(fixture, seed=None, now=None,
+**startup_kwargs)`; and one option, `--seahaven-world module:attr`. See
+[../testing.md](../testing.md).
 
 ## The concurrency gate
 
@@ -498,12 +521,13 @@ def concurrency() -> int: ...  # the size in force, or 0 for no gate
 def set_concurrency(size: int) -> None: ...  # resize it; 0 removes it
 ```
 
-In `seahaven.instances`, not on the package root, and documented on this page's own authority (see
-the top): `serve --concurrency` is `set_concurrency`, and an in-process harness that drives many
-instances on threads has the same gate and the same knob. It is process-wide and on by default. Calls already running are
-unaffected by a resize; nothing is ever rejected. Read the gate's paragraph in
-[../serving.md](../serving.md) before changing it — it is unfair whenever it binds, and that is a
-known defect rather than a tuning question.
+These are in `seahaven.instances` rather than on the package root, and this page documents them on
+its own authority (see the top). `serve --concurrency` is `set_concurrency`, and an in-process
+harness that drives many instances on threads has the same gate and the same control. The gate is
+process-wide and on by default. A resize does not affect calls already running, and nothing is ever
+rejected. Read the gate's section in [../serving_and_openenv.md](../serving_and_openenv.md) before
+changing it: the gate is unfair whenever it binds, and that is a known defect rather than a tuning
+question.
 
 ## Middleware and hook types
 
@@ -511,7 +535,7 @@ known defect rather than a tuning question.
 from seahaven.world import Handler, Middleware, StartupHook
 ```
 
-`Handler` is `(ctx, call) -> Any` — what the rest of the chain looks like from inside a middleware.
-`Middleware` is `(ctx, call, next_) -> Any`. `StartupHook` is `(ctx, **kwargs) -> None`. They are
-type aliases for annotating your own code; nothing subclasses them, and the shape is checked
-structurally at registration.
+`Handler` is `(ctx, call) -> Any`, which is what the rest of the chain looks like from inside a
+middleware. `Middleware` is `(ctx, call, next_) -> Any`. `StartupHook` is `(ctx, **kwargs) -> None`.
+They are type aliases for annotating your own code. Nothing subclasses them, and the shape is
+checked structurally at registration.

@@ -1,7 +1,7 @@
 # Testing a world
 
 Installing `seahaven` activates its pytest plugin. There is nothing to add to a `conftest.py`,
-nothing to import, and nothing of the plugin's to subclass: two fixtures, one marker and one option.
+nothing to import, and nothing to subclass. The plugin adds two fixtures, one marker and one option.
 
 ```python
 import pytest
@@ -22,19 +22,19 @@ def test_a_missing_issue_is_this_worlds_not_found(instance: seahaven.Instance) -
     assert raised.value.code == "NOT_FOUND"
 ```
 
-(That example, and the others on this page, run against ProjectTracker — see
-[projecttracker.md](projecttracker.md). In your own world the tool names are yours.)
+That example, and the others on this page, run against ProjectTracker — see
+[projecttracker.md](projecttracker.md). In your own world the tool names are yours.
 
 ## The two fixtures
 
 **`world`** is the `World` object, found the way every other Seahaven command finds it: the nearest
 `pyproject.toml`, the package its `[project] name` normalises to, and the attribute `world` on it.
-It is **session-scoped** — one import, one object, for the whole run — because a `World` is a
-declaration and no test mutates it.
+It is **session-scoped**, so one import gives one object for the whole run. A `World` is a
+declaration, and no test mutates it.
 
-**`instance`** is a fresh instance per test, made from the fixture the marker names and destroyed on
-teardown whether the test passed or failed. Two tests with the same marker share nothing: each gets
-its own copy of the fixture's file.
+**`instance`** is a fresh instance per test, made from the fixture the marker names, and destroyed
+on teardown whether the test passed or failed. Two tests with the same marker share nothing: each
+gets its own copy of the fixture's file.
 
 ## The marker
 
@@ -46,7 +46,7 @@ def test_a_report_is_the_same_every_time(instance: seahaven.Instance) -> None: .
 | Written | What it makes |
 |---|---|
 | `fixture="small_startup"` | an instance of that fixture on disk |
-| `fixture=None` | a blank instance, built from the DDL |
+| `fixture=None` | a blank instance, built from the schema |
 | `fixture=None, now="2026-01-01T00:00:00.000Z"` | a blank instance with its clock set |
 | `fixture="agency", seed=7` | a fixed seed, so ids repeat |
 | `fixture="agency", user_id="u_12"` | a startup keyword of this world's, passed to its hooks |
@@ -63,13 +63,13 @@ disk, or @pytest.mark.seahaven(fixture=None) for a blank instance
 ```
 
 A module-level `pytestmark` is the usual spelling, with a marker on one test where that test needs a
-different fixture. Note that a marker on a test **replaces** the module's rather than adding to it,
-so every marker names its own fixture — including one written only to add `seed=`. The plugin says
-so in the failure message, because it is the commonest way to get here.
+different fixture. A marker on a test **replaces** the module's rather than adding to it, so every
+marker names its own fixture, including one written only to add `seed=`. The plugin says so in the
+failure message, because it is the commonest way to get here.
 
-Two `seahaven` markers in **one place** — on one test, on one class, or in one module's
-`pytestmark` list — are refused. Nothing chooses between them on purpose, so the plugin names the
-node that carries both and asks you to keep one.
+Two `seahaven` markers in **one place** — on one test, on one class, or in one module's `pytestmark`
+list — are refused. Nothing chooses between them on purpose, so the plugin names the node that
+carries both and asks you to keep one.
 
 ## Running them
 
@@ -80,21 +80,21 @@ uv run pytest --seahaven-world mypackage:world
 
 `--seahaven-world module:attr` is the plugin's namespace-qualified version of the CLI's `--world`,
 for a layout the convention misses. Everything else — `-k`, `-x`, markers of your own — is ordinary
-pytest: the plugin adds two fixtures, one marker and that one option, and does nothing at all to a
+pytest. The plugin adds two fixtures, one marker and that one option, and does nothing at all to a
 run that does not use them.
 
 ## What is worth testing in a world
 
-**Every tool, through a real call.** `instance.call("create_issue", ...)`, never
-`create_issue(ctx, ...)`. What you are testing is the tool — its argument model, its JSON schema,
-the transaction it runs in, the error handler above it — and all of that is the framework's work on
-the signature, which only a real call exercises.
+**Every tool, through a real call.** Write `instance.call("create_issue", ...)`, never
+`create_issue(ctx, ...)`. What you are testing is the tool: its argument model, its JSON schema, the
+transaction it runs in, and the error handler above it. All of that is Seahaven's work on the
+signature, and only a real call exercises it.
 
 **The errors, by code.** Assert `raised.value.code == "NOT_FOUND"`, not the message text. The code
 is the contract; the wording is presentation.
 
-**The argument model, where it is load-bearing.** A tool that takes a `Literal` should have a test
-that the sixth value is refused, and a tool with a patterned timestamp one that a bare date is.
+**The argument model, where it matters.** A tool that takes a `Literal` should have a test that the
+sixth value is refused, and a tool with a patterned timestamp one that a bare date is.
 
 ```python
 import pytest
@@ -178,9 +178,9 @@ def test_the_same_seed_mints_the_same_ids(world: seahaven.World) -> None:
     assert first_issue_id() == first_issue_id()
 ```
 
-**The fixtures' own invariants.** A fixture is data an eval will rely on; assert the things you have
-promised in its description — that `agency` really has twelve people, that no closed issue has an
-assignee — so that regenerating it cannot quietly change the deal.
+**The fixtures' own invariants.** A fixture is data an eval will rely on, so assert the things you
+have promised in its description — that `agency` really has twelve people, that no closed issue has
+an assignee — and regenerating it cannot then quietly change the deal.
 
-**What not to test:** the framework. That a `Literal` produces a JSON schema, that a rollback rolls
-back, that the changeset renders — those have tests of their own in Seahaven's suite.
+**What not to test: the framework.** That a `Literal` produces a JSON schema, that a rollback rolls
+back, that the changeset renders. Those have tests of their own in Seahaven's suite.

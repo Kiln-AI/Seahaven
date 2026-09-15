@@ -2,7 +2,7 @@
 # -- `module-root` defaults to `src`, and the module is the project name -- and
 # every file under it travels, so `schema/*.sql` reaches `importlib.resources` in
 # an installed world. `fixtures/` is outside the package and deliberately does not:
-# a fixture is a checkout's file, not a distribution's (`docs/fixtures.md`).
+# a fixture is a checkout's file, not a distribution's (`docs/db_schema_and_fixtures.md`).
 [build-system]
 requires = ["uv_build>=0.8.17,<0.9.0"]
 build-backend = "uv_build"

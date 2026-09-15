@@ -16,16 +16,17 @@ import pytest
 import seahaven
 from seahaven.cli.docs import docs_path
 
-# The layout of `components/pytest_and_docs.md` §2, verbatim.
+# The layout, as `index.md` gives it. `components/pytest_and_docs.md` §2 wrote
+# down an earlier version of this list; the pages were since rewritten, with
+# `fixtures.md` renamed and `serving.md` and `openenv.md` merged.
 PAGES = (
     "index.md",
     "concepts.md",
     "authoring.md",
     "composition.md",
-    "fixtures.md",
+    "db_schema_and_fixtures.md",
     "testing.md",
-    "serving.md",
-    "openenv.md",
+    "serving_and_openenv.md",
     "extensions.md",
     "projecttracker.md",
     "reference/api.md",

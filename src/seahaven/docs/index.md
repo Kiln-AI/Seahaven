@@ -1,17 +1,30 @@
 # Seahaven
 
-Seahaven is a framework for building **synthetic worlds**: faithful, stateful mocks of the tool
-surface a real company's agent works against, on SQLite, that agents work against in evals.
+Seahaven is a Python framework for building **synthetic worlds**. A synthetic world is a working
+copy of a system an agent works against: a CRM behind a REST API, a payment processor with a SQL
+database, an issue tracker, a warehouse system. The copy is fake, but it stores real state in a
+SQLite database, so a write changes every later read.
 
-A world is an ordinary Python package. Its schema is hand-written SQLite DDL, its tools are plain
-Python functions, and its data is a set of frozen SQLite files called fixtures. An eval makes an
-*instance* — a private copy of one fixture — drives it through tool calls, and grades it on the
-state it is left in.
+Evals and reinforcement learning need thousands of runs. Each run has to start from a known state,
+run in parallel with the others, and be inspectable afterwards. A real system cannot do that, and
+neither can a staging copy. A synthetic world can: it forks a private database in milliseconds, runs
+one agent against it, reports exactly what changed, and then throws the copy away.
 
-These pages ship inside the installed `seahaven` package, so they always match the version you
-have. `seahaven docs` prints the directory they are in.
+## How a world is put together
 
-## A world, whole
+A world is an ordinary Python package with three parts:
+
+- a **schema**, the tables the world stores its data in, written as plain SQLite `CREATE TABLE`
+  statements;
+- **tools**, plain Python functions that the agent calls;
+- **fixtures**, frozen databases that hold a starting state such as "a twelve-person agency with six
+  months of history".
+
+When a client such as an RL runner or an eval case starts a run, Seahaven creates an **instance** of
+the world: an isolated copy of one fixture that lasts for that run or episode. The client drives the
+instance through tool calls, then grades the state the agent left behind.
+
+## Minimal World Example
 
 ```python
 import seahaven
@@ -48,62 +61,59 @@ with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
     assert [change.op for change in inst.changes()] == ["insert"]
 ```
 
-That is the whole framework in one screen: a declaration, a function whose signature is its
-published contract, an instance that is a private copy, a frozen clock, and a changeset an eval can
-grade. A real world spreads the same three things over a package — `seahaven new <name>` lays one
-out — and adds fixtures, errors and an error handler.
+Five things in that example are worth naming, because the rest of these pages use them constantly.
+`World` is the declaration. `@world.tool` publishes a function to the agent; its signature becomes
+the JSON schema the agent sees, and its docstring becomes the description. `inst` is an instance of
+the world. `ctx.clock` is frozen, so the timestamp is the same on every replay. `inst.changes()`
+is the difference between the starting state and the state the run left behind, which is what an
+eval grades.
 
-## Reading order
+A real world spreads the same parts over a package instead of one file, and adds fixtures, error
+types and an error handler. `seahaven new <name>` writes that layout for you.
 
-| Page | What it covers |
-|---|---|
-| [concepts.md](concepts.md) | World, fixture, instance, tool, clock, reproducibility, changesets |
-| [authoring.md](authoring.md) | Writing tools, errors and the error handler, middleware, startup hooks, schema rules |
-| [composition.md](composition.md) | Adding other worlds: `add_world`, `ctx.worlds`, shared stores, composite fixtures |
-| [fixtures.md](fixtures.md) | Freezing, forking, generators, descriptions for eval authors |
-| [testing.md](testing.md) | The pytest plugin, what to test in a world |
-| [serving.md](serving.md) | `seahaven serve`, the OpenEnv client, control tools, publishing to a hub |
-| [openenv.md](openenv.md) | OpenEnv compatibility: driving a world from any client, the wire, why there are no rewards |
-| [extensions.md](extensions.md) | The extension contract, the XML-RPC example |
-| [projecttracker.md](projecttracker.md) | A walkthrough of the reference world |
-
-Reference:
-
-| Page | What it covers |
-|---|---|
-| [reference/api.md](reference/api.md) | The public API |
-| [reference/lints.md](reference/lints.md) | Every `SHnnn` code: rule, why, fix |
-| [reference/cli.md](reference/cli.md) | Every subcommand and option |
-
-If you are an agent asked to build or extend a world, read `concepts.md` and `authoring.md` before
-writing anything, and keep `reference/lints.md` beside you: every rule in it is a mistake that is
-otherwise made silently.
-
-## The commands
+## Getting started
 
 ```sh
 seahaven new <name>           # scaffold a world
 seahaven check                # run every lint; do this before a commit
 seahaven fixture list         # every fixture: id, parent, now, description
-seahaven serve                # run this world's OpenEnv server
-seahaven docs                 # print this directory
+seahaven serve                # run this world's server
+seahaven docs                 # print the directory holding these pages
 ```
 
-Every command except `new` and `docs` finds the world by convention: the project's package, from
-`[project] name` in the nearest `pyproject.toml`, exporting an attribute called `world`.
-`--world module:attr` overrides it. [reference/cli.md](reference/cli.md) has the details.
+Every command except `new` and `docs` finds the world by convention: the project's package, taken
+from `[project] name` in the nearest `pyproject.toml`, exporting an attribute called `world`. Pass
+`--world module:attr` to name it yourself. [reference/cli.md](reference/cli.md) has every command
+and option.
 
-## The rules that are not negotiable
+## Where to go next
 
-- **Time comes from `ctx.clock`** and ids and randomness from `ctx.ids`. An instance's clock does
-  not move, so a replay of the same fixture and seed gives the same run — for a world that takes
-  both from `ctx`. SQL's own `CURRENT_TIMESTAMP`, `random()` and `randomblob()` are overridden on
-  every connection to read the same instant and the same seed. The framework offers
-  reproducibility; it does not enforce it.
-- **Fixtures are immutable.** Fork, change the fork, freeze that. There is no in-place edit path.
-- **SQL goes through `ctx.db`**, on the one connection the instance owns. `ctx.db.conn` is the raw
-  APSW connection for what the wrapper does not cover; never close it or change its pragmas.
-- **Every table is `STRICT` and has an explicit primary key**, and no DDL anywhere reads the wall
-  clock. `seahaven check` fails on all three.
-- **Nothing engine-shaped reaches the agent** unless the world chose it. That is the error
-  handler's job, and every world has one.
+Read these in order the first time. Each page assumes the ones above it.
+
+| Page | What it covers |
+|---|---|
+| [concepts.md](concepts.md) | The nine words the rest of the docs use: world, tool, schema, fixture, instance, context, clock, reproducibility, changeset |
+| [authoring.md](authoring.md) | Writing a world: tools, arguments, transactions, errors, middleware, startup hooks |
+| [db_schema_and_fixtures.md](db_schema_and_fixtures.md) | The database, the schema rules, and how fixtures are built and kept |
+| [testing.md](testing.md) | The pytest plugin, and what is worth testing in a world |
+| [serving_and_openenv.md](serving_and_openenv.md) | `seahaven serve`, driving a world over the network, and publishing it |
+| [composition.md](composition.md) | Building a world out of other worlds |
+| [extensions.md](extensions.md) | Packaging something several worlds need, with a worked example |
+| [projecttracker.md](projecttracker.md) | A walkthrough of the reference world |
+
+Reference pages, for looking things up rather than reading through:
+
+| Page | What it covers |
+|---|---|
+| [reference/api.md](reference/api.md) | The public API |
+| [reference/cli.md](reference/cli.md) | Every subcommand and option |
+| [reference/lints.md](reference/lints.md) | Every `SHnnn` code: the rule, why it exists, and the fix |
+
+## A note for agents
+
+If you are an agent asked to build or extend a world, read [concepts.md](concepts.md),
+[authoring.md](authoring.md) and [reference/lints.md](reference/lints.md) before writing anything.
+Every rule in the lint reference is a mistake that is otherwise easy to make and hard to notice.
+
+These pages ship inside the installed `seahaven` package, so they always describe the version you
+have. `seahaven docs` prints the directory they are in.
