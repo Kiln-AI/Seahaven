@@ -22,11 +22,35 @@ review round on it, and do not open follow-up work for it.
 Where the code and a spec disagree, the code is the answer. The bundled docs in `src/seahaven/docs/`
 are the documentation that must stay current; specs are not.
 
+## Docs style
+
+The bundled docs in `src/seahaven/docs/` are written in plain, direct English, close to ASD-STE100
+Simplified Technical English. Being friendly and explaining why something exists is welcome; a
+literary register is not. Check a docs change against this list.
+
+- **Plain sentences.** One idea each, short, active, present tense for facts and imperative for
+  instructions. One term per thing, defined before it is used ("schema", not "DDL"). Name the thing
+  again rather than writing "it" or "this" across a clause boundary.
+- **Disclose in order:** what it is and why it matters, then the commands or usage, then technical
+  depth, then edge cases and reference. The same order applies to the page set in `index.md`. Never
+  open a page by telling the reader what they do not need.
+- **Long page, table of contents** with anchor links at the top. A short page does not need one.
+- **Do not write these**, because they read as machine-written: aphoristic openers and closers
+  ("Nine words carry the whole framework"); the words "load bearing", "seam", "the whole point",
+  "surface" as a verb, and "lives in" for where code is; "X isn't just Y, it's Z"; sentence
+  fragments for emphasis; rule-of-three list sentences; strings of em-dash asides.
+- **Check every command, flag, path and API name against the code** before writing it down, and wrap
+  prose at 100 columns.
+- **Examples are tested.** `tests/test_docs_examples.py` runs a `python` fence and parses a `py`
+  fence, so write a runnable example as the first and a fragment as the second. `tests/test_docs.py`
+  holds the page list: adding or renaming a page means updating that list and every link to the old
+  name.
+
 ## Environment
 
-This project runs on a final release of CPython 3.14 or newer, never a release candidate: two
-locked dependencies break on the 3.14 rcs, and uv will sync onto one without complaint. Check
-before anything else:
+This project runs on a final release of CPython 3.14 or newer, never a release candidate: two locked
+dependencies break on the 3.14 rcs, and uv will sync onto one without complaint. Check before
+anything else:
 
 ```sh
 uv run python -V        # must print 3.14.0 or higher, with no "rc" in it
@@ -55,10 +79,10 @@ uv run pytest extensions/seahaven-xmlrpc   # the example extension
 uv run python scripts/check_licences.py
 ```
 
-The three suites are separate because a world and an extension are separate packages with their
-own pytest rootdir. `ruff format` also formats Python blocks inside Markdown, and
-`tests/test_docs_examples.py` executes every example in the docs, `README.md` and
-`CONTRIBUTING.md`, so an example that is added anywhere it reaches will be run.
+The three suites are separate because a world and an extension are separate packages with their own
+pytest rootdir. `ruff format` also formats Python blocks inside Markdown, and
+`tests/test_docs_examples.py` executes every example in the docs, `README.md` and `CONTRIBUTING.md`,
+so an example that is added anywhere it reaches will be run.
 
 ## Rules
 

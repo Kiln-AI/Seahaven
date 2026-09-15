@@ -1,14 +1,14 @@
 # ProjectTracker: a walkthrough
 
-ProjectTracker is Seahaven's reference world: a fictional Linear/Jira-shaped issue tracker for a
-fictional company. It is the framework's integration test, the fixture the authoring docs are
+ProjectTracker is Seahaven's reference world: a fictional issue tracker, shaped like Linear or Jira,
+for a fictional company. It is the framework's integration test, the world the authoring docs are
 written against, and the pattern a new world copies. There is no second reference world.
 
-It is a **working tracker** — deep enough to grade an eval on state, not a benchmark world. Nothing
-in it mimics a real product's names, schema or error text.
+It is a **working tracker**, deep enough to grade an eval on state, rather than a benchmark world.
+Nothing in it mimics a real product's names, schema or error text.
 
-It lives at `worlds/projecttracker/` in the Seahaven repository. Read this page for the shape; read
-the package for the detail, in this order: `world.py`, `schema/`, `errors.py`,
+You will find it at `worlds/projecttracker/` in the Seahaven repository. Read this page for the
+shape, then read the package for the detail, in this order: `world.py`, `schema/`, `errors.py`,
 `middleware/error_handler.py`, `tools/`, `fixtures_src/generate.py`.
 
 ## Driving it
@@ -77,18 +77,18 @@ issues carry labels and comments, and every write to an issue appends to an audi
 | `issues_fts` | FTS5 over title and description, `content='issues'`, kept in step by three triggers |
 
 Every table is `STRICT` with an explicit primary key. Every timestamp is canonical text written by
-the tool that makes the row — there is not one wall-clock expression in the DDL, and the FTS5
+the tool that makes the row. There is not one wall-clock expression in the schema, and the FTS5
 triggers do not stamp a time either, because a trigger that did would be the one place in this world
 where a row's time did not come from `ctx.clock`.
 
-`payload TEXT CHECK (json_valid(payload))` is worth copying: a `STRICT` table has no JSON storage
+`payload TEXT CHECK (json_valid(payload))` is worth copying. A `STRICT` table has no JSON storage
 class, so the `CHECK` is what makes the column mean JSON rather than merely hold it.
 
 ## Errors
 
-Four shapes, in `errors.py`, all `seahaven.ToolError` subclasses with `SCREAMING_SNAKE` codes —
-this (fictional) product's vocabulary, where the framework's own three (`invalid_arguments`,
-`db_error`, `unknown_tool`) are lower case:
+Four shapes, in `errors.py`, all `seahaven.ToolError` subclasses with `SCREAMING_SNAKE` codes. Those
+are this fictional product's vocabulary; Seahaven's own three (`invalid_arguments`, `db_error`,
+`unknown_tool`) are lower case.
 
 | Code | Raised for |
 |---|---|
@@ -102,13 +102,13 @@ deliberate exceptions by tool:
 
 - **`run_sql`** keeps SQLite's own message, because the product being mimicked *is* a SQL door and
   "database error" would tell an agent nothing about the syntax it got wrong;
-- **`search_issues`** turns a `DbError` into `INVALID_INPUT` on the `query` field carrying FTS5's
+- **`search_issues`** turns a `DbError` into `INVALID_INPUT` on the `query` field, carrying FTS5's
   complaint, because the agent wrote the query and the parser is the only thing that can say what is
   wrong with it.
 
-A `DbError` from anywhere else is this world's failure to write correct SQL: it goes to the log with
-its traceback, and the agent gets `INTERNAL`. Which is why the tools look a parent up with a
-`SELECT` before inserting, rather than letting a foreign key refuse the write — a constraint failure
+A `DbError` from anywhere else is this world's own failure to write correct SQL. It goes to the log
+with its traceback, and the agent gets `INTERNAL`. That is why the tools look a parent up with a
+`SELECT` before inserting, rather than letting a foreign key refuse the write: a constraint failure
 would turn a sentence the agent could act on into `INTERNAL`.
 
 ## The tools
@@ -126,58 +126,61 @@ Twenty-five, one module per resource, plus Seahaven's two SQL helpers.
 | `search.py` | `search_issues` |
 | `tools/__init__.py` | `run_sql` and `describe_schema`, from `seahaven.helpers`, over the world's nine tables |
 
-The four `_`-prefixed modules beside them register nothing and are the part most worth stealing:
+The four `_`-prefixed modules beside them register nothing, and they are the part most worth
+stealing.
 
-- **`_types.py`** — the argument types every tool spells its parameters with. The `Literal`s mirror
-  the schema's `CHECK` constraints deliberately: the `CHECK` is what the database will not store,
-  and the `Literal` is what the agent is told *before* it tries. They are plain assignments rather
-  than `type` aliases, because pydantic publishes a PEP 695 alias as a `$def` with a `$ref`, and the
-  tool list should carry the five statuses where the argument is rather than a reference to resolve.
-- **`_pagination.py`** — the keyset cursor. Never an `OFFSET`: an offset page re-reads everything
-  before it and shifts under a concurrent insert, so an agent walking a list can see a row twice.
-  The key is `(sort column, id)` — the sort column alone is not unique — and the cursor is base64 of
-  JSON carrying both halves plus a key naming the resource and the ordering, so a cursor from one
-  list is refused by every other. Opaque, not secret.
-- **`_rows.py`** — the row shapes and the `require_*` lookups that raise `NOT_FOUND`.
-- **`_events.py`** — the audit trail append.
+- **`_types.py`** holds the argument types every tool spells its parameters with. The `Literal`s
+  mirror the schema's `CHECK` constraints deliberately: the `CHECK` is what the database will not
+  store, and the `Literal` is what the agent is told *before* it tries. They are plain assignments
+  rather than `type` aliases, because pydantic publishes a PEP 695 alias as a `$def` with a `$ref`,
+  and the tool list should carry the five statuses where the argument is rather than a reference to
+  resolve.
+- **`_pagination.py`** holds the keyset cursor. Never an `OFFSET`: an offset page re-reads
+  everything before it and shifts under a concurrent insert, so an agent walking a list can see a
+  row twice. The key is `(sort column, id)`, because the sort column alone is not unique, and the
+  cursor is base64 of JSON carrying both halves plus a key naming the resource and the ordering, so
+  a cursor from one list is refused by every other. Opaque, but not secret.
+- **`_rows.py`** holds the row shapes and the `require_*` lookups that raise `NOT_FOUND`.
+- **`_events.py`** holds the audit trail append.
 
-The FTS5 index is deliberately *not* in `run_sql`'s table list: an agent reaches search through
+The FTS5 index is deliberately *not* in `run_sql`'s table list. An agent reaches search through
 `search_issues`, and opening `issues_fts` to raw SQL would mean allowing its shadow tables for a
 second way to do the one thing the world already has a tool for.
 
 ## The product rules worth knowing
 
-These are the ones an eval can rely on, and they are the kind of decision every world has to make.
+These are the rules an eval can rely on, and they are the kind of decision every world has to make.
 
 **Issue keys are `TEAMKEY-n`, minted from a counter on the team.** `ENG-41` is the forty-first issue
-team `ENG` ever had, whichever of its projects it is in. The counter is bumped by the same
-`UPDATE ... RETURNING` that reads it, so two issues never take one number and a number is never
-handed back. Anything that writes issues without that statement — a bulk load in a fixture generator
-— has to leave the counter where the tools would have.
+team `ENG` ever had, whichever of its projects it is in. The counter is bumped by the same `UPDATE
+... RETURNING` that reads it, so two issues never take one number and a number is never handed back.
+Anything that writes issues without that statement, such as a bulk load in a fixture generator, has
+to leave the counter where the tools would have.
 
 **A closed issue has no assignee.** Moving an issue to `done` or `canceled` drops its assignee and
-records the drop; assigning a closed issue is a `CONFLICT`. So `status IN ('done','canceled') AND
-assignee_id IS NOT NULL` is a state this world cannot reach, and a grader may rely on it.
+records the drop, and assigning a closed issue is a `CONFLICT`. So `status IN ('done','canceled')
+AND assignee_id IS NOT NULL` is a state this world cannot reach, and a grader may rely on it.
 
 **An archived issue keeps its fields and leaves the lists.** `archive_issue` stamps `archived_at`
-and takes the issue out of `list_issues`; `get_issue`, `search_issues` and `run_sql` still see it,
+and takes the issue out of `list_issues`. `get_issue`, `search_issues` and `run_sql` still see it,
 and no tool will change a field of it again. `add_comment` is the deliberate exception: archiving
 freezes the issue, not the conversation about it. "Read-only" is therefore the wrong word for it,
 and the world's own notes avoid it.
 
 **The viewer.** `world.instance(fixture, user_id=...)` — `reset(user_id=...)` over a server — names
 who the session is driving the tracker as. `startup.py` puts it in `ctx.state["viewer_id"]`, falling
-back to the workspace's first admin. Every write takes an optional `actor_id` which wins, so one
-episode can have two people writing without two instances. A write with neither, in a workspace with
-no admin — a blank instance, or `empty` — is `INVALID_INPUT`. A `user_id` naming nobody is a
-`WorldBug` and not a product error: it comes from the eval's `reset`, not from the agent.
+back to the workspace's first admin. Every write takes an optional `actor_id` which wins, so one run
+can have two people writing without two instances. A write with neither, in a workspace with no
+admin such as a blank instance or `empty`, is `INVALID_INPUT`. A `user_id` naming nobody is a
+`WorldBug` rather than a product error, because it comes from the eval's `reset` and not from the
+agent.
 
-**Order within one episode.** The clock does not move, so every row one episode writes shares a
+**Order within one run.** The clock does not move, so every row one run writes shares a
 `created_at`. Reading `issue_events` in the order things happened means `ORDER BY created_at,
-rowid`. `list_comments` cannot do that — a keyset cursor carries its tiebreaker as a value and
-`rowid` is not a projected column — so it orders by `(created_at, id)` and says so in its docstring:
-oldest first across the fixture's history, id order among the comments one episode wrote. Do not
-write an eval that grades on the order of comments an agent added; grade on the rows.
+rowid`. `list_comments` cannot do that, because a keyset cursor carries its tiebreaker as a value
+and `rowid` is not a projected column, so it orders by `(created_at, id)` and says so in its
+docstring: oldest first across the fixture's history, then id order among the comments one run
+wrote. Do not write an eval that grades on the order of comments an agent added. Grade on the rows.
 
 ## The fixtures
 
@@ -190,16 +193,16 @@ All three are frozen at `2026-06-01T09:00:00.000Z`, and all three are built by
 | `small_startup` | one engineering team, three people, two projects, forty issues over two months, sixty comments, six labels |
 | `agency` | three teams, twelve people, nine projects including a finished one, six hundred issues over six months, fifteen hundred comments, thirty labels, and an audit trail with reassignments and transitions in it |
 
-`agency` is the fixture the framework's benchmark runs against, which is the other thing it is for.
+`agency` is also the fixture the framework's benchmark runs against.
 
-To rebuild one: delete its directory and re-run the generator. Never edit one in place.
+To rebuild one, delete its directory and re-run the generator. Never edit one in place.
 
 ## Its tests
 
 `worlds/projecttracker/tests/` is a worked example of [testing.md](testing.md): every tool through a
 real `instance.call`, the fixtures' invariants, the declared errors by code, the error handler's two
-exceptions, pagination's cursor rules, and determinism — same seed, same ids. Nothing builds an
-instance in a `conftest.py` and nothing calls a tool function directly.
+exceptions, pagination's cursor rules, and determinism from the same seed. Nothing builds an
+instance in a `conftest.py`, and nothing calls a tool function directly.
 
 ```sh
 uv run pytest worlds/projecttracker
@@ -208,10 +211,9 @@ uv run seahaven check
 
 ## What to copy, and what not to
 
-Copy: the module layout, `_types.py`, the keyset cursor, the error vocabulary and the handler's
-named exceptions, the `require_*` lookups, and the habit of writing down the product rules an eval
-may rely on in the world's own `AGENTS.md`.
+Copy the module layout, `_types.py`, the keyset cursor, the error vocabulary, the handler's named
+exceptions, the `require_*` lookups, and the habit of writing down the product rules an eval may
+rely on in the world's own `AGENTS.md`.
 
-Do not copy the *product*. ProjectTracker's rules are ProjectTracker's — a real world's rules come
-from the real product it mimics, and the value of this one is that it shows what deciding them looks
-like.
+Do not copy the *product*. ProjectTracker's rules are ProjectTracker's. Your world's rules come from
+the real product it mimics. Read this one to see what those decisions look like, then make your own.
