@@ -55,7 +55,7 @@ class LogRecord:
 @dataclass(frozen=True)
 class CallRecord:
     tool: str                       # the name as called: the root surface's name, prefix included
-    arguments: dict[str, Any]       # already JSON data (serialised at capture)
+    arguments: dict[str, Any]       # as the call carried them, deep-copied at capture, never re-serialised
     error: str | None
 
     def to_dict(self) -> dict[str, Any]   # FS §4.2 field order; arguments copied
@@ -106,9 +106,8 @@ def _dispatch(self, target, arguments):
         ctx = frame.ctx(target.node.key, call)
         if tool.control:
             return control.dispatch(self, ctx)      # not a call: no ordinal, no session, no entry
-        recorded = _jsonable_arguments(target.name, arguments)   # WorldBug here: no ordinal (§3.3)
         i = self._next_ordinal()
-        with self._recording(i), self._logging_call(target.name, recorded):
+        with self._recording(i), self._logging_call(target.name, arguments):
             with in_call():
                 return target.node.agent_chain(ctx, call)
 ```
@@ -162,12 +161,13 @@ committed or rolled back. Startup hooks run before any session exists and stay o
 
 ### 3.3 The call log
 
-`_jsonable_arguments(name, arguments)` runs `call.serialise` over the arguments before
-`_next_ordinal`, so a call whose arguments cannot be JSON is a `WorldBug` that names the call and
-takes no ordinal (FS §4.2); `serialise`'s own message speaks of tool results, so it is wrapped, as
-the startup-keyword refusal is. `_logging_call(name, recorded)` then appends
-`CallRecord(name, recorded, error)` in its `finally`, where `error` is `str(exc)` for whatever the
-chain raised, or `None`. The name is `target.name`, which under composition is the root surface's name for the
+`_logging_call(name, arguments)` takes `copy.deepcopy(arguments)` on entry, before the chain
+runs, and appends `CallRecord(name, that copy, error)` in its `finally`, where `error` is
+`str(exc)` for whatever the chain raised, or `None`. Nothing is serialised: over OpenEnv the
+mapping is the JSON that arrived in the `CallToolAction`, and re-rendering it would only be a
+chance for drift; in process it is what the caller passed. The copy is what makes the record the
+call as made rather than whatever a tool left in the dict it was handed. `to_dict()` copies again
+on the way out. The name is `target.name`, which under composition is the root surface's name for the
 tool, prefix included. Nested calls through a `WorldHandle` never reach `_dispatch` and add no
 entry.
 
@@ -456,7 +456,6 @@ the new members and models and removes the old ones. Two guards in `tests/test_d
 | `reset`/`instance` with an unknown format, or a custom name registered only on an added world | `WorldBug` before any directory exists; over OpenEnv the reset's `EXECUTION_ERROR`, session stays open |
 | A hook parameter named `state_format` | `WorldBug` at registration (existing check, extended set) |
 | A startup keyword that is not JSON-able | `WorldBug` at creation, naming the keyword |
-| A call whose arguments are not JSON-able | `WorldBug` before dispatch; no ordinal |
 | A formatter that returns anything but a dict | `WorldBug` from `state()` |
 | A formatter that calls `inst.call` or `inst.bulk` | `WorldBug` from the guard, ahead of the gate |
 | `state()` inside `bulk()` or a tool call | `WorldBug`, as `freeze()` inside `bulk()` |
@@ -490,9 +489,10 @@ use `tests/worlds/emporium`, `payments` and `shop`, which `tests/conftest.py` al
   `state()` does no database work (a statement counter with a positive control); `state()` after
   `destroy()`.
 - `tests/test_call_log.py` (new): one entry per dispatched call with the surface name (prefixed on
-  `emporium`), the arguments as JSON, `error` null and set; none for a refused name, a control
-  tool, a nested call; `len(call_log()) == call_count`; unserialisable arguments refused before
-  dispatch with no ordinal.
+  `emporium`), the arguments as carried, `error` null and set; none for a refused name, a control
+  tool, a nested call; `len(call_log()) == call_count`; a wire call's JSON round-trips through
+  `state()` unchanged (`test_server.py`); a tool that mutates its arguments does not alter the
+  record.
 - `tests/test_fold.py` (new) with `tests/fold_support.py` and `tests/fold_oracle.py`: the FS §3.6
   fold as test code, and an oracle that opens its own `apsw.Session` on every node's connection
   for the whole episode (attached to each `runtime.tracked`, after creation) and renders each with
@@ -593,6 +593,6 @@ FS §14 carries the same numbering.
 12. `changes()`, `Change`, `render()`, `controller_changes` deleted in their own phase; FS §11's
     table moves `main`'s callers (§8).
 13. `main`'s two-stage dispatch already gives FS §7's ordinals; nothing moves (§4).
-14. `CallRecord`, `_logging_call`, `state_calls_v1`; arguments serialised before dispatch (§2.1,
-    §3.3, §5.1).
+14. `CallRecord`, `_logging_call`, `state_calls_v1`; arguments deep-copied as given, never
+    re-serialised (§2.1, §3.3, §5.1). `composition` is `None` before `reset` (§5.1).
 15. `skip_file_prefixes` for the deprecation; flat test support; the probe last (§8, §14, §16).

@@ -257,7 +257,7 @@ in dispatch order, so that a log record's `i` is its index.
 | Field | Meaning |
 |---|---|
 | `tool` | The name the caller used: under composition, the name on the root's tool surface, prefix included, not the owning world's own name for it. |
-| `arguments` | The arguments as the call carried them, as JSON. The framework serialises them the way it serialises a startup keyword (§8); a call whose arguments cannot be serialised is refused before it runs. |
+| `arguments` | The arguments exactly as the call carried them, never re-serialised: over OpenEnv, the JSON that arrived in the `CallToolAction`; in process, the values the caller passed. Copied at capture, so a tool that alters what it was given does not alter the record. A document is JSON-able exactly when its calls' arguments were; over the wire they always are. |
 | `error` | `null` if the call returned, else the message of what it raised: a `ToolError`'s message, or any other exception's. |
 
 No result: the harness has it verbatim, and a result can be a whole listing. No counts, per tool
@@ -374,7 +374,8 @@ world.instance("agency", seed=7, state_format="seahaven.state/1", user_id="u_12"
   shape. The records' `key`, `before` and `after` are the instance's own dicts, handed out rather
   than copied, and the docstring says so; `to_dict()` copies.
 - `inst.call_log()` returns the call records as frozen dataclasses with a `to_dict()` of the §4.2
-  shape; `arguments` is a copy.
+  shape; `arguments` is a copy of what the call carried, never re-serialised, so an in-process
+  caller who passed something that is not JSON gets it back as it was.
 - **`inst.changes()` and the `Change` class are removed** (decided 2026-09-17, reaffirmed on the
   restart). They were a second API and a second recording mechanism for data the log already
   carries, and composition's `Change.world` is exactly the log's `world`. A caller that wants the
@@ -527,9 +528,10 @@ modules are flat files under `tests/`, as the suite's are.
   typed `call()` cannot resolve, tool listing and control tools do not. `bulk()` writes carry
   `i: null`. `call_count` matches, and `len(call_log())` equals it.
 - **The call log.** An entry per dispatched call with the name as called (the prefixed surface
-  name on `emporium`), the arguments as JSON, `error` null on success and the message on a
-  `ToolError`; no entry for a refused name or a control tool; nested calls add no entry;
-  arguments that cannot be serialised are refused before dispatch.
+  name on `emporium`), the arguments exactly as carried (a wire call's JSON round-trips through
+  the document unchanged; a tool that mutates its arguments does not alter the record), `error`
+  null on success and the message on a `ToolError`; no entry for a refused name or a control
+  tool; nested calls add no entry.
 - **The fold.** The test's own long-lived session per node over the whole episode is the oracle:
   `fold(log)` equals the union of the rendered changesets on every case above, plus a primary-key
   rewrite (delete plus insert in both), single-node and on `emporium`; and a non-vacuity check that
@@ -600,7 +602,8 @@ are the restart's, settled 2026-09-17 against composition.
 13. *Ordinals:* only dispatched calls consume one; `i` groups and indexes, it does not join to a
     trace; nested calls belong to their caller (§7).
 14. *Calls:* `seahaven.state+calls/1`, opt-in, an array indexed by `i`, `{tool, arguments,
-    error}`, dispatched calls only, no results, no counts (§4.2).
+    error}`, dispatched calls only, arguments as the call carried them and never re-serialised,
+    no results, no counts (§4.2). `composition` is `null` before the first `reset` (§3.5).
 15. *Housekeeping:* `controller_run_sql` stays deprecated; `state.md` is its own page under the
     new docs style; test support is flat under `tests/`; registering a format does not `bump()`;
     the cost is measured last, as a second priority; `check_format_name` is its own rule, since a
