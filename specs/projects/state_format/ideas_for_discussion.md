@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # State format: ideas for discussion

@@ -126,8 +126,9 @@ Rules:
   column is never recorded, which is SQLite's rule; it cannot arise in a linted world, because a
   STRICT table refuses `NULL` in a primary-key column and SH101 requires STRICT (measured 2026-09-17
   on SQLite 3.45.1).
-- **Startup is not in the log.** The session attaches after the startup hooks have run, as today.
-  Every write after that is in the log, including `inst.bulk()` writes, which carry `i: null`.
+- **Startup is not in the log.** Startup hooks run at instance creation, before any call, and no
+  session records them. Every write after that is in the log, including `inst.bulk()` writes,
+  which carry `i: null`.
 - **No cap.** The log is as long as the episode made it. A consumer that wants less filters after
   the fact or registers a custom formatter (§6); the framework truncates nothing.
 
@@ -202,7 +203,8 @@ as `final_state` has only the last call's changes, which is the trade the caller
   default. A `World` constructed without it raises at construction, and the message names the
   current built-in formats. Every existing world in the repo (ProjectTracker, the example
   extension's world, every `World(...)` in tests, docs and `bench/`) gains the argument; accepted
-  as a breaking change, since the framework is private and pre-alpha and every world is ours. The scaffold (`seahaven new`) writes `state_format="seahaven.state/1"` into the generated
+  as a breaking change, since the framework is private and pre-alpha and every world is ours.
+  The scaffold (`seahaven new`) writes `state_format="seahaven.state/1"` into the generated
   `world.py`, so a pin is chosen once, at the world's creation.
 - `reset(state_format=...)` over OpenEnv and `world.instance(state_format=...)` in-process
   override the world's pin for that instance. `state_format` joins `fixture`, `seed` and `now` as a
@@ -344,8 +346,9 @@ leaves the docs entirely (§12). Its removal is not scheduled in this project.
   changeset example becomes a state example reading `inst.state()["state"]["db"]["log"]`),
   `concepts.md` (the changeset concept becomes "the change log" and the document), the README's
   `grade(world_instance.changes())` example (now `grade(world_instance.state())`), and
-  `reference/api.md`. `reference/cli.md` keeps `--include-control-tools` with one line saying it
-  is deprecated.
+  `reference/api.md` (which gains `Instance.state`, `change_log`, `call_count`, `LogRecord`,
+  `World.state_format` and loses `Instance.changes`, `Change` and `controller_changes`).
+  `reference/cli.md` keeps `--include-control-tools` with one line saying it is deprecated.
 - **A new `state.md`** in the bundled docs: the document (the envelope and `state`), both
   built-in formats and custom registration, presented as three cases in this order, each with its reason: `final_state` read
   once at the end uses `seahaven.state/1`; a per-step reader like OpenEnv's episode harness uses
@@ -396,8 +399,7 @@ leaves the docs entirely (§12). Its removal is not scheduled in this project.
   `state` from the world's pinned formatter called with `None`; after `reset` it is the document; a
   second `reset` starts a new log. Against a real server over the WebSocket: the whole document
   arrives, `SeahavenClient.state().model_dump(exclude={"step_count"})` round-trips it, and
-  `reset(state_format=...)`
-  selects the format.
+  `reset(state_format=...)` selects the format.
 - **Performance.** `state()` on an instance with 1,000 log records does no database work
   (asserted through the authorizer or a statement counter) and completes within a stated bound;
   a call's cost with logging on is within a stated fraction of today's.
@@ -420,6 +422,8 @@ Numbered so they can be answered by number.
    plus `state`, the formatter's output, one level deep (§2, §3.1, §6, §9, §10). Custom formatters
    produce `state` only. Non-JSON-able startup keywords are refused at `reset` (architecture §6).
    The control tools' deprecation warning is tested in process only.
+7. *Decided 2026-09-17:* `inst.changes()`, `Change` and `controller_changes` are removed (§8,
+   §11); one API and one recording mechanism; the fold's oracle is a test-owned session (§3.6).
 
 ## 15. Non-goals
 

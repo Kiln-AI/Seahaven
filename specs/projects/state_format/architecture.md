@@ -15,11 +15,11 @@ Section numbers in `functional_spec.md` are cited as "FS §n".
 |---|---|
 | `seahaven/changes.py` | `LogRecord` and `render_log()` replace `Change` and `render()`; a per-instance column cache; the JSON value mapping (`_jsonable` handles infinities); `start_session()` becomes `open_session(conn, tracked)` over a precomputed table list plus `tracked_tables(conn, world)`. |
 | `seahaven/state.py` | **New.** The formatter protocol, the two built-in formatters (each handling the no-instance case), format-name validation, and `SEAHAVEN_STATE_V1` / `SEAHAVEN_STATE_LAST_STEP_V1` name constants. |
-| `seahaven/instances.py` | `Instance` gains the log store, the call counter, `state()`, `change_log()`, `call_count`, `episode_id`, `caller_seed`, `fixture_sha256`, `startup`, `state_format`; per-call and per-bulk sessions; the formatting guard. `InstanceManager.create` gains `state_format` and `episode_id`, resolves the formatter first, serialises the startup keywords. |
+| `seahaven/instances.py` | `Instance` loses `changes()` and the long-lived session; gains the log store, the call counter, `state()`, `change_log()`, `call_count`, `episode_id`, `caller_seed`, `fixture_sha256`, `startup`, `state_format`; per-call and per-bulk sessions; the formatting guard. `InstanceManager.create` gains `state_format` and `episode_id`, resolves the formatter first, serialises the startup keywords. |
 | `seahaven/world.py` | `World(..., state_format: str)` required; `RESET_ARGUMENTS` gains `state_format`; `world.state_format()` registration; `world.resolve_state_format()`; `__copy__` carries the registry. |
 | `seahaven/ids.py` | `_seed_bytes` and `instance_seed` narrow to `int | None`. |
 | `seahaven/pytest_plugin.py` | The marker's `seed` narrows to `int | None`; `state_format` is passed through if given. |
-| `seahaven/openenv/env.py` | `reset(state_format=...)`; `state` answers the document; `SeahavenState` is an open model over the document. |
+| `seahaven/openenv/env.py` | `reset(state_format=...)`; `state` answers the document; `SeahavenState` types the envelope and carries `state` as a dict. |
 | `seahaven/openenv/client.py` | Docstring example only; `_parse_state` is unchanged. |
 | `seahaven/control.py` | `controller_changes` removed; `DeprecationWarning` in `dispatch` for `controller_run_sql`; docstring names `state()`. `CONTROL_TOOL_NAMES` in `world.py` shrinks to one. |
 | `seahaven/cli/templates/base/src/PACKAGE/world.py.tmpl` | `state_format="seahaven.state/1"`. |
@@ -53,8 +53,8 @@ is the one renderer, and `_row`, `_columns` and `_jsonable` move under it.
 - `self._log: list[LogRecord]`, appended in commit order, read under the instance lock.
 - `self._call_count: int`, incremented per dispatched call (§4).
 - `self._columns: dict[str, tuple[list[str], list[int]]]`, the per-table column names and key
-  positions, filled lazily by `render_log` and `render`; a world's schema does not change for the
-  life of an instance, so it is never invalidated.
+  positions, filled lazily by `render_log`; a world's schema does not change for the life of an
+  instance, so it is never invalidated.
 - `self._tracked: tuple[str, ...]`, the tables every per-call session attaches, computed once at
   creation by `changes.tracked_tables(conn, world)` (today's `start_session` loop, factored out),
   including the refusal of a table with no explicit primary key.
@@ -87,9 +87,7 @@ def _call(self, name, arguments):
 ```python
 @contextmanager
 def _recording(self, i: int | None) -> Iterator[None]:
-    session = apsw.Session(self.db.conn, "main")
-    for table in self._tracked:
-        session.attach(table)
+    session = open_session(self.db.conn, self._tracked)   # changes.py: Session("main") + attach each
     try:
         yield
     finally:
@@ -129,7 +127,7 @@ stay out.
 def render_log(changeset: bytes, conn, columns: dict[...], *, i: int | None) -> list[LogRecord]
 ```
 
-For each `TableChange`: `key` from the key positions (as `render` does today); `before`/`after`:
+For each `TableChange`: `key` from the key positions (as today's renderer does); `before`/`after`:
 
 | op | before | after |
 |---|---|---|
@@ -261,9 +259,10 @@ to `int | None`. Order of refusals, all before a directory exists:
 3. `formatter = world.resolve_state_format(state_format or world.state_format)`.
 4. The fixture checks (unchanged); `fixture.meta.file_sha256` is kept for the instance.
 
-`Instance.__init__` gains `state_format: str`, `formatter: Formatter`, `episode_id: str`
-(`episode_id or id`), `caller_seed: int | None`, `fixture_sha256: str | None`,
-`startup: dict[str, Any]`, `tracked: tuple[str, ...]`. `world.instance(...)` gains
+`Instance.__init__` loses `session` (no long-lived session; `_close` no longer closes one) and
+gains `state_format: str`, `formatter: Formatter`, `episode_id: str` (`episode_id or id`),
+`caller_seed: int | None`, `fixture_sha256: str | None`, `startup: dict[str, Any]`,
+`tracked: tuple[str, ...]`. `world.instance(...)` gains
 `state_format` and passes it through; `episode_id` is not on `world.instance` (in process the
 instance id is the episode id, FS §3.1).
 
@@ -321,12 +320,14 @@ row visible to the change log.
 
 Per FS §12. The coding agent for the docs phase writes `state.md` from FS §3, §4, §5, §6 and
 §10, in the three-case order FS §12 gives; rewrites `serving.md`'s control-tools section into a
-state section; replaces `testing.md`'s changeset example with `inst.state()["db"]["log"]`;
-extends `concepts.md`'s changeset section with the log; updates the README example; removes every
-`controller_` mention except `cli.md`'s deprecation line; adds `state.md` to `index.md`; adds
+state section; replaces `testing.md`'s changeset example with
+`inst.state()["state"]["db"]["log"]`; turns `concepts.md`'s changeset section into the change
+log; updates the README example; removes every `controller_` mention except `cli.md`'s
+deprecation line and every `changes()` mention; adds `state.md` to `index.md`; adds
 `state_format` to `authoring.md`'s `World(...)` section and reserved-keyword list; updates
 `reference/api.md` for `Instance.state`, `change_log`, `call_count`, `World.state_format`,
-`World.resolve_state_format`, `LogRecord`. `openenv.md` is edited in the same phase if it has
+`World.resolve_state_format`, `LogRecord`, and removes `Instance.changes`, `Change` and
+`controller_changes`. `openenv.md` is edited in the same phase if it has
 landed on `main` by then, else the phase records it in `BACKLOG.md` as the one deferred edit.
 
 ## 13. Error handling
@@ -337,11 +338,12 @@ landed on `main` by then, else the phase records it in `BACKLOG.md` as the one d
 | `reset`/`instance` with an unknown format | `WorldBug` before any directory exists; over OpenEnv the reset's `EXECUTION_ERROR`, session stays open |
 | A hook parameter named `state_format` | `WorldBug` at registration (existing check, extended set) |
 | A startup keyword that is not JSON-able | `WorldBug` at creation |
-| A formatter whose document lacks `format` first with the right name | `WorldBug` from `state()` |
+| A formatter that returns anything but a dict | `WorldBug` from `state()` |
 | A formatter that calls `inst.call` or `inst.bulk` | `WorldBug` from the guard |
 | `state()` on a destroyed instance | `WorldBug`, as every other method |
 | `seed` that is `bytes` | `WorldBug` from `_seed_bytes` |
-| A control tool call | `DeprecationWarning`, then the normal result |
+| A `controller_run_sql` call | `DeprecationWarning`, then the normal result |
+| A `controller_changes` call | `UnknownTool`, as for any unregistered name |
 
 Nothing new is logged at `INFO`; the per-call log line is unchanged.
 
