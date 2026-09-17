@@ -167,7 +167,8 @@ runs, and appends `CallRecord(name, that copy, error)` in its `finally`, where `
 mapping is the JSON that arrived in the `CallToolAction`, and re-rendering it would only be a
 chance for drift; in process it is what the caller passed. The copy is what makes the record the
 call as made rather than whatever a tool left in the dict it was handed. `to_dict()` copies again
-on the way out. The name is `target.name`, which under composition is the root surface's name for the
+on the way out. The name is `target.name`, which under composition is the root surface's name for
+the
 tool, prefix included. Nested calls through a `WorldHandle` never reach `_dispatch` and add no
 entry.
 
