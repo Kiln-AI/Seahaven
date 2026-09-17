@@ -22,9 +22,10 @@ anything on that branch that assumes an instance is one store is wrong here.
   ordinal as `main`'s dispatch already gives it, `change_log()`, `call_log()`, `call_count`
   (ARCH §2.2, §3, §4); `seed` narrowed to `int | None` (ARCH §7). `changes()` and the long-lived
   sessions stay for now: the fold test's oracle is the per-node session of its own, and on a
-  one-node world `changes()` is a second, independent cross-check until phase 4 removes it. Composite cases on `tests/worlds/emporium`. Tests: `test_changes.py`
-  additions, `test_change_log.py`, `test_call_log.py`, `test_fold.py` with `tests/fold_support.py`
-  and `tests/fold_oracle.py`, `test_ids.py`, the pytest-marker seed test, the "no database work in
+  one-node world `changes()` is a second, independent cross-check until phase 4 removes it.
+  Composite cases on `tests/worlds/emporium`. Tests: `test_changes.py` additions,
+  `test_change_log.py`, `test_call_log.py`, `test_fold.py` with `tests/fold_support.py` and
+  `tests/fold_oracle.py`, `test_ids.py`, the pytest-marker seed test, the "no database work in
   `state()`" precursor on `change_log()`.
   *Reference:* the old branch's phase 1 and its review rounds for `render_log`, the blob sort
   order, `_recording`'s transaction ordering and the test shapes. *Not reference:* its
@@ -58,9 +59,9 @@ anything on that branch that assumes an instance is one store is wrong here.
 - [ ] **Phase 4: Remove the old surface.** Delete `Instance.changes()`, `Change`, `render()`,
   `start_session`, `NodeRuntime.session` and `controller_changes`; deprecate `controller_run_sql`
   with `skip_file_prefixes` (ARCH §1, §2.1, §8, §13); drop the fold test's `changes()`
-  cross-check, leaving the per-node oracle; move every caller `main` has per FS §11's table -- fifty `.changes()` sites
-  across sixteen files, `tests/test_composite_changes.py` first -- and reword the source comments
-  that describe the session; `bench/recording.py` retargeted at `instance._runtime` with its two
+  cross-check, leaving the per-node oracle; move every caller `main` has per FS §11's table --
+  fifty `.changes()` sites across sixteen files, `tests/test_composite_changes.py` first -- and
+  reword the source comments that describe the session; `bench/recording.py` retargeted at `instance._runtime` with its two
   tests (ARCH §14), the probe only, no numbers yet. Docs are touched only as far as keeping the
   docs test green requires. Every suite green: framework, `worlds/projecttracker`,
   `extensions/seahaven-xmlrpc`.
