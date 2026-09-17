@@ -61,8 +61,8 @@ anything on that branch that assumes an instance is one store is wrong here.
   with `skip_file_prefixes` (ARCH §1, §2.1, §8, §13); drop the fold test's `changes()`
   cross-check, leaving the per-node oracle; move every caller `main` has per FS §11's table --
   fifty `.changes()` sites across sixteen files, `tests/test_composite_changes.py` first -- and
-  reword the source comments that describe the session; `bench/recording.py` retargeted at `instance._runtime` with its two
-  tests (ARCH §14), the probe only, no numbers yet. Docs are touched only as far as keeping the
+  reword the source comments that describe the session; `bench/recording.py` retargeted at
+  `instance._runtime` with its two tests (ARCH §14), the probe only, no numbers yet. Docs are touched only as far as keeping the
   docs test green requires. Every suite green: framework, `worlds/projecttracker`,
   `extensions/seahaven-xmlrpc`.
   *Reference:* the old branch's phase 4 for the deprecation's attribution and its test, the
@@ -84,9 +84,8 @@ anything on that branch that assumes an instance is one store is wrong here.
 
 - [ ] **Phase 6: The cost, measured.** Second priority, deliberately last. Run
   `bench/recording.py` on ProjectTracker's write mix and read workloads and on `emporium`; record
-  the numbers in the
-  phase plan and in `state.md` as approximate, with the exact command and its flags, and no figure
-  the probe does not produce (ARCH §16). If a number is surprising, report it; do not tune the
+  the numbers in the phase plan and in `state.md` as approximate, with the exact command and its
+  flags, and no figure the probe does not produce (ARCH §16). If a number is surprising, report it; do not tune the
   design in this phase.
   *Reference:* the old branch's phase 4 plan for how the previous numbers were taken and what
   went wrong in reporting them three times.
