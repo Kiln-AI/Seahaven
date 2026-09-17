@@ -182,6 +182,12 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   (integers and reals as numbers, text as strings, NULL as `null`, blobs as base64), noting that
   64-bit integers exceed JavaScript's exact range.
 
+**Batch 9 (2026-09-17), §7 closed: no filtering:**
+
+- `state()` takes no filter options and returns everything the format defines. No cap on the log.
+- A consumer that wants less filters after the fact, or registers a custom formatter. Seahaven adds
+  no special support for either.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is
