@@ -136,6 +136,28 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   startup SQL is DDL, most of the rest seeds enums, and a world whose hooks draw on the clock or
   randomness while also running without fixtures has opted into a situation it can handle itself.
 
+**Batch 7 (2026-09-17), §5 closed: no `calls`, no `counters`:**
+
+- A tool call is the harness's action, not the world's state, and the harness's trace has it
+  with more context (the messages around it, the result it saw) than state could carry. Kiln
+  stores the trace; OpenEnv's own episode record stores `messages` and a `tool_trace` beside the
+  final state. State carries neither a call list nor counters, and `subworld` appears only on log
+  records.
+- `i` survives as the join key. The spec defines it: every call dispatched to the instance, in
+  order from 0, including calls that errored or were refused as unknown, excluding control tools
+  and tool listing. Over OpenEnv it is the harness's Nth `CallToolAction`; in-process, the Nth
+  `inst.call`. A judge that asks which call changed a row joins `i` against the trace.
+- Proposed, awaiting a decision: one integer at the root, the number of calls so far, so a consumer
+  can check its trace and the state agree before joining on `i`. Not OpenEnv's `step_count`, which
+  also counts `list_tools` steps.
+- The tool-count judge from the project overview's Example 1 runs over the trace; the
+  changed-rows judge from Example 2 runs over the log.
+- Noted for the architecture step: OpenEnv's harness adapter calls `client.state()` after every
+  tool call and embeds the serialized state in each tool result's metadata. With a log-shaped
+  state, that is the whole log per call, quadratic over an episode on the harness side. `state()`
+  must therefore be cheap to produce repeatedly (the log kept in memory and appended per call, not
+  rebuilt), and the docs should say what a per-step `state()` costs.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is
