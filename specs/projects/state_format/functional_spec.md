@@ -187,7 +187,9 @@ as `final_state` has only the last call's changes, which is the trade the caller
 
 - `World(state_format="seahaven.state/1")` is a **required** constructor argument. There is no
   default. A `World` constructed without it raises at construction, and the message names the
-  current built-in formats. The scaffold (`seahaven new`) writes `state_format=` with the current
+  current built-in formats. Every existing world in the repo (ProjectTracker, the example
+  extension's world, every `World(...)` in tests, docs and `bench/`) gains the argument; accepted
+  as a breaking change, since the framework is private and pre-alpha and every world is ours. The scaffold (`seahaven new`) writes `state_format=` with the current
   primary format into the generated `world.py`, so a pin is chosen once, at the world's creation.
 - `reset(state_format=...)` over OpenEnv and `world.instance(state_format=...)` in-process
   override the world's pin for that instance. `state_format` joins `fixture`, `seed` and `now` as a
@@ -260,7 +262,8 @@ world.instance("agency", seed=7, state_format="seahaven.state/1", user_id="u_12"
   OpenEnv's and not part of the format; a reader that wants the number of calls uses
   `call_count`. The existing `world: str`, `fixture: str | None` and `now: str | None` fields are
   replaced by the document's, which is a breaking change to `SeahavenState` and to
-  `SeahavenClient.state()`'s return type, accepted because the old state was a placeholder.
+  `SeahavenClient.state()`'s return type. Accepted (2026-09-17): the old state was a placeholder
+  and no consumer outside this repo exists.
 - `reset(state_format=...)` is passed through to `world.instance` like `fixture`, `seed` and `now`
   and never reaches a startup hook.
 - Before the first `reset`, the document is §3.5's. `close` and a second `reset` discard the log
