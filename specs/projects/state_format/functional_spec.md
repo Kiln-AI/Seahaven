@@ -223,13 +223,14 @@ def acme_state(world: seahaven.World, instance: seahaven.Instance | None) -> dic
 - The name must contain exactly one `/` followed by a positive integer, and must not begin with
   `seahaven.`, which is reserved for built-ins.
 - The function receives the world and the instance, or `None` for the instance before the first
-  `reset` over OpenEnv (§3.5, §9), and returns a JSON-serialisable dict. With an instance it reads
-  `instance.change_log()` and `instance.call_count` (§8), and anything else public on the
-  instance; with `None` it defines its own "no instance yet" document, and one that raises on
-  `None` makes pre-reset `state` a `WorldBug`, which is the formatter author's contract to keep. A formatter that needs neither built-in's shape builds its own; one that wants a
-  variation calls `instance.state(format="seahaven.state/1")` and edits the result. The document
-  it returns must carry `format` as its first key with the registered name; the framework checks
-  that and raises `WorldBug` if it does not.
+  `reset` over OpenEnv (§3.5, §9), and returns a JSON-serialisable dict: **the value of `state`,
+  and nothing else.** The framework writes the envelope around it, so a custom format can neither
+  omit nor misspell provenance. With an instance it reads `instance.change_log()` and
+  `instance.call_count` (§8), and anything else public on the instance; with `None` it defines
+  its own "no instance yet" value, and one that raises on `None` makes pre-reset `state` a
+  `WorldBug`, which is the formatter author's contract to keep. A formatter that wants a
+  variation of a built-in reads `instance.state(format="seahaven.state/1")["state"]` and edits
+  it.
 - Registration is open for the life of the world, like tools and middleware, and an extension
   may register one. Registering a name twice, or a built-in name, fails.
 - Formats resolve against the instance's world. In a composition (a later project; `subworld` is
