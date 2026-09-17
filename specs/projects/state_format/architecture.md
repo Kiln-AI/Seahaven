@@ -61,8 +61,8 @@ are rendered by two functions over the same changeset iterator so neither depend
 
 ### 2.3 The state document
 
-A `dict[str, Any]` built by a formatter (§5). Never a model in process; the OpenEnv layer wraps it
-(§9).
+A `dict[str, Any]`: the envelope, written by `state.envelope(world, instance, format)`, plus
+`state`, the formatter's output (§5). Never a model in process; the OpenEnv layer types it (§9).
 
 ## 3. Capturing the change log
 
@@ -178,32 +178,43 @@ BUILTIN_PREFIX = "seahaven."
 _NAME = re.compile(r"^[A-Za-z0-9_.+-]+/[1-9][0-9]*$")
 
 def check_format_name(name: str) -> None       # syntax; WorldBug naming the rule
+def envelope(world: World, instance: Instance | None, format: str) -> dict[str, Any]
+def document(world: World, instance: Instance | None, format: str, formatter: Formatter) -> dict[str, Any]
 ```
 
-A formatter takes the world and an optional instance. `None` is the state before the first
-`reset` over OpenEnv (FS §3.5): the world's pinned formatter runs with it, so there is no
-framework-built pre-reset document and no default. In process an instance always exists.
+A formatter takes the world and an optional instance and returns **the value of `state` only**.
+`envelope` writes FS §3.1's provenance in field order, with the instance-dependent fields `None`
+and `call_count` 0 when there is no instance. `document` is `{**envelope(...), "state":
+formatter(world, instance)}`, raising `WorldBug` if the formatter returns anything but a dict; it
+is the one place the two are joined, used by `Instance.state` and by the environment before
+`reset`. `None` is the state before the first `reset` over OpenEnv (FS §3.5): the world's pinned
+formatter runs with it; no default. In process an instance always exists.
 
 ### 5.1 The built-ins
 
-`state_v1(world, instance)` builds FS §3.1 in field order:
-
 ```python
-{"format": SEAHAVEN_STATE_V1,
- "seahaven_version": seahaven.__version__,
- "world": {"name": world.name, "version": world.version},
- "fixture": {"id": inst.fixture, "file_sha256": inst.fixture_sha256} if inst and inst.fixture else None,
- "episode_id": inst.episode_id if inst else None,
- "seed": inst.caller_seed if inst else None,
- "now": inst.clock.iso() if inst else None,
- "startup": inst.startup if inst else None,
- "call_count": inst.call_count if inst else 0,
- "db": {"log": [r.to_dict() for r in inst.change_log()] if inst else []}}
+def envelope(world, inst, format):
+    return {"format": format,
+            "seahaven_version": seahaven.__version__,
+            "world": {"name": world.name, "version": world.version},
+            "fixture": {"id": inst.fixture, "file_sha256": inst.fixture_sha256} if inst and inst.fixture else None,
+            "episode_id": inst.episode_id if inst else None,
+            "seed": inst.caller_seed if inst else None,
+            "now": inst.clock.iso() if inst else None,
+            "startup": inst.startup if inst else None,
+            "call_count": inst.call_count if inst else 0}
+
+def state_v1(world, inst):            # the value of `state`
+    return {"db": {"log": [r.to_dict() for r in inst.change_log()] if inst else []}}
+
+def state_last_step_v1(world, inst):  # the same, filtered to the last call
+    if inst is None:
+        return {"db": {"log": []}}
+    last = inst.call_count - 1
+    return {"db": {"log": [r.to_dict() for r in inst.change_log() if r.i == last]}}
 ```
 
-`state_last_step_v1(world, instance)` is `state_v1` with the log filtered to
-`r.i == call_count - 1` and `format` replaced; `i: None` records never pass the filter (FS §4);
-with no instance the log is empty.
+`i: None` records never pass the filter (FS §4).
 
 ### 5.2 Registration and resolution (`world.py`)
 
@@ -226,16 +237,17 @@ with no instance the log is empty.
 ```python
 def state(self, format: str | None = None) -> dict[str, Any]:
     with self._held():
+        name = self.state_format if format is None else format
         formatter = self._formatter if format is None else self.world.resolve_state_format(format)
         self._formatting = True
         try:
-            document = formatter(self.world, self)
+            return state.document(self.world, self, name, formatter)
         finally:
             self._formatting = False
-    if not document or next(iter(document)) != "format" or document["format"] != name:
-        raise WorldBug(...)      # FS §6: `format` first, with the registered name
-    return document
 ```
+
+The framework writes the envelope and `format`, so nothing about the formatter's output is
+checked beyond its being a dict.
 
 `_refuse_if_formatting()` at the top of `_call` and `_bulk` raises `WorldBug("a state formatter
 reads an instance and never writes to it")`: a formatter that calls `inst.call` or `inst.bulk` is
@@ -279,16 +291,17 @@ the same sentence. Nothing else changes.
   `state_format=` and `episode_id=` to `world.instance(...)`. `self._episode_id` is read from the
   instance afterwards.
 - `state` property: `SeahavenState(step_count=self._steps, **instance.state())` with an instance;
-  without one, `SeahavenState(step_count=0, **formatter(self.world, None))` where `formatter` is
-  `self.world.resolve_state_format(self.world.state_format)`, the world's pin. The same
-  `format`-first check `Instance.state` applies is applied here.
-- `SeahavenState(State)`: one declared field, `format: str` (with a description, for the reason
-  the current fields have them), and the base class's `extra="allow"` carries the rest. A typed
-  model cannot serve custom formats, whose documents are arbitrary; the built-in documents are
-  validated by tests against a JSON Schema kept in `tests/`, not by the model. `episode_id` is the
-  base class's field and is filled from the document.
-- `_parse_state` is unchanged. `SeahavenClient.state().model_dump()` is the document plus
-  `step_count`.
+  without one, `SeahavenState(step_count=0, **state.document(self.world, None, pin,
+  self.world.resolve_state_format(pin)))` with `pin = self.world.state_format`.
+- `SeahavenState(State)`: every envelope field typed, in FS §3.1 order, each with a description
+  (for the reason the current fields have them): `format: str`, `seahaven_version: str`,
+  `world: WorldRef` (`name`, `version`), `fixture: FixtureRef | None` (`id`, `file_sha256`),
+  `seed: int | None`, `now: str | None`, `startup: dict[str, Any] | None`, `call_count: int`,
+  and `state: dict[str, Any]`, untyped because its shape is the format's. `episode_id` and
+  `step_count` are the base class's; `extra="allow"` is inherited and kept. The built-in `state`
+  shapes are validated by tests against a JSON Schema kept in `tests/`, not by the model.
+- `_parse_state` is unchanged. `SeahavenClient.state().state` is the formatter's output;
+  `.model_dump(exclude={"step_count"})` is the document.
 
 ## 10. Scaffold and sweep
 
@@ -353,12 +366,13 @@ Unit tests live beside the module they pin; every FS §13 item maps to one below
 - `tests/test_state.py` (new): `state_v1` field by field against a fixture instance and a blank
   one; `startup` given and empty; `state_last_step_v1` per step, concatenation equals the full
   log, empty before any call; a custom formatter registered, selected by `instance(state_format=)`,
-  refused for a `seahaven.` name, a duplicate, a non-callable, a bad name, a wrong first key;
+  refused for a `seahaven.` name, a duplicate, a non-callable, a bad name; its output lands under
+  `state` with the envelope untouched, and a non-dict output is a `WorldBug`;
   `World(...)` without the argument; an unknown `seahaven.` name at `World`, an unregistered
   custom name at `instance`; the world's pin naming a custom format registered later; each
   built-in with `instance=None`; a custom formatter called with `None` before `reset` and one that
-  raises on it surfacing as `WorldBug`; the built-in documents validate against
-  `tests/support/state_v1.schema.json`.
+  raises on it surfacing as `WorldBug`; `envelope` field by field with and without an instance;
+  the built-in documents validate against `tests/support/state_v1.schema.json`.
 - `tests/test_world.py`: `RESET_ARGUMENTS` refusal for `state_format`; `__copy__` carries formats.
 - `tests/test_ids.py`: `bytes` seed refused; the pytest marker test in `tests/test_pytest_plugin.py`
   follows.
@@ -405,14 +419,13 @@ compares documents with `episode_id` masked; over OpenEnv a caller who passes `e
 3. *Decided 2026-09-17:* a formatter takes `(world, instance | None)`; before `reset` the world's
    pinned formatter runs with `None`, after `reset` the instance's runs; no framework-built
    document and no default (§5, §9); the functional spec is updated.
-4. **`SeahavenState` as an open model.** §9 types only `format` and lets `extra="allow"` carry
-   the rest, because custom formats make a typed model impossible. FS §9 says "its fields are
-   §3.1's". Proposal: the open model, with the built-in shape pinned by a JSON Schema in `tests/`.
-5. **Startup keywords serialised at creation.** §6 refuses a non-JSON-able startup keyword at
-   `reset`, which FS does not state. Proposal: adopt; fail early beats a `state()` that raises.
-6. **The deprecation warning over the wire.** A `DeprecationWarning` raised in the server is not
-   observable by a client; FS §13 says "in-process and over the wire". Proposal: test in process
-   only, and say so in the spec.
+4. *Decided 2026-09-17:* the document is a framework-owned envelope plus `state`, the
+   formatter's output; `SeahavenState` types the envelope and leaves `state` a dict (§5, §9); the
+   functional spec is updated.
+5. *Decided 2026-09-17:* startup keywords are serialised at creation (§6); the functional spec
+   notes it.
+6. *Decided 2026-09-17:* the deprecation warning is tested in process; the functional spec is
+   updated.
 7. **Two sessions per write.** §3.1's design doubles the session extension's per-row work. If the
    §16 measurement shows more than a few percent on the write-heavy workload, the fallback is to
    attach the cumulative session lazily, on the first `changes()` call, from a fold of the

@@ -197,6 +197,16 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   `openenv.md`. No alias between `controller_changes` and the formatter; it is legacy, not a second
   surface.
 
+**Batch 11 (2026-09-17), from the architecture review:**
+
+- The document is a framework-owned envelope (`format`, `seahaven_version`, `world`, `fixture`,
+  `episode_id`, `seed`, `now`, `startup`, `call_count`) plus one key, `state`, holding the
+  formatter's output. Formatters produce `state` only; the envelope is identical under every
+  format and typed on the wire. Appendix B's `db.log` therefore sits at `state.db.log`.
+- A formatter takes `(world, instance | None)`; before `reset` the world's pinned formatter runs
+  with `None`. Custom pins resolve at first instance creation. No new lint rule (STRICT already
+  refuses NULL keys). Startup keywords are refused at `reset` if not JSON-able.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is

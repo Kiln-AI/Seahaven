@@ -31,20 +31,21 @@ Three consequences drive everything below:
 
 ## 2. Concepts
 
-- **State document.** A JSON object, the whole answer to `state()`. Its shape is defined by a
-  named **format**.
-- **Format.** A name of the form `<family>/<major>`, such as `seahaven.state/1`. Two are built in
-  (§3, §4). A world may register more (§6). A format, once published in a Seahaven release, never
-  changes in a way a reader could observe (§10).
+- **State document.** A JSON object, the whole answer to `state()`: a framework-owned
+  **envelope** of provenance fields, plus one key, `state`, holding the **formatter's output**.
+- **Format.** A name of the form `<family>/<major>`, such as `seahaven.state/1`. It names the
+  shape of `state`, not of the envelope. Two are built in (§3, §4). A world may register more
+  (§6). A format, once published in a Seahaven release, never changes in a way a reader could
+  observe (§10).
 - **Change log.** The ordered record of every row the instance changed after startup, one record
   per row per call. It is the only database content in the document. The net diff, what
   `inst.changes()` returns today, is a fold of it (§3.6) and is not in the document.
 - **Call ordinal `i`.** The position of a call among every call dispatched to the instance, from 0
   (§7). Log records carry it; it is the join key to the harness's trace.
 
-## 3. The format `seahaven.state/1`
+## 3. The document, and the format `seahaven.state/1`
 
-### 3.1 Root
+### 3.1 Root: the envelope and `state`
 
 ```jsonc
 {
@@ -57,13 +58,17 @@ Three consequences drive everything below:
   "now": "2026-03-04T09:00:00Z",
   "startup": {"user_id": "u_12"},                              // {} when none were given
   "call_count": 3,
-  "db": {"log": [ … ]}
+  "state": {"db": {"log": [ … ]}}                              // the formatter's output
 }
 ```
 
+Everything above `state` is the **envelope**: written by the framework, identical for every
+format, built-in or custom. `state` is the formatter's output and the only thing `format`
+describes. For `seahaven.state/1`, `state` is `{"db": {"log": [...]}}`.
+
 | Field | Meaning |
 |---|---|
-| `format` | The format name, always first. A reader checks it before reading anything else. |
+| `format` | The name of the format that produced `state`, always first. A reader checks it before reading `state`. |
 | `seahaven_version` | `seahaven.__version__` of the producing process. Informational; a reader keys on `format`, never on this. |
 | `world.name`, `world.version` | `World.name` and `World.version`. `world.version` is the world's identity: the docs say a schema, tool or state-format change bumps it. |
 | `fixture` | `{id, file_sha256}` from the fixture's sidecar, or `null` for an instance built from the DDL. With the world identity, this is the lookup for the starting state. |
@@ -72,14 +77,14 @@ Three consequences drive everything below:
 | `now` | The instance clock as an ISO-8601 instant, the same string `inst.clock.iso()` answers. |
 | `startup` | The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, exactly as the startup hooks received them. An object; empty when there were none. |
 | `call_count` | How many calls have been dispatched to the instance so far (§7). Not OpenEnv's `step_count`, which also counts tool listings. |
-| `db.log` | The change log (§3.2). |
+| `state` | The formatter's output. Under `seahaven.state/1`: `{"db": {"log": [...]}}`, the change log (§3.2). |
 
-No other root fields. A reader must ignore fields it does not know (§10), so a later minor
-addition does not break it, but this format defines exactly these.
+No other root fields. A reader must ignore envelope fields it does not know (§10), so a later
+addition does not break it; `state`'s contents are exactly what `format` defines.
 
 ### 3.2 The change log
 
-`db.log` is one flat list. Each record is one row changed by one call:
+`state.db.log` is one flat list. Each record is one row changed by one call:
 
 ```jsonc
 {"i": 1, "subworld": null, "table": "issues", "op": "update",
@@ -147,13 +152,13 @@ Every value is a JSON value, mapped from SQLite's storage classes:
 
 ### 3.5 The document before any call, and before `reset`
 
-- After `reset` and before any call: the full provenance, `call_count: 0`, `db.log: []`.
+- After `reset` and before any call: the full envelope, `call_count: 0`, `state.db.log: []`.
 - Over OpenEnv, before the first `reset`: there is no instance, and the **world's pinned**
-  formatter runs with no instance (§6). For the built-ins the document is: `format`,
-  `seahaven_version` and `world` answered; `fixture`, `episode_id`, `seed`, `now` and `startup`
-  `null`; `call_count` 0; `db.log` empty. A blank instance is distinguishable from no instance
-  because a blank instance has a `now`. After `reset`, the instance's formatter runs. Never a
-  default.
+  formatter runs with no instance (§6). The envelope is the framework's regardless of format:
+  `format`, `seahaven_version` and `world` answered; `fixture`, `episode_id`, `seed`, `now` and
+  `startup` `null`; `call_count` 0. For the built-ins `state` is `{"db": {"log": []}}`. A blank
+  instance is distinguishable from no instance because a blank instance has a `now`. After
+  `reset`, the instance's formatter runs. Never a default.
 
 ### 3.6 The fold, defined but not shipped
 
@@ -171,14 +176,16 @@ reader, in any language, computes the same one:
 3. Drop groups that folded to untouched. Sort by `(subworld, table, key)` as §3.3.
 
 This is SQLite's changeset semantics over the whole episode. `inst.changes()` (unchanged in this
-project) is the reference implementation: a test asserts `fold(inst.state()["db"]["log"]) ==
-inst.changes()` on every episode shape the suite exercises (§13). The fold function that test uses
+project) is the reference implementation: a test asserts
+`fold(inst.state()["state"]["db"]["log"]) == inst.changes()` on every episode shape the suite
+exercises (§13). The fold function that test uses
 is test code, not public API, in this release.
 
 ## 4. The format `seahaven.state+last_step/1`
 
-The same document as §3 with one difference: `db.log` holds only the records whose `i` equals
-`call_count - 1`, the most recent call. Records with `i: null` are never in it.
+The same envelope as §3 and the same `state` shape, with one difference: `state.db.log` holds
+only the records whose `i` equals `call_count - 1`, the most recent call. Records with `i: null`
+are never in it.
 
 It is idempotent: the scope is the call counter, not when `state()` was last read, so two reads
 between calls answer the same document. It exists for a caller that reads `state()` after every
@@ -257,7 +264,7 @@ the two agree before a join.
 ## 8. The in-process API
 
 ```python
-inst.state()                       # the document, in the instance's format, as a dict
+inst.state()                       # the document (envelope + state), in the instance's format, as a dict
 inst.state(format="seahaven.state+last_step/1")
 inst.change_log()                  # list[LogRecord], the §3.2 records, in §3.3 order
 inst.call_count                    # int
@@ -279,13 +286,16 @@ world.instance("agency", seed=7, state_format="seahaven.state/1", user_id="u_12"
 
 ## 9. Over OpenEnv
 
-- The `state` message answers the document. `SeahavenState` becomes the document's model: its
-  fields are §3.1's, with OpenEnv's inherited `episode_id` and `step_count`. `step_count` is
-  OpenEnv's and not part of the format; a reader that wants the number of calls uses
+- The `state` message answers the document. `SeahavenState` is the document plus OpenEnv's
+  `step_count`: every envelope field of §3.1 is a typed field on the model (`world` and `fixture`
+  as nested models), `state` is `dict[str, Any]` because its shape is the format's, and the base
+  class's `extra="allow"` is kept so a newer server can talk to an older client. `step_count` is
+  OpenEnv's and not part of the document; a reader that wants the number of calls uses
   `call_count`. The existing `world: str`, `fixture: str | None` and `now: str | None` fields are
-  replaced by the document's, which is a breaking change to `SeahavenState` and to
+  replaced by the envelope's, which is a breaking change to `SeahavenState` and to
   `SeahavenClient.state()`'s return type. Accepted (2026-09-17): the old state was a placeholder
-  and no consumer outside this repo exists.
+  and no consumer outside this repo exists. `SeahavenClient.state().state` is the formatter's
+  output; `.model_dump(exclude={"step_count"})` is the document.
 - `reset(state_format=...)` is passed through to `world.instance` like `fixture`, `seed` and `now`
   and never reaches a startup hook.
 - Before the first `reset`, the document is §3.5's. `close` and a second `reset` discard the log
@@ -295,20 +305,23 @@ world.instance("agency", seed=7, state_format="seahaven.state/1", user_id="u_12"
   An earlier session established that subclass fields travel over the WebSocket state message
   while the HTTP `GET /state` route strips them (`BACKLOG.md` B13); nothing here works unless that
   holds, so it is tested rather than assumed.
-- `SeahavenClient.state()` returns the `SeahavenState` model; `.model_dump()` is the document.
+- `SeahavenClient.state()` returns the `SeahavenState` model.
 
 ## 10. The compatibility contract
 
 For every format Seahaven publishes:
 
-- A document's `format` is the only thing a reader keys on. `seahaven_version` is informational.
-- Within a format: no field is removed or renamed; no field changes type; and the construction
-  of an existing field does not change, even where the type would not, so a reader written
-  against `seahaven.state/1` on the day it shipped reads every `seahaven.state/1` document ever
-  produced.
+- The document has two contracts. The **envelope** is the framework's: a field is only ever
+  added, never removed, renamed, retyped or rebuilt, so a reader keys on field presence and on
+  `seahaven_version` only for information. **`state`** is the format's: `format` is the only thing
+  a reader keys on for it.
+- Within a format: no field of `state` is removed or renamed; none changes type; and the
+  construction of an existing field does not change, even where the type would not, so a reader
+  written against `seahaven.state/1` on the day it shipped reads every `seahaven.state/1`
+  document ever produced.
 - A field may be added within a format only if a reader that ignores it loses nothing. Readers
-  must ignore unknown fields. Anything else is a new major, `seahaven.state/2`, a new formatter,
-  and the old one stays callable and frozen.
+  must ignore unknown fields, in the envelope and in `state`. Anything else is a new major,
+  `seahaven.state/2`, a new formatter, and the old one stays callable and frozen.
 - Removing a published format is a breaking Seahaven release and is not planned.
 - `world.version` is the world's contract: a judge assumes that two documents with the same
   `world.name` and `world.version` were produced by the same schema and tools.
@@ -324,12 +337,12 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
 
 - **`state()` is the primary surface in every doc that grades or inspects an episode.**
   `serving.md` (the control-tools section is replaced by a state section), `testing.md` (the
-  changeset example becomes a state example), `concepts.md` (the changeset concept gains "the
-  change log" and the document), the README's `grade(world_instance.changes())` example, and
+  changeset example becomes a state example reading `inst.state()["state"]["db"]["log"]`),
+  `concepts.md` (the changeset concept gains "the change log" and the document), the README's `grade(world_instance.changes())` example, and
   `reference/api.md`. `reference/cli.md` keeps `--include-control-tools` with one line saying it
   is deprecated.
-- **A new `state.md`** in the bundled docs: the document, both built-in formats and custom
-  registration, presented as three cases in this order, each with its reason: `final_state` read
+- **A new `state.md`** in the bundled docs: the document (the envelope and `state`), both
+  built-in formats and custom registration, presented as three cases in this order, each with its reason: `final_state` read
   once at the end uses `seahaven.state/1`; a per-step reader like OpenEnv's episode harness uses
   `seahaven.state+last_step/1`; a caller whose needs differ registers its own. Then: the fold and
   the two traps (overcounting, comparing logs), the value mapping, the lookup for the starting
@@ -360,27 +373,30 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
   listing and control tools do not. `bulk()` writes carry `i: null`. `call_count` matches.
 - **The fold.** `fold(log) == inst.changes()` on every case above, plus a primary-key rewrite
   (delete plus insert in the log, delete plus insert in `changes()`).
-- **Provenance.** Every root field against a fixture instance and a blank one; `startup` carries
-  the keywords given and is `{}` otherwise; `fixture` is `null` for blank.
+- **Provenance.** Every envelope field against a fixture instance and a blank one; `startup`
+  carries the keywords given and is `{}` otherwise; `fixture` is `null` for blank; the envelope is
+  identical under a custom format.
 - **Formats.** `seahaven.state+last_step/1` holds only the last call's records; the concatenation
   over an episode equals the `seahaven.state/1` log; before any call it is empty. A custom
   formatter registers, is selectable by `instance(state_format=)` and `reset(state_format=)`, and
-  a name beginning with `seahaven.`, a duplicate, or a document whose first key is not the right
-  `format` is refused.
+  a name beginning with `seahaven.`, a duplicate, or a non-dict output is refused; its output
+  lands under `state` with the envelope untouched.
 - **Choosing.** `World(...)` without `state_format` raises with the built-in names in the message;
   an unknown `seahaven.` name raises at `World`, an unregistered custom name at `instance` and
   `reset`, both before any instance exists; a custom pin registered after `World(...)` works; a hook
   parameter named `state_format` is refused at registration; the scaffold writes the pin and the
   scaffolded world passes `seahaven check`.
-- **OpenEnv.** In process: `state` before `reset` is §3.5 from the world's pinned formatter, and a
-  custom pin's formatter is called with `None`; after `reset` it is the document; a
+- **OpenEnv.** In process: `state` before `reset` is §3.5, the envelope from the framework and
+  `state` from the world's pinned formatter called with `None`; after `reset` it is the document; a
   second `reset` starts a new log. Against a real server over the WebSocket: the whole document
-  arrives, `SeahavenClient.state().model_dump()` round-trips it, and `reset(state_format=...)`
+  arrives, `SeahavenClient.state().model_dump(exclude={"step_count"})` round-trips it, and
+  `reset(state_format=...)`
   selects the format.
 - **Performance.** `state()` on an instance with 1,000 log records does no database work
   (asserted through the authorizer or a statement counter) and completes within a stated bound;
   a call's cost with logging on is within a stated fraction of today's.
-- **Deprecation.** Each control tool warns once per call, in-process and over the wire.
+- **Deprecation.** Each control tool warns once per call, observed in process (the server's
+  warning is raised in its own process and is not visible to a client).
 - **Docs.** Every new example executes; no doc mentions `controller_` except `cli.md`'s one line.
 
 ## 14. Open questions
@@ -393,6 +409,10 @@ Numbered so they can be answered by number.
    in process (§3.1); no separate `instance_id` field.
 4. *Answered 2026-09-17:* `inst.change_log()` (§8).
 5. *Answered 2026-09-17:* on the world, resolved against the instance's (root) world (§6).
+6. *Decided 2026-09-17, from the architecture review:* the document is a framework-owned envelope
+   plus `state`, the formatter's output, one level deep (§2, §3.1, §6, §9, §10). Custom formatters
+   produce `state` only. Non-JSON-able startup keywords are refused at `reset` (architecture §6).
+   The control tools' deprecation warning is tested in process only.
 
 ## 15. Non-goals
 
