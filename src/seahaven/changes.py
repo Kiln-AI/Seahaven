@@ -1,18 +1,26 @@
 """What an instance changed, as data an eval can grade on.
 
-The changeset is the net difference between the fixture and the current state,
-not a log of calls. A write that leaves a value unchanged records nothing; an
-insert followed by an update of the same row is one insert; a call that rolled
-back leaves no trace. That is SQLite's session extension speaking, and it is the
-property that makes a changeset worth grading: two runs that reached the same
-state agree, whatever route they took.
+Two readings of the same mechanism. The **change log** is the ordered record of
+every row the instance changed after startup, one record per row per call: a
+session is opened for each call, and what it recorded is rendered and appended
+when the call's transaction is done. The **changeset** is the net difference
+between the fixture and the current state, from one session that runs for the
+life of the instance.
 
-The session is attached to the world's tables at instance creation, after the
-startup hooks have run, so seed rows are starting state rather than agent
-changes.
+Either way the session extension is what speaks, and its rule is the same: a
+write that leaves a value unchanged records nothing, an insert followed by an
+update of the same row is one insert, and a call that rolled back leaves no
+trace. Over one call that makes a log record the net of its call; over the
+instance it makes a changeset the net of the episode.
+
+No session sees the startup hooks. The per-call sessions do not exist yet when
+they run, and the long-lived one is attached after them, so seed rows are
+starting state rather than agent changes.
 """
 
 import base64
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -24,7 +32,14 @@ from seahaven.errors import WorldBug
 if TYPE_CHECKING:  # `world.py` imports this module's callers; the annotation is all that is needed
     from seahaven.world import World
 
-__all__ = ["Change", "render", "start_session"]
+__all__ = [
+    "Change",
+    "LogRecord",
+    "open_session",
+    "render",
+    "render_log",
+    "tracked_tables",
+]
 
 # SQLite's own names for what a row change is, as this framework spells them.
 _OPS: dict[str, Literal["insert", "update", "delete"]] = {
@@ -63,20 +78,71 @@ class Change:
         }
 
 
-def start_session(conn: apsw.Connection, world: World) -> apsw.Session:
-    """Record every change to the world's own tables, from now on.
+@dataclass(frozen=True)
+class LogRecord:
+    """One row one call changed: the unit of the change log.
+
+    The whole row on an insert and on a delete, because that is the row; on an
+    update, exactly the non-key columns the call changed, old values on one side
+    and new on the other. The key is never repeated inside an update's sides: it
+    is in `key`, which is where a reader joins on it.
+
+    `i` is the ordinal of the call that made the change, or `None` for a write
+    made with no call in flight (`inst.bulk()`). `subworld` is `None` in this
+    release; the field exists so that a composed world's log stays one flat list.
+    """
+
+    i: int | None
+    subworld: str | None
+    table: str
+    op: Literal["insert", "update", "delete"]
+    key: dict[str, Any]
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+
+    def to_dict(self) -> dict[str, Any]:
+        """The wire shape, in the field order `functional_spec.md` §3.2 publishes."""
+        return {
+            "i": self.i,
+            "subworld": self.subworld,
+            "table": self.table,
+            "op": self.op,
+            "key": self.key,
+            "before": self.before,
+            "after": self.after,
+        }
+
+
+def tracked_tables(conn: apsw.Connection, world: World) -> tuple[str, ...]:
+    """Every table a session of this instance records, in name order.
 
     Virtual tables are left out because the session extension cannot track one,
     and the tables a world names in `World(untracked_tables=...)` because it said
-    to.
+    to. A table with no explicit primary key is refused here rather than attached
+    quietly, which is why this is asked once at instance creation: the refusal is
+    a `WorldBug` about the world, and every session the instance opens afterwards
+    attaches the list this answered.
     """
     untracked = frozenset(world.untracked_tables)
     virtual = _virtual_tables(conn)
-    session = apsw.Session(conn, "main")
+    tables = []
     for table in world_tables(conn):
         if table in untracked or table in virtual:
             continue
         _refuse_a_table_with_no_primary_key(conn, table)
+        tables.append(table)
+    return tuple(tables)
+
+
+def open_session(conn: apsw.Connection, tracked: Sequence[str]) -> apsw.Session:
+    """Record every change to those tables, from now on.
+
+    One of these is opened per call, so it is deliberately no more than a
+    `Session` and an `attach` each: both are C, and the list they are given was
+    computed once when the instance was made.
+    """
+    session = apsw.Session(conn, "main")
+    for table in tracked:
         session.attach(table)
     return session
 
@@ -110,6 +176,97 @@ def render(changeset: bytes, conn: apsw.Connection) -> list[Change]:
     return changes
 
 
+def render_log(
+    changeset: bytes,
+    conn: apsw.Connection,
+    columns: dict[str, tuple[list[str], list[int]]],
+    *,
+    i: int | None,
+) -> list[LogRecord]:
+    """One call's changeset as log records, sorted as `functional_spec.md` §3.3 says.
+
+    `columns` is the caller's cache of `_columns`, kept for the life of the
+    instance: a world's schema does not change while one is alive, so a table is
+    looked up once however many calls touch it.
+    """
+    rendered = []
+    for change in apsw.Changeset.iter(changeset):
+        table = change.name
+        if table not in columns:
+            columns[table] = _columns(conn, table)
+        names, key_positions = columns[table]
+        op = _OPS[change.op]
+        # The key is in whichever side of the change has it: an insert has only
+        # `new`, everything else carries the old row's key in `old`.
+        source = change.new if op == "insert" else change.old
+        before, after = _sides(names, key_positions, op, change.old, change.new)
+        rendered.append(
+            LogRecord(
+                i=i,
+                subworld=None,
+                table=table,
+                op=op,
+                key=_row(names, source, key_positions) or {},
+                before=before,
+                after=after,
+            )
+        )
+    rendered.sort(key=_sort_key)
+    return rendered
+
+
+def _sides(
+    names: list[str],
+    key_positions: list[int],
+    op: Literal["insert", "update", "delete"],
+    old: tuple[Any, ...] | None,
+    new: tuple[Any, ...] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """A record's `before` and `after`: whole rows at the ends of a row's life, deltas between.
+
+    An update carries exactly the columns it changed -- a changeset marks the
+    rest `apsw.no_change`, which is not the same as `NULL`, and `_row` drops
+    them, so asking it for the non-key columns leaves exactly the changed ones --
+    and carries them without the key, which `key` already holds. An insert and a
+    delete carry the whole row, key columns included, because that is the row.
+    """
+    if op != "update":
+        return _row(names, old), _row(names, new)
+    keys = frozenset(key_positions)
+    non_key = [position for position in range(len(names)) if position not in keys]
+    return _row(names, old, non_key), _row(names, new, non_key)
+
+
+def _sort_key(record: LogRecord) -> tuple[Any, ...]:
+    """Where a record sorts inside its call: sub-world, then table, then key values."""
+    return (
+        record.subworld or "",
+        record.table,
+        tuple(_sqlite_rank(value) for value in record.key.values()),
+    )
+
+
+def _sqlite_rank(value: Any) -> tuple[int, Any]:
+    """A published key value in SQLite's own order: NULL, then numbers, then text.
+
+    The *rendered* value, not the raw one. The within-call order is part of the
+    format (`functional_spec.md` §3.3) and the fold a consumer computes re-sorts
+    by it (§3.6), and a consumer reading a saved document has a blob's base64
+    text and never its bytes -- so a blob key sorts by that text, which is the
+    only order a reader can reproduce. The leading rank is what keeps the sort
+    total: a key column declared ANY can hold two storage classes, which Python
+    would refuse to compare. Every tracked table is STRICT in a linted world, so
+    in practice a column's rank never varies.
+    """
+    match value:
+        case None:
+            return (0, None)
+        case int() | float():
+            return (1, value)
+        case _:
+            return (2, value)
+
+
 def _row(
     names: list[str], values: tuple[Any, ...] | None, positions: list[int] | None = None
 ) -> dict[str, Any] | None:
@@ -128,6 +285,10 @@ def _jsonable(value: Any) -> Any:
     """A SQLite value as something JSON can carry: a blob becomes base64 text."""
     if isinstance(value, bytes):
         return base64.b64encode(value).decode("ascii")
+    if isinstance(value, float) and math.isinf(value):
+        # JSON has no infinities; SQLite already stores NaN as NULL, so this is
+        # its rule one step further (functional_spec.md §3.4).
+        return None
     return value
 
 

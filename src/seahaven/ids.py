@@ -42,7 +42,7 @@ __all__ = [
 DEFAULT_CALLER_SEED = b"default"
 
 
-def instance_seed(source: str, caller_seed: bytes | int | None = None) -> bytes:
+def instance_seed(source: str, caller_seed: int | None = None) -> bytes:
     """Derive an instance's seed from what it came from and what the caller asked for.
 
     `source` is the fixture id, or the world name for a blank instance, so the
@@ -51,12 +51,10 @@ def instance_seed(source: str, caller_seed: bytes | int | None = None) -> bytes:
     return hashlib.sha256(source.encode("utf-8") + b"\0" + _seed_bytes(caller_seed)).digest()
 
 
-def _seed_bytes(caller_seed: bytes | int | None) -> bytes:
+def _seed_bytes(caller_seed: int | None) -> bytes:
     match caller_seed:
         case None:
             return DEFAULT_CALLER_SEED
-        case bytes():
-            return caller_seed
         case int():
             if caller_seed < 0:
                 raise WorldBug(f"a seed must not be negative: {caller_seed}")
@@ -65,9 +63,7 @@ def _seed_bytes(caller_seed: bytes | int | None) -> bytes:
             except OverflowError as error:
                 raise WorldBug(f"a seed must fit in 8 bytes: {caller_seed}") from error
         case _:
-            raise WorldBug(
-                f"a seed must be bytes, an int or None, not {type(caller_seed).__name__}"
-            )
+            raise WorldBug(f"a seed must be an int or None, not {type(caller_seed).__name__}")
 
 
 class Ids:

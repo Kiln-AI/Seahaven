@@ -20,7 +20,7 @@ from seahaven.ids import (
 )
 
 
-def uuids(source: str, caller_seed: bytes | int | None = None, count: int = 5) -> list[str]:
+def uuids(source: str, caller_seed: int | None = None, count: int = 5) -> list[str]:
     ids = Ids(instance_seed(source, caller_seed))
     return [ids.uuid() for _ in range(count)]
 
@@ -34,7 +34,6 @@ def test_the_same_seed_replays_the_same_stream() -> None:
 
 def test_different_caller_seeds_diverge() -> None:
     assert uuids("agency", 1) != uuids("agency", 2)
-    assert uuids("agency", b"one") != uuids("agency", b"two")
     assert uuids("agency", None) != uuids("agency", 0)
 
 
@@ -42,9 +41,9 @@ def test_the_source_is_mixed_in() -> None:
     assert uuids("agency", 7) != uuids("startup", 7)
 
 
-def test_caller_seed_forms() -> None:
-    assert instance_seed("agency") == instance_seed("agency", b"default")
-    assert instance_seed("agency", 1) == instance_seed("agency", (1).to_bytes(8, "big"))
+def test_no_caller_seed_is_not_seed_zero() -> None:
+    """The default seed is a value of its own, not the falsy one a caller might pass."""
+    assert instance_seed("agency", 0) != instance_seed("agency", None)
     assert len(instance_seed("agency")) == 32
 
 
@@ -59,8 +58,14 @@ def test_a_seed_wider_than_eight_bytes_is_refused() -> None:
 
 
 def test_a_seed_of_the_wrong_type_is_refused() -> None:
-    with pytest.raises(WorldBug, match="bytes, an int or None"):
+    with pytest.raises(WorldBug, match="an int or None"):
         instance_seed("agency", "seed")  # ty: ignore[invalid-argument-type]
+
+
+def test_a_bytes_seed_is_refused() -> None:
+    """`bytes` was accepted once; the caller's seed is an int or nothing now."""
+    with pytest.raises(WorldBug, match="an int or None"):
+        instance_seed("agency", b"sixteen bytes!!!")  # ty: ignore[invalid-argument-type]
 
 
 def test_uuids_are_version_four_shaped() -> None:

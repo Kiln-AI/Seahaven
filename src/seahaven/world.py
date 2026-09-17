@@ -219,7 +219,7 @@ class World:
         self,
         fixture: str | None = None,
         *,
-        seed: int | bytes | None = None,
+        seed: int | None = None,
         now: str | datetime | None = None,
         **startup_kwargs: Any,
     ) -> Instance:

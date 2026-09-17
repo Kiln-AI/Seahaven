@@ -1,14 +1,14 @@
 """A live world: a private copy of a fixture, and everything a call into it needs.
 
 An instance is a file in a working directory, a connection on it, a frozen clock,
-a seeded id stream, a changeset session and a lock. `world.instance(...)` makes
+a seeded id stream, a change log, a changeset session and a lock. `world.instance(...)` makes
 one, `inst.call(...)` runs a tool on it, and `inst.destroy()` (or leaving its
 `with` block) takes the files away again. Nothing is shared between two
 instances: two instances of one fixture are two copies of one file.
 
 Three rules hold the concurrency together.
 
-*One lock per instance.* `call`, `changes`, `freeze`, `bulk`, `destroy` and the
+*One lock per instance.* `call`, `changes`, `change_log`, `freeze`, `bulk`, `destroy` and the
 opens inside `inspect()` and `_control_db()` take it, so calls into one instance
 serialise and a destroy waits for the call in flight. Reads through the `inspect()` handle
 afterwards do not take it: that handle is the caller's, to read from whatever
@@ -35,7 +35,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager, suppress
+from contextlib import AbstractContextManager, closing, contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
@@ -43,7 +43,14 @@ from typing import TYPE_CHECKING, Any, Self
 import apsw
 
 from seahaven.call import Call
-from seahaven.changes import Change, render, start_session
+from seahaven.changes import (
+    Change,
+    LogRecord,
+    open_session,
+    render,
+    render_log,
+    tracked_tables,
+)
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, build_blank, open_inspection, open_instance
@@ -206,6 +213,7 @@ class Instance:
         ctx: Ctx,
         db: Db,
         session: apsw.Session,
+        tracked: tuple[str, ...],
         dir: Path,
         world: World,
         manager: InstanceManager,
@@ -228,11 +236,29 @@ class Instance:
         self._manager = manager
         self._inspection: Db | None = None
         self._control: Db | None = None
+        # The tables every per-call session attaches, settled once at creation:
+        # a world's schema does not change while an instance is alive.
+        self._tracked = tracked
+        # The change log, appended to in commit order as each call's recording
+        # ends, and the per-table column cache `render_log` fills as it goes.
+        self._records: list[LogRecord] = []
+        self._columns: dict[str, tuple[list[str], list[int]]] = {}
+        self._call_count = 0
 
     @property
     def state_path(self) -> Path:
         """The instance's own database file."""
         return self.dir / STATE_NAME
+
+    @property
+    def call_count(self) -> int:
+        """How many calls have been dispatched to this instance.
+
+        Every world tool `call` reached, including one that raised and one whose
+        name the world does not have; never a control tool and never `tools()`.
+        The last call's ordinal is one less than this.
+        """
+        return self._call_count
 
     def call(self, name: str, /, **arguments: Any) -> Any:
         """Run one tool, with its arguments validated, on the calling thread.
@@ -278,6 +304,21 @@ class Instance:
         """Every row this instance has changed since it was created."""
         with self._held():
             return render(self._session.changeset(), self.db.conn)
+
+    def change_log(self) -> list[LogRecord]:
+        """Every row this instance has changed, one record per row per call, in call order.
+
+        Costs no database work: each call's records were rendered when that call
+        committed, and this hands back what is already in memory.
+
+        The list is the caller's, but the records in it are the instance's: a
+        `LogRecord` is frozen and its `key`, `before` and `after` dicts are the
+        ones the log holds, handed out rather than copied because copying every
+        record on every read would cost an episode's worth of dicts per call.
+        Read them; editing one in place edits the log itself.
+        """
+        with self._held():
+            return list(self._records)
 
     def freeze(self, id: str, description: str) -> Fixture:
         """Mint a fixture from this instance's current state."""
@@ -330,25 +371,60 @@ class Instance:
 
     def _call(self, name: str, arguments: Mapping[str, Any]) -> Any:
         world = self.world
+        # Looked up before the gate because whether this is a control tool is
+        # what decides the gate is bypassed; whether it *exists* is answered
+        # under the lock below, where the ordinal it consumes is issued.
         tool = world.tools.get(name)
-        if tool is None:
-            # An agent naming a tool that does not exist reads the answer: it is
-            # a tool error, not a framework one.
-            raise UnknownTool(name)
         # The gate first and the lock second, so a queued call holds nothing.
-        with gate(bypass=tool.control), self._held():
+        with gate(bypass=tool is not None and tool.control), self._held():
+            if tool is None:
+                # An agent naming a tool that does not exist reads the answer: it
+                # is a tool error, not a framework one. It is still a call, so it
+                # consumes its ordinal before it is refused, and the harness's
+                # Nth call is this instance's Nth (functional_spec.md §7).
+                self._next_ordinal()
+                raise UnknownTool(name)
             call = Call(name, arguments, tool)
             ctx = self.ctx.with_call(call)
             if tool.control:
                 # Imported here, not at the top: `control.py` is written against
                 # `Instance`, so the dependency runs that way round and this is
-                # the one place the call path needs it back.
+                # the one place the call path needs it back. Not a call to the
+                # world: no ordinal, and nothing recorded.
                 from seahaven import control
 
                 return control.dispatch(self, ctx)
             # The chain is read from the world here rather than held, so a
             # middleware registered after this instance was made applies to it.
-            return world.chain(ctx, call)
+            with self._recording(self._next_ordinal()):
+                return world.chain(ctx, call)
+
+    def _next_ordinal(self) -> int:
+        """The ordinal of the call about to run, counting from 0. The lock is held."""
+        self._call_count += 1
+        return self._call_count - 1
+
+    @contextmanager
+    def _recording(self, i: int | None) -> Iterator[None]:
+        """Log every row the block changes, as one call's worth of records.
+
+        A session per call rather than per-call deltas off one long-lived
+        session: diffing consecutive cumulative changesets is O(everything the
+        episode changed) per call, which is the cost the change log exists to
+        keep off a harness. This is O(what the call changed).
+        """
+        session = open_session(self.db.conn, self._tracked)
+        try:
+            yield
+        finally:
+            # After the block's transaction has committed or rolled back and
+            # before any other write: `changeset()` joins what the session
+            # recorded against the live table, so a rolled-back row, or one
+            # written back to its original values, contributes nothing.
+            with closing(session):
+                changeset = session.changeset()
+            if changeset:
+                self._records.extend(render_log(changeset, self.db.conn, self._columns, i=i))
 
     def _control_db(self) -> Db:
         """A second read-only handle, opened once, for the control tools alone.
@@ -375,7 +451,9 @@ class Instance:
 
     @contextmanager
     def _bulk(self) -> Iterator[Ctx]:
-        with self._held(), self.db.transaction():
+        # `i=None`: authoring writes happen after creation and count, but there
+        # is no call in flight for them to belong to.
+        with self._held(), self._recording(None), self.db.transaction():
             yield self.ctx
 
     @contextmanager
@@ -451,7 +529,7 @@ class InstanceManager:
         self,
         fixture_id: str | None = None,
         *,
-        seed: int | bytes | None = None,
+        seed: int | None = None,
         now: str | datetime | None = None,
         startup_kwargs: Mapping[str, Any] | None = None,
     ) -> Instance:
@@ -496,15 +574,20 @@ class InstanceManager:
                 instance=InstanceInfo(id=instance_id, fixture=fixture_id, seed=seed_bytes),
             )
             _run_startup_hooks(world, ctx, kwargs)
+            # Asked once, here, so that the refusal of a table with no primary
+            # key is still a refusal at instance creation and the per-call
+            # sessions have nothing to work out.
+            tracked = tracked_tables(db.conn, world)
             instance = Instance(
                 id=instance_id,
                 fixture=fixture_id,
                 clock=clock,
                 ctx=ctx,
                 db=db,
-                # Attached after the hooks, so what they wrote is starting state
+                # Opened after the hooks, so what they wrote is starting state
                 # rather than a change the agent made.
-                session=start_session(db.conn, world),
+                session=open_session(db.conn, tracked),
+                tracked=tracked,
                 dir=directory,
                 world=world,
                 manager=self,

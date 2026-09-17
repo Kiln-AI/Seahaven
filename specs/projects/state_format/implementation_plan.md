@@ -10,7 +10,7 @@ move, then the old is removed. Details are in `functional_spec.md` (FS) and `arc
 
 ## Phases
 
-- [ ] **Phase 1: Capture the change log.** `LogRecord`, `render_log`, `tracked_tables`,
+- [x] **Phase 1: Capture the change log.** `LogRecord`, `render_log`, `tracked_tables`,
   `open_session`, the infinity mapping (ARCH §2.1, §3.3, §3.4); per-call and per-bulk sessions,
   the call ordinal, `call_count`, `change_log()` on `Instance` (ARCH §2.2, §3.1, §3.2, §4);
   `seed` narrowed to `int | None` (ARCH §7). `changes()` stays for now, so the fold test's first

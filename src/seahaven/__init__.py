@@ -15,7 +15,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from seahaven import helpers, sandbox
 from seahaven.call import Call
-from seahaven.changes import Change
+from seahaven.changes import Change, LogRecord
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx
 from seahaven.db import Db
@@ -49,6 +49,7 @@ __all__ = [
     "Fixture",
     "Ids",
     "Instance",
+    "LogRecord",
     "SeahavenError",
     "Tool",
     "ToolError",

@@ -406,6 +406,23 @@ def test_seed_passes_through(pytester: pytest.Pytester) -> None:
     pytester.runpytest().assert_outcomes(passed=2)
 
 
+def test_a_bytes_seed_in_the_marker_is_refused(pytester: pytest.Pytester) -> None:
+    """The marker passes `seed=` straight through, so a world's author meets the narrowing here."""
+    write_world(pytester)
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.seahaven(fixture=None, seed=b"sixteen bytes!!!")
+        def test_it(instance):
+            assert False, "the instance should never have been made"
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*a seed must be an int or None, not bytes*"])
+
+
 def test_now_passes_through(pytester: pytest.Pytester) -> None:
     write_world(pytester)
     pytester.makepyfile(
