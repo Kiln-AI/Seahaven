@@ -68,7 +68,7 @@ Three consequences drive everything below:
 | `world.name`, `world.version` | `World.name` and `World.version`. `world.version` is the world's identity: the docs say a schema, tool or state-format change bumps it. |
 | `fixture` | `{id, file_sha256}` from the fixture's sidecar, or `null` for an instance built from the DDL. With the world identity, this is the lookup for the starting state. |
 | `episode_id` | Over OpenEnv, the session's episode id (the one given to `reset`, or the generated one). In-process, the instance id. |
-| `seed` | The `seed=` the caller gave, as given: an integer, or `null`. (Open question §14.1 for `bytes`.) |
+| `seed` | The `seed=` the caller gave: an integer, or `null`. The API narrows to `int \| None` (§8). |
 | `now` | The instance clock as an ISO-8601 instant, the same string `inst.clock.iso()` answers. |
 | `startup` | The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, exactly as the startup hooks received them. An object; empty when there were none. |
 | `call_count` | How many calls have been dispatched to the instance so far (§7). Not OpenEnv's `step_count`, which also counts tool listings. |
@@ -254,6 +254,11 @@ world.instance("agency", seed=7, state_format="seahaven.state/1", user_id="u_12"
 - `inst.change_log()` returns the records as frozen dataclasses with a `to_dict()` of the §3.2
   shape, the way `Change` does today.
 - `inst.changes()` keeps its contract. It remains the reference for the fold (§3.6).
+- **`seed` is `int | None` everywhere.** `world.instance(seed=)`, the pytest marker and the seed
+  derivation drop `bytes`, which nothing needed: the caller's value is hashed with the fixture id
+  into the derived instance seed either way, and OpenEnv's `reset(seed=)` is already `int | None`.
+  A `bytes` seed raises a `WorldBug`, as any other wrong type does today. Accepted as a breaking
+  change on the same grounds as §5's.
 
 ## 9. Over OpenEnv
 
@@ -360,11 +365,7 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
 
 Numbered so they can be answered by number.
 
-1. **`seed` when the caller passed `bytes`.** `world.instance(seed=b"...")` is allowed today.
-   Options: base64 string in `seed` (loses the int/bytes distinction for a reader); or `seed` is
-   always the derived instance seed as base64, the value that actually drove `ctx.ids`, and never
-   the caller's. The second is more reproducible and less recognisable. I lean the caller's value,
-   base64 for bytes.
+1. *Answered 2026-09-17:* `seed` is `int | None`; `bytes` is dropped from the API (§8).
 2. **Non-finite reals.** SQLite cannot store NaN (it becomes `NULL`) but can store infinities,
    which JSON cannot carry. Options: refuse them at log time as a `WorldBug` (they cannot come
    from a well-formed world), or the strings `"Infinity"`/`"-Infinity"`. I lean `WorldBug`.
