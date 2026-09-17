@@ -43,6 +43,7 @@ pytest.importorskip(
 from fastapi import WebSocketDisconnect
 from openenv import GenericEnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
+from openenv.core.env_server.types import Observation
 from openenv.core.utils import convert_to_ws_url
 from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import connect as ws_connect
@@ -132,7 +133,8 @@ def test_the_typed_client_drives_a_session_end_to_end(world: World) -> None:
     fixture_id = _freeze(world)
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(fixture=fixture_id, seed=7)
-        assert reset.observation.result == {
+        assert type(reset.observation) is Observation
+        assert reset.observation.metadata == {
             "fixture": fixture_id,
             "now": INSTANT_ISO,
             "tools": 6,
@@ -158,7 +160,8 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
     fixture_id = _freeze(world)
     with serving(world) as url, GenericEnvClient(base_url=url) as env:
         reset = env.reset(fixture=fixture_id)
-        assert reset.observation["result"]["fixture"] == fixture_id
+        assert reset.observation["metadata"]["fixture"] == fixture_id
+        assert reset.metadata == reset.observation["metadata"]
         listed = env.step(ListToolsAction().model_dump()).observation
         assert [tool["name"] for tool in listed["tools"]] == [
             "execute",
@@ -180,6 +183,35 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
         state = env.state()
         assert state["world"] == world.name
         assert state["fixture"] == fixture_id
+
+
+def test_a_reset_frame_carries_its_facts_at_the_top_level_of_the_envelope(world: World) -> None:
+    """The raw wire, with no client at all: `metadata` is a sibling of `observation`.
+
+    OpenEnv's `serialize_observation` copies a non-empty `metadata` to the top
+    level of the envelope so a client that knows nothing of an environment's
+    observation class still finds it, and nothing does that for `result`. That
+    hoist is the reason a reset answers its facts in `metadata`, so it is
+    asserted here off the JSON itself rather than off either client's parse.
+    """
+    fixture_id = _freeze(world)
+    with serving(world) as url:
+        frame = asyncio.run(_raw_reset(url, fixture=fixture_id))
+    assert frame["type"] == "observation"
+    facts = {"fixture": fixture_id, "now": INSTANT_ISO, "tools": 6}
+    assert frame["data"] == {
+        "observation": {"metadata": facts},
+        "reward": None,
+        "done": False,
+        "metadata": facts,
+    }
+
+
+async def _raw_reset(url: str, **arguments: Any) -> dict[str, Any]:
+    """Reset a `/ws` session and answer the reply frame as the JSON it arrived as."""
+    async with ws_connect(convert_to_ws_url(url) + "/ws", proxy=None) as sock:
+        await sock.send(json.dumps({"type": "reset", "data": arguments}))
+        return dict(json.loads(await sock.recv()))
 
 
 def test_a_tool_error_reaches_the_stock_client_as_data(world: World) -> None:
@@ -229,7 +261,7 @@ def test_an_unknown_reset_kwarg_is_an_error_frame_and_the_session_survives(world
         with pytest.raises(RuntimeError, match=r"unknown reset argument\(s\)"):
             env.reset(nonsense=1)
         reset = env.reset(now=INSTANT_ISO)
-        assert reset.observation.result["now"] == INSTANT_ISO
+        assert reset.observation.metadata["now"] == INSTANT_ISO
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 

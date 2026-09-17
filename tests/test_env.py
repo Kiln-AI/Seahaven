@@ -36,7 +36,7 @@ from openenv.core.env_server.mcp_types import (
     ListToolsAction,
     ListToolsObservation,
 )
-from openenv.core.env_server.types import Action, EnvironmentMetadata
+from openenv.core.env_server.types import Action, EnvironmentMetadata, Observation
 from pydantic import BaseModel
 
 from seahaven.openenv.env import SeahavenEnv, SeahavenObservation, SeahavenState
@@ -96,14 +96,26 @@ def test_reset_makes_an_instance_and_describes_it(env: SeahavenEnv, world: World
     instance = env.instance
     assert instance is not None
     assert instance.fixture == fixture_id
-    assert observation.result == {
+    assert observation.metadata == {
         "fixture": fixture_id,
         "now": INSTANT_ISO,
         "tools": len(instance.tools()),
     }
-    assert observation.error is None
     assert observation.done is False
     assert observation.reward is None
+
+
+def test_reset_answers_a_plain_observation_and_not_a_tool_call(env: SeahavenEnv) -> None:
+    """No tool was called, so the answer is OpenEnv's base `Observation` and nothing more.
+
+    `type(...) is`, not `isinstance`: a `SeahavenObservation` is an `Observation`
+    too, and the claim is that a reset is not the shape of a tool call, which
+    means no `tool_name`, no `result` and no `error` on it at all.
+    """
+    observation = env.reset()
+    assert type(observation) is Observation
+    assert not isinstance(observation, SeahavenObservation)
+    assert set(observation.model_dump()) == {"done", "reward", "metadata"}
 
 
 def test_a_second_reset_destroys_the_first_instance(env: SeahavenEnv) -> None:
@@ -134,7 +146,7 @@ def test_reset_without_a_fixture_is_a_blank_instance_at_the_wall_clock(env: Seah
 
 def test_reset_with_now_puts_a_blank_instance_at_that_time(env: SeahavenEnv) -> None:
     observation = env.reset(now=INSTANT_ISO)
-    assert observation.result == {"fixture": None, "now": INSTANT_ISO, "tools": 6}
+    assert observation.metadata == {"fixture": None, "now": INSTANT_ISO, "tools": 6}
     assert env.instance is not None
     assert env.instance.clock.iso() == INSTANT_ISO
 
