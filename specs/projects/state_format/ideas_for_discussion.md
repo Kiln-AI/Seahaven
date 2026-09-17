@@ -127,8 +127,8 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
 - Ordering questions are answered by the log. Untouched rows are answered by lookup: the fixture,
   by world name, version, fixture id and hash; for a blank instance, the world's DDL plus what the
   startup hooks wrote.
-- Provenance gains `startup`: the reset keywords beyond `fixture`, `seed`, `now` and
-  `state_format`, the ones the startup hooks received (`{"user_id": "u_12"}`). They are the last
+- Provenance gains `startup` (confirmed 2026-09-17): the reset keywords beyond `fixture`, `seed`,
+  `now` and `state_format`, the ones the startup hooks received (`{"user_id": "u_12"}`). They are the last
   input the starting state depends on, and the principal the episode ran as is judge-relevant on
   its own. `seed` and `now` stay at the root as batch 2 has them and are not repeated under
   `startup`.
