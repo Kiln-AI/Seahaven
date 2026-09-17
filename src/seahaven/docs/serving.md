@@ -91,8 +91,10 @@ prevent. An unexpected Python exception inside a tool is logged with its traceba
 a fixed `{"code": "internal", "message": "internal error"}`, so engine text cannot reach an agent
 even from a world with no error handler.
 
-The `state` message answers `episode_id`, `step_count`, `fixture`, `now` and `world`. Every step
-counts, including one that was refused: the count is of what the session asked for.
+The `state` message answers the state document, plus OpenEnv's own `step_count` — `episode_id` is
+the document's own envelope field. Every step counts towards `step_count`, including one that was
+refused and a tool listing: the count is of what the session asked for, which is why it is not the
+document's `call_count`.
 
 Metadata is the world's `name` and `version`, and the environment's README is the world's top-level
 `README.md`, the one beside `pyproject.toml`, published whole as the card a hub shows. The one-line
@@ -133,7 +135,9 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     else:
         print(observation.error["code"], observation.error["message"])
 
-    print(env.state().now)  # the instance's frozen instant
+    state = env.state()
+    print(state.now)  # the instance's frozen instant
+    print(state.state["db"]["log"])  # what the format produced; here, the change log
 ```
 
 `call` and `list_tools` are awaitable in asynchronous code and direct in synchronous code, like the
@@ -146,38 +150,28 @@ conveniences, not a different protocol.
 
 ## Reading the instance
 
-An eval reads what the episode left behind from the `state` message, which answers the state
-document: the framework's provenance envelope plus the change log. Over OpenEnv that is
-`SeahavenClient.state()`; in process it is `inst.state()`.
+An eval reads what the episode left behind from the `state` message, which answers the **state
+document**: the framework's provenance envelope, and `state` from the format this episode is
+running in. Over OpenEnv that is `SeahavenClient.state()`; in process it is `inst.state()`. The
+page for the document itself — both built-in formats, registering your own, the change log and how
+to grade on it — is [state.md](state.md).
 
-### The control tool
+Two things are true only over the wire:
 
-For a read the document does not answer — arbitrary inspection SQL — the framework registers one
-control tool on every world:
+- **`SeahavenState` is the document plus `step_count`, and nothing else.** `episode_id` is the
+  document's own envelope field and lands on the base model's field of that name; `step_count` is
+  the only thing OpenEnv adds. So `state().state` is the format's output, and
+  `state().model_dump(exclude={"step_count"})` is exactly the dict `inst.state()` answers in
+  process — which is what a harness saves as its `final_state`.
+- **The format is chosen at `reset`, and nowhere else.** `reset(state_format="…")` overrides the
+  world's pin for that episode; the `state` message itself carries no arguments, so the in-process
+  `inst.state(format=…)` has no counterpart here. An unregistered name is refused before anything
+  is copied, as `EXECUTION_ERROR`, and the session stays open.
 
-| Tool | What it does |
-|---|---|
-| `controller_run_sql(sql, params=None)` | one statement on a read-only connection of the instance's own: every table, the instance clock, no caps, SQLite's own error text. Result shape as `run_sql` |
-
-**It is deprecated**: `state` is what an eval reads now. A call raises a `DeprecationWarning` in
-the process that serves it, reported against your own calling line rather than a frame inside the
-framework. Python's filters then apply to *that* location, so what you see depends on where your
-call lives: from a script you ran directly the defaults show it, once per call site; from an
-imported module the defaults hide it, so run with `-W default::DeprecationWarning`, which shows it
-once per call site either way rather than once per call. It is not scheduled for removal.
-
-It is a thin wrapper over the instance and owns no SQL of its own. It reads through the instance's
-own read-only control connection and **not** through the `inspect()` handle — same file, same
-read-only opener, a second connection, because a control read borrows connection-level state for the
-length of a statement while `inspect()` is the handle you read through on any thread you like. Its
-arguments are validated like any tool's, so a bad `sql` argument is an `ArgumentError`. Nothing else
-about a normal call applies: no middleware, no error handler, no transaction and no gate, because an
-eval wants the real message.
-
-**Over a server it exists only with `--include-control-tools`.** Without the flag, calling it is
-`UnknownTool` in exactly the words an unregistered name earns, so an agent cannot tell the two apart
-and a hub deployment does not expose it. It never appears in the tool list, flag or not. In process,
-`inst.call("controller_run_sql", sql=...)` always reaches it, and `inst.tools()` never lists it.
+A read the document does not answer — arbitrary inspection SQL against a live episode — is what
+`--include-control-tools` is for. It is deprecated, undocumented beyond the flag's line in
+[reference/cli.md](reference/cli.md), never listed in the tool list, off unless the operator asks
+for it, and `state` is what an eval reads now.
 
 ## Operator options
 
@@ -188,7 +182,7 @@ and a hub deployment does not expose it. It never appears in the tool list, flag
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls execute at once; `0` for no gate |
 | `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the control tool callable over the wire |
+| `--include-control-tools` | off | make the deprecated control tool callable over the wire; it is never listed |
 | `--world module:attr` | the convention | which world to serve |
 
 **The idle reaper matters.** A held session costs its fixture copy on disk and about a megabyte of

@@ -2,8 +2,8 @@
 
 An instance is meant to replay: the same fixture and the same caller seed give
 the same identifiers, so a test can assert on an id and two runs can be compared
-changeset to changeset. That rules out `uuid.uuid4`, which reads the OS entropy
-pool. World code draws from `ctx.ids` instead.
+log to log. That rules out `uuid.uuid4`, which reads the OS entropy pool. World
+code draws from `ctx.ids` instead.
 
 SQL is the other door. `random()` and `randomblob()` are overridden on every
 connection an instance opens, the way `clock.py` overrides the date and time

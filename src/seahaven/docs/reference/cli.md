@@ -153,7 +153,7 @@ Runs the OpenEnv server for this world: one world, many sessions, one worker pro
 | `--max_concurrent_envs N` | `500` | how many sessions may be open at once |
 | `--concurrency N` | `min(cpus, 16)` | how many tool calls execute at once; `0` for no gate |
 | `--session-timeout SECONDS` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the control tool callable over the wire; it is never listed |
+| `--include-control-tools` | off | make the control tool `controller_run_sql` callable over the wire; it is never listed. **Deprecated** — the `state` message is what an eval reads now, and each call raises a `DeprecationWarning` against the caller's own line in the process that serves it — Python's default filters hide it outside `__main__`, so run with `-W default::DeprecationWarning` to see it, once per call site |
 
 ```sh
 seahaven serve

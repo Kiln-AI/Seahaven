@@ -158,8 +158,8 @@ class Db:
 
         Errors raised through it are APSW's, not `DbError`. Do not close it,
         change its pragmas or its authorizer, or open a second connection to the
-        same file: the clock and randomness functions, the changeset session and
-        the per-call transaction all live on this connection.
+        same file: the clock and randomness functions, the change log's per-call
+        session and the per-call transaction all live on this connection.
         """
         return self._conn
 

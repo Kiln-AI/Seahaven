@@ -53,6 +53,15 @@ effects, then registers any imported factories. A module under `tools/` or `midd
 nothing imports registers nothing, and `seahaven check` fails on it (`SH301`) rather than letting
 the world quietly have one tool fewer than you think.
 
+`src/notes/world.py` holds the `World(...)` itself, and one of its arguments is **required and has
+no default**: `state_format=`, the format `inst.state()` answers in for every instance of this
+world. The scaffold writes `state_format="seahaven.state/1"`, the whole change log, which is what
+an eval that reads the state once at the end wants; [state.md](state.md) covers the other two
+choices. Leaving it out is a `WorldBug` at import, naming the built-ins. It is pinned on the world,
+once, rather than defaulted per release, so that upgrading Seahaven never changes what a running
+eval saves — and it is `reset`'s keyword too, alongside `fixture`, `seed` and `now`, for the caller
+that wants a different format for one episode.
+
 ## Writing a tool
 
 A tool is a plain synchronous function. Its first parameter is the instance context; the rest are
@@ -221,8 +230,8 @@ statements autocommit, and the tool opens its own transactions where it wants th
 All of it at import, with a message naming the tool and the parameter. A tool is refused when it:
 
 - duplicates another tool's name;
-- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or `controller_run_sql`
-  (the framework's control tool);
+- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or the name of the
+  framework's own control tool, which the refusal spells out;
 - is an `async def`, a generator, or an async generator;
 - has no first parameter, or one that is not positional and either annotated `seahaven.Ctx` or left
   unannotated;
@@ -489,10 +498,10 @@ World code never sets a pragma.
 
 **FTS5** is supported as far as a world's own search tool needs. A virtual table and its sync
 triggers are allowed in the DDL and are exempt from the `STRICT` and primary-key rules; FTS5's
-shadow tables are known to the framework and stay out of changesets, out of the freeze comparison,
-and out of `run_sql`'s default allowlist. Write the search tool in plain SQL with `MATCH`, `bm25()`
-and `snippet()`. The ranking is FTS5's, which is not Lucene's, and an eval that grades on "the best
-result" is grading on what this SQLite build computes.
+shadow tables are known to the framework and stay out of the change log, out of the freeze
+comparison, and out of `run_sql`'s default allowlist. Write the search tool in plain SQL with
+`MATCH`, `bm25()` and `snippet()`. The ranking is FTS5's, which is not Lucene's, and an eval that
+grades on "the best result" is grading on what this SQLite build computes.
 
 A world's own search tool is the usual path, and ProjectTracker's `search_issues` is the pattern.
 `MATCH` through `seahaven.helpers.run_sql` is possible too, and the whole of what it takes is
@@ -567,7 +576,7 @@ generates it. See [fixtures.md](fixtures.md).
 the same `created_at`, and ordering by it is not an order. For raw SQL the answer is `ORDER BY
 created_at, rowid`. For a *tool* there is no complete answer today: a keyset cursor has to carry its
 tiebreaker as a value, and `rowid` is not a column a world projects. Order by `(created_at, id)`,
-say so in the tool's docstring, and grade evals on state and changesets rather than on the order of
+say so in the tool's docstring, and grade evals on the state document rather than on the order of
 an activity feed. The framework-level question — whether `ctx` should offer a monotonic per-instance
 counter — is open, and is `BACKLOG.md` B23 in the Seahaven repository.
 

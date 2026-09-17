@@ -36,8 +36,8 @@ The schema is hand-written SQLite DDL in `schema/`, applied in filename order to
 and matter more than they look:
 
 - every table is `STRICT`, so SQLite stores what the column says and not whatever it was handed;
-- every table has an explicit primary key, because a table without one cannot be tracked in a
-  changeset;
+- every table has an explicit primary key, because a table without one cannot be tracked in the
+  change log;
 - no wall-clock expression anywhere — no `CURRENT_TIMESTAMP` default, no `datetime('now')` in a
   trigger. Timestamps are written by world code, from the instance's clock, in one format.
 
@@ -196,7 +196,7 @@ also gives the agent, is outside the promise by rule.
 `inst.change_log()` returns every row the instance has changed since it was created, one record per
 row per call, in call order: each record carries the ordinal of the call that made it, the table,
 the operation, the row's key, and the row before and after. `inst.state()` is the same log inside a
-document of provenance, which is what an eval saves.
+document of provenance, which is what an eval saves — [state.md](state.md) is the page for it.
 
 ```python
 import projecttracker
@@ -223,7 +223,9 @@ overcounts. And:
   shadow tables.
 
 This is what an eval grades on: the state the episode left behind, rather than the transcript of how
-it got there.
+it got there. One more trap goes with the overcounting above, and is worth knowing before you
+grade: two episodes with the same end state can have different logs. [state.md](state.md) has that
+one and the fold that answers them both.
 
 ## What is not here
 

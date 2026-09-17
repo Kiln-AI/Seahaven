@@ -28,8 +28,8 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   tool calls per second.
 - **Reproducible.** Same fixture, same frozen clock, same seeded ids: the same run, every time. The
   clock is frozen in Python and in SQL.
-- **Changesets.** The net diff between the fixture and what the agent left behind. Grade on state,
-  not on transcripts.
+- **State documents.** Every row the agent changed, with the provenance of the episode around it,
+  as JSON. Grade on state, not on transcripts.
 - **Composable worlds.** Add sub-worlds to your world, like a full Stripe or Shopify API. Compose,
   reuse and share worlds.
 - **[OpenEnv](https://huggingface.co/docs/openenv/index).** `seahaven serve` is an OpenEnv
@@ -86,7 +86,7 @@ def search_stale_leads(ctx: seahaven.Ctx, query: str) -> list[dict[str, str]]:
 Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
 
 **Run your agent against it:** Every rollout gets a private copy of a fixture, the same seed replays the
-same run, and what the agent changed is a diff:
+same run, and what the agent changed comes back as data:
 
 ```py
 for rollout in range(100):
@@ -110,7 +110,8 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     env.reset(fixture="big_co", seed=42)
     env.call("create_contact", email="ada@example.com", notes="asked about pricing for 50 seats")
     stale = env.call("search_stale_leads", query="pricing").result
-    changes = env.state()  # the final state, as a diff
+    state = env.state()  # the document as a model: .state["db"]["log"] is the change log
+    final_state = state.model_dump(exclude={"step_count"})  # the plain dict, ready for json.dump
 ```
 
 **Example World:** see [ProjectTracker](worlds/projecttracker/), the reference world: a

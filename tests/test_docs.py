@@ -16,13 +16,15 @@ import pytest
 import seahaven
 from seahaven.cli.docs import docs_path
 
-# The layout of `components/pytest_and_docs.md` §2, verbatim.
+# The layout of `components/pytest_and_docs.md` §2, plus `state.md`, which the
+# state-format project added and that section has not been updated for.
 PAGES = (
     "index.md",
     "concepts.md",
     "authoring.md",
     "fixtures.md",
     "testing.md",
+    "state.md",
     "serving.md",
     "extensions.md",
     "projecttracker.md",
@@ -145,3 +147,34 @@ def test_the_lint_packages_own_table_agrees_with_the_reference() -> None:
     from seahaven import lint
 
     assert set(_DOCUMENTED.findall(lint.__doc__ or "")) == registered_codes()
+
+
+# `functional_spec.md` §11: `controller_run_sql` is deprecated and leaves the
+# docs entirely, except for the one line of `reference/cli.md` that documents the
+# flag it lives behind. The prefix is the thing to search for -- it is how every
+# control tool is spelled -- and the exception is a whole line rather than a
+# page, so that the deprecation line cannot quietly grow a worked example.
+_CONTROL_PREFIX = "controller_"
+_CONTROL_PAGE = "reference/cli.md"
+
+# `Instance.changes()` was removed with the change log. A page that still calls
+# it is an example that raises `AttributeError` for whoever pastes it, and no
+# fence check catches a mention in prose.
+_REMOVED_CALL = "changes()"
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_no_page_names_a_control_tool_but_the_cli_reference(page: str) -> None:
+    text = (DOCS / page).read_text(encoding="utf-8")
+    naming = [line for line in text.splitlines() if _CONTROL_PREFIX in line]
+    if page != _CONTROL_PAGE:
+        assert not naming, f"{page} names a control tool: {naming}"
+    else:
+        assert len(naming) == 1, f"{page} names a control tool on {len(naming)} lines, not one"
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_no_page_calls_the_removed_changes_method(page: str) -> None:
+    text = (DOCS / page).read_text(encoding="utf-8")
+    naming = [line for line in text.splitlines() if _REMOVED_CALL in line]
+    assert not naming, f"{page} still calls a method the framework removed: {naming}"

@@ -96,7 +96,7 @@ tiebreaker as a value, and `rowid` is not a column a world projects. ProjectTrac
 
 The framework question is whether `Ctx` should offer a monotonic per-instance counter beside
 `ctx.ids` and `ctx.clock` — one that a world can store in a column and page on — or whether the
-right answer is that evals should grade on state and on changesets rather than on the order of an
+right answer is that evals should grade on the state document rather than on the order of an
 activity feed. Either way it is a decision for the framework, not for one world, and it should be
 settled before the docs phase describes activity tables as a pattern.
 
@@ -191,6 +191,30 @@ from); refuse a schema whose statements are not pure DDL, which `lint/ddl.py` is
 for and which `_WALL_CLOCK` there half does already as a warning; or state in `authoring.md` that
 schema files are DDL only and that seed rows belong in a startup hook, where `ctx` is in hand. Not
 taken here because it is neither the clock's phase nor the randomness change's scope.
+
+### B28. `openenv.md` has never been written, and owes the state document a section
+
+**Found:** 2026-09-17, the state-format project's documentation phase (`specs/projects/state_format/`,
+FS §12, ARCH §12). **Owner:** whoever lands `openenv.md`. **Risk:** low and self-limiting — the
+page does not exist, so nothing in it is wrong today.
+
+FS §12 scheduled one documentation edit this project could not make: `openenv.md` was expected to
+arrive from another branch and to be brought to the new state surface by the phase that wrote
+`state.md`. It has not landed. The bundled docs hold twelve pages and none of them is it, and
+`tests/test_docs.py`'s `PAGES` is the layout in full.
+
+What that page owes the state document, when someone writes it: the `state` message answers the
+whole document and not a summary of it; `SeahavenState` is that document plus OpenEnv's own
+`step_count` (`episode_id` is the document's own envelope field, carried on the base model), so
+`state().model_dump(exclude={"step_count"})` is the dict `inst.state()` answers in process;
+`step_count` counts tool listings and refused steps and is therefore not the document's
+`call_count`; `reset(state_format=...)` picks the format for an episode and the `state` message
+itself takes no arguments, so the in-process `inst.state(format=...)` has no counterpart over the
+wire; and a rollout harness that embeds state in every step wants `seahaven.state+last_step/1`
+rather than the whole log per step. All of it is already written, in `serving.md`'s "Reading the
+instance" and in `state.md` — the new page should link to them rather than restate them, and
+`index.md`, `tests/test_docs.py`'s `PAGES` and the scaffold's `AGENTS.md` reading list each need
+the new page added.
 
 ---
 

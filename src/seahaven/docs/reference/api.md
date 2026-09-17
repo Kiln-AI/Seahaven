@@ -61,7 +61,8 @@ gives a string that is blank, publishes `Seahaven world <name>`. `fixtures_dir` 
 holding `pyproject.toml`, and to `fixtures/` beside the package where there is none. `work_dir` is
 where instance copies live; the default is a per-process directory under the system temp directory,
 which is swept of previous processes' leftovers, and a directory you name is used exactly as given
-and never swept. `untracked_tables` names tables the changeset session does not attach.
+and never swept. `untracked_tables` names tables the change log does not record: the per-call
+session never attaches them.
 
 A `World` whose DDL does not execute cannot be constructed: the schema is built in memory to compute
 the schema hash, and SQLite's own message is reported. Nor is one whose `name` is not a single
@@ -157,8 +158,8 @@ rather than the statement, so read it straight after an `INSERT`.
 
 `db.conn` is there for what the wrapper does not cover — blob I/O, an exec trace. The invariants:
 **do not close it, change its pragmas or its authorizer, or open a second connection to the instance
-file.** The clock functions, the changeset session and the per-call transaction all live on that one
-connection.
+file.** The clock functions, the change log's per-call session and the per-call transaction all live
+on that one connection.
 
 ## `Clock`
 
@@ -240,6 +241,9 @@ record.to_dict()  # the published shape, in the published field order
 An insert's `after` and a delete's `before` are the whole row. An update carries exactly the non-key
 columns that call changed, old values in `before` and new in `after`; the key is in `record.key` and
 in neither side. A primary-key rewrite is a delete plus an insert, never an update.
+
+The record's rules, the two built-in formats, the envelope's fields and the compatibility contract
+are in [../state.md](../state.md).
 
 ## `Fixture`
 
@@ -398,7 +402,10 @@ class SeahavenClient:  # .reset(...), .call(tool, /, **arguments), .list_tools()
 # CallToolAction, ListToolsAction and ListToolsObservation.
 ```
 
-See [../serving.md](../serving.md).
+`SeahavenState` is the state document plus OpenEnv's `step_count` — `episode_id` is the document's
+own envelope field, carried on the base model — so `state().state` is the format's output and
+`state().model_dump(exclude={"step_count"})` is the dict `inst.state()` answers. See
+[../serving.md](../serving.md) and [../state.md](../state.md).
 
 ## The pytest plugin
 

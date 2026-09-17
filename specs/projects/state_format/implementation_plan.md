@@ -39,7 +39,7 @@ move, then the old is removed. Details are in `functional_spec.md` (FS) and `arc
   the suites and the docs test stay green; the `bench/` probe and the performance test (ARCH §16),
   with the measured number recorded in the phase plan.
 
-- [ ] **Phase 5: Documentation.** `state.md` in the three-case order; `serving.md`, `testing.md`,
+- [x] **Phase 5: Documentation.** `state.md` in the three-case order; `serving.md`, `testing.md`,
   `concepts.md`, `authoring.md`, `index.md`, `reference/api.md`, `reference/cli.md`,
   `reference/lints.md` SH101 sentence, the README example; `openenv.md` if it has landed, else a
   `BACKLOG.md` entry (FS §12, ARCH §12). Every example executes under the docs test; no doc

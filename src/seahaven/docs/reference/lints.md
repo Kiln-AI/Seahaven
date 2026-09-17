@@ -55,7 +55,10 @@ their shadow tables are exempt; a virtual table cannot be `STRICT`.
 **Why.** Without `STRICT`, SQLite stores whatever it is handed: a string in an `INTEGER` column, a
 float in a `TEXT` one. A world is a mock of a real product's data, and an eval that grades on a
 column's value needs the column to hold what the schema says. The failure without this rule is
-silent and arrives weeks later as a comparison that does not match.
+silent and arrives weeks later as a comparison that does not match. STRICT is also what keeps every
+row visible to the change log: a STRICT table refuses `NULL` in a primary-key column, and a row with
+a `NULL` key is one SQLite's session extension never records — so without this rule a write could
+be missing from a graded document with nothing to say so.
 
 **Fix.** `append STRICT to the CREATE TABLE <name>`. Note that a `STRICT` table's columns must each
 be declared with one of the types SQLite allows there — `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` or

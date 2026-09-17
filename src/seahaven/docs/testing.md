@@ -187,4 +187,4 @@ promised in its description — that `agency` really has twelve people, that no 
 assignee — so that regenerating it cannot quietly change the deal.
 
 **What not to test:** the framework. That a `Literal` produces a JSON schema, that a rollback rolls
-back, that the changeset renders — those have tests of their own in Seahaven's suite.
+back, that the change log renders — those have tests of their own in Seahaven's suite.

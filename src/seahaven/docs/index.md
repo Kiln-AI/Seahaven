@@ -58,10 +58,11 @@ lays one out — and adds fixtures, errors and an error handler.
 
 | Page | What it covers |
 |---|---|
-| [concepts.md](concepts.md) | World, fixture, instance, tool, clock, reproducibility, changesets |
+| [concepts.md](concepts.md) | World, fixture, instance, tool, clock, reproducibility, the change log |
 | [authoring.md](authoring.md) | Writing tools, errors and the error handler, middleware, startup hooks, schema rules |
 | [fixtures.md](fixtures.md) | Freezing, forking, generators, descriptions for eval authors |
 | [testing.md](testing.md) | The pytest plugin, what to test in a world |
+| [state.md](state.md) | The state document, both built-in formats, registering your own, grading on the change log |
 | [serving.md](serving.md) | `seahaven serve`, the OpenEnv client, reading the instance, publishing to a hub |
 | [extensions.md](extensions.md) | The extension contract, the XML-RPC example |
 | [projecttracker.md](projecttracker.md) | A walkthrough of the reference world |
