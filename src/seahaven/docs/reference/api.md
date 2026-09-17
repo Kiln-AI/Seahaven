@@ -62,6 +62,7 @@ class World:
         version: str,
         schema: str,
         *,
+        state_format: str | None = None,
         description: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
@@ -83,10 +84,12 @@ class World:
 
 One per world package, built at import in `world.py`. `schema` is the world's `CREATE TABLE`
 statements as one string, usually from `sql_files`. `name` and `version` are informational and
-appear in the OpenEnv metadata and in every fixture's sidecar. `description` is the one-line
-description the OpenEnv metadata publishes. It is a free string, unvalidated, and the only thing
-that sets that line; a world that gives none, or gives a blank string, publishes `Seahaven world
-<name>`. `fixtures_dir` defaults to `fixtures/` at the project root, found by walking up from the
+appear in the OpenEnv metadata and in every fixture's sidecar. `state_format` is required: it is
+the format `inst.state()` answers in, and a world constructed without one is refused with the
+built-in names in the message. `description` is the one-line description the OpenEnv metadata
+publishes. It is a free string, unvalidated, and the only thing that sets that line; a world that
+gives none, or gives a blank string, publishes `Seahaven world <name>`. `fixtures_dir` defaults to
+`fixtures/` at the project root, found by walking up from the
 constructing module to the directory holding `pyproject.toml`, and to `fixtures/` beside the package
 where there is none. `work_dir` is where instance copies are kept; the default is a per-process
 directory under the system temp directory, which is swept of previous processes' leftovers, and a
@@ -111,7 +114,9 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.middleware(obj=None)` | register a middleware, as a decorator or a call. Order is registration order, outermost first |
 | `world.instance_startup(obj=None)` | register a startup hook, as a decorator or a call |
 | `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call it; there is nothing to decorate |
-| `world.instance(fixture=None, *, seed=None, now=None, **startup_kwargs)` | make an instance; a context manager |
+| `world.state_format(name)` | register a state format of this world's own, as a decorator. The name is `<family>/<major>` and may not begin with `seahaven.` |
+| `world.resolve_state_format(name)` | the formatter a name answers to: a built-in, or one this world registered. Asked of the root of an instance and of nothing else |
+| `world.instance(fixture=None, *, seed=None, now=None, state_format=None, **startup_kwargs)` | make an instance; a context manager. `state_format` answers in another of this world's formats, in place of the pin |
 | `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
@@ -121,7 +126,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.accepted_startup_kwargs` | every keyword some hook names |
 | `world.added_worlds` | what `add_world` recorded, in registration order. Read-only |
 | `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
-| `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir` | as given, plus the hash of the normalised schema |
+| `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir`, `world.pinned_state_format` | as given, plus the hash of the normalised schema |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
 [../authoring.md](../authoring.md).
@@ -166,6 +171,7 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.tools()` | the tool list with JSON schemas, as `{"name", "description", "input_schema"}`. One flat list over every world this one adds. Control tools are never in it |
 | `inst.inspect()` | a read-only `Db` on a second connection: every table, the instance clock, opened once and kept. Every added world's store is attached read-only under its path. Never a tool |
 | `inst.changes()` | the cumulative changeset since creation, as `list[Change]`, covering every store |
+| `inst.state(format=None)` | the state document as a plain dict: the envelope, and `state` from this instance's format. `format` answers in another of the world's formats instead. Refused inside `bulk()` or a tool call |
 | `inst.composition()` | what this instance is running against: one `NodeReport` per store, root first |
 | `inst.freeze(id, description)` | mint a fixture from the current state; returns the `Fixture`. Refuses inside `bulk()` |
 | `inst.bulk()` | a context manager yielding the instance's own `Ctx`, in one transaction, for loading rows fast |

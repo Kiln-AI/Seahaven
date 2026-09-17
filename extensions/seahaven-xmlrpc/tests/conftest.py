@@ -80,6 +80,7 @@ def probe(tmp_path: Path) -> Callable[..., seahaven.World]:
             tracker.schema,
             fixtures_dir=tmp_path / "fixtures",
             work_dir=tmp_path / "work",
+            state_format="seahaven.state/1",
         )
         built.middleware(error_handler)
         if render_faults:

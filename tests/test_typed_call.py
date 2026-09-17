@@ -46,6 +46,7 @@ def rowed(name: str, **options: Any) -> Tools:
     The functions themselves, not their names: a host reaches an added world's
     tool by importing it, and this is what an import would hand back.
     """
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(
         name,
         "1.0.0",

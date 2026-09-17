@@ -11,7 +11,7 @@ fixtures, not examples to copy: `messy` and `broken_ddl` are wrong on purpose.
 | `messy` | A wall clock, `random`, `uuid.uuid4()`, an undescribed tool and an orphan module |
 | `broken_ddl` | DDL SQLite refuses, so the `World` cannot be constructed (SH104) |
 | `no_world` | A package with no `world` attribute (SH501) |
-| `payments` | The leaf of the composite: two tools, one table, one bindable startup keyword |
+| `payments` | The leaf of the composite: two tools, one table, one bindable startup keyword, a pin of its own and a state format of its own |
 | `shop` | Adds `payments` with an empty allow list, and has one tool of its own |
 | `emporium` | The composite host: `payments`, a second `payments` account, and `shop` |
 | `ledger` | A leaf whose two tools' descriptions name each other, which a prefix makes stale |

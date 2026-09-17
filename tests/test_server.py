@@ -115,6 +115,7 @@ def trivial_world(tmp_path: Path) -> Iterator[World]:
         "CREATE TABLE notes (id TEXT PRIMARY KEY) STRICT;",
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
+        state_format="seahaven.state/1",
     )
 
     @world.tool

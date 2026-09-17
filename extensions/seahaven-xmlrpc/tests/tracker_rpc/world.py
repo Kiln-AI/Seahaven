@@ -25,4 +25,5 @@ world = seahaven.World(
     # string in its schema set": `sql_files` reads files, and an extension ships
     # text.
     schema=seahaven.sql_files("projecttracker", "schema") + seahaven_xmlrpc.CALL_LOG_DDL,
+    state_format="seahaven.state/1",
 )

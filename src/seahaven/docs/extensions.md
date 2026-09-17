@@ -54,6 +54,7 @@ world = seahaven.World(
     name="myworld",
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema") + seahaven_xmlrpc.CALL_LOG_DDL,
+    state_format="seahaven.state/1",
 )
 ```
 

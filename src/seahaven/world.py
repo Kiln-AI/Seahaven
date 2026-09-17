@@ -2,9 +2,9 @@
 
 One `World` per world package, built at import time in the package's `world.py`,
 and the object every tool module imports to register against. It owns the tool
-registry, the middleware list and the startup hooks, and it is where a mistake in
-any of them is found: registration validates immediately and fails with a
-`WorldBug` naming what is wrong.
+registry, the middleware list, the startup hooks and the state formats, and it is
+where a mistake in any of them is found: registration validates immediately and
+fails with a `WorldBug` naming what is wrong.
 
 Registration is open for the life of the world. The registry and the middleware
 chain are read at call time, so a tool or a middleware registered after instances
@@ -48,6 +48,7 @@ from seahaven.errors import WorldBug
 from seahaven.fixtures import Fixture, load_all
 from seahaven.instances import Instance, InstanceManager, calling
 from seahaven.names import NAME_RULE, why_not_a_name
+from seahaven.state import BUILTIN_FORMATS, BUILTIN_PREFIX, Formatter, check_format_name
 from seahaven.tool import Tool
 
 __all__ = [
@@ -78,7 +79,7 @@ RESERVED_TOOL_NAMES = frozenset({"close", "reset", "state", "step"})
 CONTROL_TOOL_NAMES = frozenset({"controller_changes", "controller_run_sql"})
 
 # `reset`'s own arguments, which a startup hook therefore cannot take.
-RESET_ARGUMENTS = frozenset({"fixture", "now", "seed"})
+RESET_ARGUMENTS = frozenset({"fixture", "now", "seed", "state_format"})
 
 FIXTURES_DIRNAME = "fixtures"
 SQL_SUFFIX = ".sql"
@@ -124,12 +125,23 @@ class World:
         version: str,
         schema: str,
         *,
+        state_format: str | None = None,
         description: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
     ) -> None:
         _check_name(name)
+        # Required, and spelled with a default so that leaving it out is this
+        # refusal rather than a `TypeError` naming a parameter: a world author
+        # meeting it for the first time needs the built-in names, and a missing
+        # argument is where they are worth saying (`functional_spec.md` §5).
+        #
+        # `pinned_state_format` and not `state_format`: the registration method
+        # below is `world.state_format(...)`, which is the spelling a world
+        # author writes (`functional_spec.md` §6), and one name cannot be both a
+        # string and a decorator. (`architecture.md` §5.2 gave it to both.)
+        self.pinned_state_format = _checked_state_format(name, state_format)
         self.name = name
         self.version = version
         self.schema = schema
@@ -162,6 +174,7 @@ class World:
         self._middlewares: list[Middleware] = []
         self._startup_hooks: list[RegisteredStartupHook] = []
         self._added_worlds: list[AddedWorld] = []
+        self._state_formats: dict[str, Formatter] = {}
         # The registration epoch and the tree sealed at it, as one attribute so
         # that reading the pair is one load and cannot tear. `None` until
         # something asks: a world that is only imported never walks its own tree,
@@ -305,6 +318,68 @@ class World:
             return self._register_startup_hook
         return self._register_startup_hook(obj)
 
+    def state_format(self, name: str, /) -> Callable[[Formatter], Formatter]:
+        """Register a state format of this world's own, by name.
+
+        ```python
+        @world.state_format("acme.state/1")
+        def acme_state(world: seahaven.World, instance: seahaven.Instance | None) -> dict:
+            ...
+        ```
+
+        The function answers the value of `state` and nothing else; the framework
+        writes the envelope around it, so a custom format can neither omit
+        provenance nor misspell it. It is called with `None` for the instance
+        before the first `reset` over OpenEnv, and one that raises on `None`
+        makes the pre-reset state a `WorldBug`, which is the author's contract
+        to keep.
+
+        A format is resolved against the **root** of an instance and only the
+        root, so what this registers serves this world when it is the root of a
+        tree or of its own instances, and is not inherited by a world that adds
+        it (`functional_spec.md` §6).
+
+        The name is checked here, where it is written, and the registration when
+        the decorator is applied. `seahaven.` is the framework's prefix and is
+        refused: a world that took one of those names would collide with a
+        format a later release publishes.
+        """
+        check_format_name(name)
+        if name.startswith(BUILTIN_PREFIX):
+            raise WorldBug(
+                f"state format {name!r} uses the prefix {BUILTIN_PREFIX!r}, which is reserved for "
+                f"Seahaven's own formats ({_builtin_names()}); name yours after your own family"
+            )
+
+        def register(fn: Formatter) -> Formatter:
+            if not callable(fn):
+                raise WorldBug(f"a state formatter is a function, not {type(fn).__name__}")
+            if name in self._state_formats:
+                raise WorldBug(f"state format {name!r} is registered twice")
+            # No `bump()`, deliberately, unlike every other registration verb: a
+            # format is not part of a sealed composition (composition
+            # `functional_spec.md` §2), and an added world's registry is never
+            # consulted, so nothing about a tree changes when one is added.
+            self._state_formats[name] = fn
+            return fn
+
+        return register
+
+    def resolve_state_format(self, name: str) -> Formatter:
+        """The formatter a name answers to: a built-in, or one this world registered.
+
+        Asked of the root of an instance and of nothing else, which is why an
+        added world's registrations never answer (`functional_spec.md` §6).
+        """
+        formatter = BUILTIN_FORMATS.get(name) or self._state_formats.get(name)
+        if formatter is None:
+            registered = ", ".join(sorted(self._state_formats)) or "none"
+            raise WorldBug(
+                f"world {self.name!r} has no state format {name!r}; the built-in formats are "
+                f"{_builtin_names()}, and this world registers {registered}"
+            )
+        return formatter
+
     def add_world(
         self,
         world: World,
@@ -379,6 +454,8 @@ class World:
         _check_bound_startup(added)
         _check_for_a_cycle(self, added)
         self._added_worlds.append(added)
+        # Every registration verb but `state_format` bumps the epoch (see
+        # `_register_startup_hook`).
         bump()
 
     def composition(self) -> Composition:
@@ -413,14 +490,16 @@ class World:
         *,
         seed: int | None = None,
         now: str | datetime | None = None,
+        state_format: str | None = None,
         **startup_kwargs: Any,
     ) -> Instance:
         """Make a live instance: a private copy of a fixture, or a blank one.
 
         `now` sets a blank instance's clock and is refused with a fixture, which
-        carries its own. Everything else keyword is passed to the startup hooks
-        that named it. The instance is a context manager and leaving the block
-        destroys it.
+        carries its own. `state_format` answers in another of this world's
+        formats for this instance alone, in place of the world's pin. Everything
+        else keyword is passed to the startup hooks that named it. The instance
+        is a context manager and leaving the block destroys it.
 
         Never from inside a tool call: a handler that wants another world reaches
         it through `ctx.worlds`, and a world that made its own instance would be
@@ -431,7 +510,13 @@ class World:
                 "instances cannot be created from inside a tool call; reach added worlds "
                 "through ctx.worlds"
             )
-        return self._instances().create(fixture, seed=seed, now=now, startup_kwargs=startup_kwargs)
+        return self._instances().create(
+            fixture,
+            seed=seed,
+            now=now,
+            state_format=state_format,
+            startup_kwargs=startup_kwargs,
+        )
 
     def fixtures(self) -> list[Fixture]:
         """Every fixture in the world's fixtures directory, by id.
@@ -449,13 +534,13 @@ class World:
         other caller too, for the rest of the run. A copy is how that is said
         locally.
 
-        A copy is a *snapshot of the four registries*, taken at copy time and
+        A copy is a *snapshot of the five registries*, taken at copy time and
         severed in both directions: the copy does not see a tool, a middleware, a
-        startup hook or an added world registered on the original afterwards, so
-        its `chain` is what its own snapshot seals to, and nothing registered on
-        the copy reaches back. That is the one place a world stops being open for
-        registration for the life of the process, so take the copy after
-        import-time registration is done.
+        startup hook, an added world or a state format registered on the original
+        afterwards, so its `chain` is what its own snapshot seals to, and nothing
+        registered on the copy reaches back. That is the one place a world stops
+        being open for registration for the life of the process, so take the copy
+        after import-time registration is done.
 
         The instance manager is deliberately *not* carried over: a manager hands
         the world it was made for to every instance it makes, and that world is
@@ -470,6 +555,7 @@ class World:
         twin._middlewares = list(self._middlewares)
         twin._startup_hooks = list(self._startup_hooks)
         twin._added_worlds = list(self._added_worlds)
+        twin._state_formats = dict(self._state_formats)
         # A copy is a distinct `World` object and therefore a distinct node, so it
         # reseals from its own snapshot on first use. Copy the *root* to relocate
         # its fixtures, never a world something else adds: a host that added the
@@ -541,6 +627,8 @@ class World:
         if not tool.control:
             self._tools_by_fn[tool.fn] = (*self._tools_by_fn.get(tool.fn, ()), tool)
         if invalidates_seals:
+            # Every registration verb but `state_format` bumps the epoch (see
+            # `_register_startup_hook`).
             bump()
 
     def _register_middleware(self, obj: Middleware) -> Middleware:
@@ -548,11 +636,16 @@ class World:
         self._middlewares.append(obj)
         # The chains are closures over the middleware each node had when the tree
         # was sealed, so this invalidates the seal and the next use rebuilds them.
+        # Every registration verb but `state_format` bumps the epoch (see
+        # `_register_startup_hook`).
         bump()
         return obj
 
     def _register_startup_hook(self, obj: StartupHook) -> StartupHook:
         self._startup_hooks.append(_as_startup_hook(obj))
+        # Every registration verb but `state_format` bumps the epoch, and that
+        # one is deliberate rather than forgotten: a format is not part of a
+        # composition's seal and an added world's formats are never consulted.
         bump()
         return obj
 
@@ -902,6 +995,33 @@ def _check_for_a_cycle(host: World, added: AddedWorld) -> None:
             continue
         seen.add(world)
         pending.extend(inner.world for inner in world.added_worlds)
+
+
+def _builtin_names() -> str:
+    return ", ".join(sorted(BUILTIN_FORMATS))
+
+
+def _checked_state_format(name: str, state_format: str | None) -> str:
+    """The format a world pins, or the refusal that says what a pin is for.
+
+    A built-in name is checked here, at the `World(...)` line. A name outside the
+    `seahaven.` prefix is not, and cannot be: a world registers its own formats
+    *after* that line runs, so the earliest a custom pin can be resolved is the
+    first instance (`functional_spec.md` §5).
+    """
+    if state_format is None:
+        raise WorldBug(
+            f"world {name!r} must pin a state format: World(state_format=...) is required, and it "
+            f"is what keeps upgrading Seahaven from changing what a running eval saves. The "
+            f"built-in formats are {_builtin_names()}"
+        )
+    check_format_name(state_format)
+    if state_format.startswith(BUILTIN_PREFIX) and state_format not in BUILTIN_FORMATS:
+        raise WorldBug(
+            f"world {name!r} pins state format {state_format!r}, which Seahaven does not publish; "
+            f"the built-in formats are {_builtin_names()}"
+        )
+    return state_format
 
 
 def _check_name(name: str) -> None:

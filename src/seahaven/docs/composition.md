@@ -36,6 +36,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -51,6 +52,7 @@ company = seahaven.World(
     name="company",
     version="0.1.0",
     schema="CREATE TABLE invoices (id TEXT PRIMARY KEY, charge_id TEXT NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments", tool_prefix="pay_")
 
@@ -100,7 +102,7 @@ import payments_world
 
 import seahaven
 
-world = seahaven.World(name="company", version="0.1.0", schema=...)
+world = seahaven.World(name="company", version="0.1.0", schema=..., state_format="seahaven.state/1")
 world.add_world(payments_world.world, name="payments", tool_prefix="pay_")
 ```
 
@@ -205,6 +207,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -220,6 +223,7 @@ shop = seahaven.World(
     name="shop",
     version="1.0.0",
     schema="CREATE TABLE orders (id TEXT PRIMARY KEY, total INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 # The shop charges through payments and hides it from the agent entirely.
 shop.add_world(payments, tool_allow_list=[])
@@ -235,7 +239,10 @@ def place_order(ctx: seahaven.Ctx, total: int) -> dict[str, object]:
 
 
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments", tool_prefix="pay_")
 company.add_world(shop, name="shop", tool_prefix="shop_")
@@ -328,9 +335,13 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments")
 
@@ -406,6 +417,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -417,7 +429,10 @@ def configure(ctx: seahaven.Ctx, *, region: str = "us", plan: str = "free") -> N
 
 
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments")
 company.add_world(payments, name="payments_eu", store="eu", startup={"region": "eu"})
@@ -541,12 +556,14 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 company = seahaven.World(
     name="company",
     version="0.1.0",
     schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
     fixtures_dir="fixtures",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments")
 
@@ -604,6 +621,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -616,7 +634,10 @@ def create_charge(ctx: seahaven.Ctx, amount: int) -> Charge:
 
 
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments", tool_prefix="pay_")
 

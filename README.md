@@ -58,6 +58,7 @@ world = seahaven.World(
     CREATE TABLE contacts (id TEXT PRIMARY KEY, email TEXT NOT NULL, notes TEXT NOT NULL, stage TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
     CREATE VIRTUAL TABLE contacts_fts USING fts5(notes, content='contacts');
     """,
+    state_format="seahaven.state/1",
 )
 
 

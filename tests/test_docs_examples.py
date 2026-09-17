@@ -290,6 +290,7 @@ def receivers(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
         version="1.0.0",
         schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
         fixtures_dir=directory / "fixtures",
+        state_format="seahaven.state/1",
     )
 
     @world.tool

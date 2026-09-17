@@ -15,6 +15,7 @@ world = seahaven.World(
     name="bazaar",
     version="0.1.0",
     schema=seahaven.sql_files(__package__, "schema"),
+    state_format="seahaven.state/1",
 )
 world.add_world(ledger.world, name="ledger", tool_prefix="ledger_")
 world.add_world(ledger.world, name="books", tool_prefix="books_")

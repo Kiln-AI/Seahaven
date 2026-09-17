@@ -37,6 +37,7 @@ def world_for(tmp_path: Path) -> World:
         NOTES_SCHEMA,
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
+        state_format="seahaven.state/1",
     )
 
 

@@ -6,6 +6,7 @@ one record's shape, the cumulative changeset, and which tables a session is
 attached to in the first place.
 """
 
+import threading
 from pathlib import Path
 
 import apsw
@@ -503,6 +504,23 @@ def test_a_call_record_to_dict_copies_the_arguments_all_the_way_down() -> None:
     record.to_dict()["arguments"]["tags"].append("b")
 
     assert record.arguments == {"tags": ["a"]}
+
+
+def test_a_call_record_to_dict_keeps_an_argument_that_cannot_be_deep_copied() -> None:
+    """What the capture tolerated, the rendering tolerates.
+
+    A parameter annotated `object` takes a lock or a socket in process, and the
+    capture keeps such a call rather than failing it; rendering the record has
+    to answer the same way, or reading a document would raise for a call the
+    framework deliberately let run.
+    """
+    lock = threading.Lock()
+    record = CallRecord(tool="hold", arguments={"thing": lock}, error=None)
+
+    rendered = record.to_dict()
+
+    assert rendered == {"tool": "hold", "arguments": {"thing": lock}, "error": None}
+    assert rendered["arguments"] is not record.arguments
 
 
 # Which tables a session is attached to: `tracked_tables`, asked once at creation,

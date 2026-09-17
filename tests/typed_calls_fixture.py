@@ -33,6 +33,7 @@ aliases = seahaven.World(
     name="aliases",
     version="1.0.0",
     schema="CREATE TABLE moves (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 

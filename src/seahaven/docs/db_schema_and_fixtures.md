@@ -213,6 +213,7 @@ world = seahaven.World(
     version="1.0.0",
     schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
     fixtures_dir=Path("fixtures"),
+    state_format="seahaven.state/1",
 )
 
 with world.instance(now="2026-06-01T09:00:00.000Z") as inst:

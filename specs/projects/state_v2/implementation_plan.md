@@ -32,7 +32,7 @@ anything on that branch that assumes an instance is one store is wrong here.
   `_recording` (one session on one connection) and its `_call` restructure (`main`'s dispatch
   differs and already gives FS §7).
 
-- [ ] **Phase 2: Formats and the world pin.** `seahaven/state.py` with `envelope` (composition
+- [x] **Phase 2: Formats and the world pin.** `seahaven/state.py` with `envelope` (composition
   and `fixture.nodes` keyed by path), `document`, the three built-ins and name validation
   (ARCH §5); `World(state_format=)` required and stored as `pinned_state_format`,
   `RESET_ARGUMENTS`, `world.state_format()` without `bump()`, `resolve_state_format`, `copy()`

@@ -426,7 +426,7 @@ def test_a_store_frozen_from_a_differently_named_world_is_reported_not_refused(
 
     # The same DDL under another world's name: the schema hash is unchanged, so
     # nothing is refused, and the difference has to be visible somewhere.
-    substitute = World("renamed", "1.0.0", CHILDS_DDL)
+    substitute = World("renamed", "1.0.0", CHILDS_DDL, state_format="seahaven.state/1")
     renamed = rooted("host", tmp_path)
     renamed.add_world(substitute, name="child")
 

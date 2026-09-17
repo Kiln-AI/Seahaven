@@ -23,7 +23,7 @@ says which node it came from.
 import base64
 import copy
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -151,13 +151,42 @@ class CallRecord:
     def to_dict(self) -> dict[str, Any]:
         """The published shape, in the field order `functional_spec.md` §4.2 gives.
 
-        `arguments` is deep-copied because a caller's values can nest.
+        `arguments` is copied the same way the capture copied it: deeply where a
+        deep copy of the whole mapping is possible, and shallowly where it is
+        not. Anything else
+        would make a document raise for a call the framework deliberately let
+        run -- and a document whose calls carried values JSON cannot carry is
+        not JSON-able either way, which is what `functional_spec.md` §4.2 says
+        of it.
         """
         return {
             "tool": self.tool,
-            "arguments": copy.deepcopy(self.arguments),
+            "arguments": _copied_arguments(self.arguments),
             "error": self.error,
         }
+
+
+def _copied_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    """One call's arguments as the call log keeps them: a deep copy where one is possible.
+
+    The copy is what makes a record the call as made rather than whatever a tool
+    left in the dict it was handed. Not every value a caller can pass is
+    copyable, though -- in process a parameter annotated `object` accepts a lock
+    or a socket, and `deepcopy` raises on those -- and the bookkeeping must not
+    be what fails a call that would otherwise have run, nor leave the call
+    unrecorded after its ordinal is spent (functional_spec.md §13:
+    `len(call_log())` equals `call_count`). Such a call keeps a shallow copy
+    instead: the mapping is still the record's own, and the values in it are the
+    caller's. Over OpenEnv every argument is JSON and the deep copy always
+    succeeds.
+
+    Used at capture and again by `CallRecord.to_dict`, so that what one tolerates
+    the other does too.
+    """
+    try:
+        return copy.deepcopy(dict(arguments))
+    except Exception:
+        return dict(arguments)
 
 
 def tracked_tables(conn: apsw.Connection, world: World) -> tuple[str, ...]:

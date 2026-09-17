@@ -169,6 +169,7 @@ def build_world(
     """
     options.setdefault("fixtures_dir", tmp_path / "fixtures")
     options.setdefault("work_dir", tmp_path / "work")
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(name, version, schema, **options)
     register_test_tools(world)
     return world
@@ -227,6 +228,7 @@ def composable_world(
     version".
     """
     own = f"CREATE TABLE {name}_rows (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;"
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(name, version, own + extra_schema, **options)
 
     @world.tool(name=f"{name}_write")

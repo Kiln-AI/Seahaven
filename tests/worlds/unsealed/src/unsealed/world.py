@@ -14,5 +14,6 @@ world = seahaven.World(
     name="unsealed",
     version="0.1.0",
     schema=seahaven.sql_files(__package__, "schema"),
+    state_format="seahaven.state/1",
 )
 world.add_world(ledger.world, name="ledger", tool_allow_list=["post_entrie"])

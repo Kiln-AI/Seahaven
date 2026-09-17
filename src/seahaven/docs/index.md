@@ -39,6 +39,7 @@ world = seahaven.World(
         created_at TEXT NOT NULL
     ) STRICT;
     """,
+    state_format="seahaven.state/1",
 )
 
 

@@ -17,8 +17,8 @@ moment more.
 
 Three rules hold the concurrency together.
 
-*One lock per instance.* `call`, `changes`, `change_log`, `call_log`, `freeze`,
-`bulk`, `destroy`, a nested call through a handle and the opens inside
+*One lock per instance.* `call`, `changes`, `change_log`, `call_log`, `state`,
+`freeze`, `bulk`, `destroy`, a nested call through a handle and the opens inside
 `inspect()` and `_control_db()` take it, so calls into one instance serialise
 and a destroy waits for the call in flight. Reads through the `inspect()` handle
 afterwards do not take it: that handle is the caller's, to read from whatever
@@ -38,7 +38,6 @@ touched only in short moments that take nothing else.
 """
 
 import atexit
-import copy
 import errno
 import hashlib
 import logging
@@ -58,11 +57,12 @@ from typing import TYPE_CHECKING, Any, Concatenate, Self, overload
 
 import apsw
 
-from seahaven.call import Call, arguments_of, name_of
+from seahaven.call import Call, arguments_of, name_of, serialise
 from seahaven.changes import (
     CallRecord,
     Change,
     LogRecord,
+    _copied_arguments,
     _sort_key,
     open_session,
     render,
@@ -84,6 +84,7 @@ from seahaven.errors import ToolError, UnknownTool, WorldBug
 from seahaven.fixtures import Fixture, check_composition, check_id, freeze, load, verify
 from seahaven.handles import Frame, unbound
 from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, Ids, instance_seed
+from seahaven.state import Formatter, document
 from seahaven.tool import Tool
 
 if TYPE_CHECKING:  # `world.py` imports this module; the annotation is all that is needed here
@@ -289,6 +290,12 @@ class Instance:
         dir: Path,
         world: World,
         manager: InstanceManager,
+        state_format: str,
+        formatter: Formatter,
+        episode_id: str,
+        caller_seed: int | None,
+        fixture_files: Mapping[str, str] | None,
+        startup: Mapping[str, Any],
     ) -> None:
         self.id = id
         self.fixture = fixture
@@ -299,8 +306,31 @@ class Instance:
         # The derived instance seed -- what actually drove the root's `ctx.ids` --
         # and not the `seed=` the caller passed, which is one of its two inputs.
         self.seed = self.ctx.instance.seed
+        # The `seed=` the caller gave, which is the one a state document reports:
+        # `self.seed` above is what it was hashed into.
+        self.caller_seed = caller_seed
         self.dir = dir
         self.world = world
+        # Over OpenEnv the session's episode id, and in process the instance id:
+        # in process an instance is an episode (`functional_spec.md` §3.1).
+        self.episode_id = episode_id
+        # Per node path, the `file_sha256` its fixture sidecar recorded, the root
+        # included; `None` for a blank instance. With `composition()` this is a
+        # reader's lookup for the state the episode started from.
+        self.fixture_files = dict(fixture_files) if fixture_files is not None else None
+        # The reset keywords beyond `fixture`, `seed`, `now` and `state_format`,
+        # already JSON-able: serialised at creation, so a keyword no document
+        # could carry is refused there rather than at `state()` time.
+        self.startup = dict(startup)
+        # The format this instance answers in, fixed for its life, and the
+        # formatter the root resolved it to when the instance was made.
+        self.state_format = state_format
+        self._formatter = formatter
+        # The thread running a formatter on this instance, or `None`. A thread
+        # id rather than a flag because `call` asks before taking the gate: only
+        # the formatting thread is refused, and a call from another thread waits
+        # for the lock like any other.
+        self._formatting: int | None = None
         self.closed = False
         # Re-entrant: a control tool holds this lock and then asks the instance
         # for its changeset or its control handle, which take it again, and a
@@ -389,6 +419,10 @@ class Instance:
         owns it. Raises the owning world's `ToolError` subclasses to the caller;
         over OpenEnv the same error is rendered onto the observation instead.
         """
+        # Ahead of the gate, and ahead of everything else: a formatter reaching
+        # this holds the instance lock, and queueing for a gate slot whose
+        # holders may be waiting on that lock would hang instead of raising.
+        self._refuse_if_formatting()
         started = time.perf_counter()
         # The exposed name once there is one, so an eval grouping the log on it
         # cannot tell the two ways in apart; the function's qualified name until
@@ -506,6 +540,51 @@ class Instance:
         """
         with self._held():
             return list(self._calls)
+
+    def state(self, format: str | None = None) -> dict[str, Any]:
+        """The state document: this instance's provenance, and `state` from its format.
+
+        A plain dict, JSON-serialisable with the standard library, so a caller
+        saves an episode with `json.dump` and nothing else. It costs
+        serialisation only: the change log is in memory and was rendered as each
+        call committed, so this does no database work. The document is the
+        caller's, all the way down -- editing it edits nothing the instance holds.
+
+        `format` answers in another format registered on this world instead, for
+        the same instance. It is in-process only, because the OpenEnv `state`
+        message carries no arguments, and the instance's own format is unchanged.
+
+        Refused inside a transaction -- `bulk()`, or a tool call -- where the
+        rows written are not committed and no document could describe them.
+        """
+        with self._held():
+            if any(runtime.db.in_transaction for runtime in self._runtime.values()):
+                # The lock is an `RLock`, so a `state()` inside `bulk()` gets this
+                # far and would then build a document from transactions that have
+                # not committed: the log would be missing the rows the same block
+                # can already read through `ctx.db`, with nothing to say so. A
+                # formatter never runs in a transaction (`functional_spec.md` §6).
+                # Any node: `bulk()` opens a transaction on every one of them, and
+                # a call into an added world opens one on that node alone.
+                raise WorldBug(
+                    "state cannot run inside a transaction: a formatter reads what the instance "
+                    "holds, and inside bulk() or a tool call the rows written are not committed "
+                    "yet. Read it after the block or the call returns"
+                )
+            name = self.state_format if format is None else format
+            formatter = (
+                self._formatter if format is None else self.world.resolve_state_format(format)
+            )
+            # Saved and restored rather than set and cleared: a formatter may read
+            # `instance.state(format=...)` to build a variation of a built-in
+            # (`functional_spec.md` §6), and the inner read must not leave the
+            # outer one unguarded for the rest of the formatter.
+            formatting = self._formatting
+            self._formatting = threading.get_ident()
+            try:
+                return document(self.world, self, name, formatter)
+            finally:
+                self._formatting = formatting
 
     def freeze(self, id: str, description: str) -> Fixture:
         """Mint a fixture from this instance's current state: every node's store, together.
@@ -688,7 +767,7 @@ class Instance:
         is the call as made rather than whatever a tool left in the dict it was
         handed. `error` is the message of whatever the chain raised.
         """
-        given = _recorded_arguments(arguments)
+        given = _copied_arguments(arguments)
         error: str | None = None
         try:
             yield
@@ -768,8 +847,23 @@ class Instance:
         """
         return tuple(self._runtime.values())
 
+    def _refuse_if_formatting(self) -> None:
+        """Refuse a write from inside a formatter.
+
+        A formatter runs with the instance lock held, and the lock is an `RLock`,
+        so a formatter calling `inst.call` or `inst.bulk` on its own instance
+        would otherwise be let straight through to write.
+
+        The test is against *this* thread: another thread's call must wait for
+        the lock like any other, not be refused because the instance happens to
+        be formatting somewhere else.
+        """
+        if self._formatting == threading.get_ident():
+            raise WorldBug("a state formatter reads an instance and never writes to it")
+
     @contextmanager
     def _bulk(self) -> Iterator[Ctx[Any]]:
+        self._refuse_if_formatting()
         # `_recording(None)`: authoring writes happen after creation and count,
         # but there is no call in flight for them to belong to. It is outside the
         # transactions, so it reads each changeset after they have all settled.
@@ -908,6 +1002,8 @@ class InstanceManager:
         *,
         seed: int | None = None,
         now: str | datetime | None = None,
+        state_format: str | None = None,
+        episode_id: str | None = None,
         startup_kwargs: Mapping[str, Any] | None = None,
     ) -> Instance:
         """Materialise an instance from a fixture, or from the world's DDL.
@@ -917,6 +1013,11 @@ class InstanceManager:
         adds nothing is one of each, in the directory it has today. A composite
         fixture carries one frozen file per node and every one of them is copied;
         a blank instance builds every node from its own world's DDL.
+
+        `state_format` is the format this instance answers `state()` in, in place
+        of the root world's pin, and `episode_id` the id every document of the
+        episode reports; over OpenEnv `reset` mints one before the instance
+        exists, and in process the instance id is it.
         """
         world = self._world
         kwargs = startup_kwargs or {}
@@ -924,11 +1025,17 @@ class InstanceManager:
         # the tree, and this is one.
         composition = world.composition()
         # Everything else that can be refused is refused here, before a directory
-        # exists: an unknown startup argument, an id that is not an id, a fixture
-        # that is missing, modified or frozen from another schema, and `now=`
-        # where the fixture already carries the clock. A creation that cannot
-        # succeed copies nothing and leaves nothing behind.
+        # exists: an unknown startup argument, a startup value no state document
+        # could carry, a format nothing registered, an id that is not an id, a
+        # fixture that is missing, modified or frozen from another schema, and
+        # `now=` where the fixture already carries the clock. A creation that
+        # cannot succeed copies nothing and leaves nothing behind.
         _check_startup_kwargs(composition, kwargs)
+        startup = _serialised_startup(kwargs)
+        # On the root, and only the root: an added world's registrations are
+        # never consulted (`functional_spec.md` §6).
+        format_name = state_format if state_format is not None else world.pinned_state_format
+        formatter = world.resolve_state_format(format_name)
         fixture = self._fixture(composition, fixture_id, now) if fixture_id is not None else None
         _sweep_once(self)
 
@@ -971,6 +1078,12 @@ class InstanceManager:
                 dir=directory,
                 world=world,
                 manager=self,
+                state_format=format_name,
+                formatter=formatter,
+                episode_id=episode_id or instance_id,
+                caller_seed=seed,
+                fixture_files=_fixture_files(fixture),
+                startup=startup,
             )
             # One activation for the whole of creation, so a root hook's handles
             # stay live across every hook that runs after it.
@@ -1250,26 +1363,6 @@ def _open_node(
     )
 
 
-def _recorded_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
-    """One call's arguments as the call log keeps them: a deep copy where one is possible.
-
-    The copy is what makes the record the call as made rather than whatever a
-    tool left in the dict it was handed. Not every value a caller can pass is
-    copyable, though -- in process a parameter annotated `object` accepts a lock
-    or a socket, and `deepcopy` raises on those -- and the bookkeeping must not
-    be what fails a call that would otherwise have run, nor leave the call
-    unrecorded after its ordinal is spent (functional_spec.md §13:
-    `len(call_log())` equals `call_count`). Such a call keeps a shallow copy
-    instead: the mapping is still the record's own, and the values in it are the
-    caller's. Over OpenEnv every argument is JSON and the deep copy always
-    succeeds.
-    """
-    try:
-        return copy.deepcopy(dict(arguments))
-    except Exception:
-        return dict(arguments)
-
-
 def _session_of(runtime: NodeRuntime) -> apsw.Session:
     """A node's changeset session, which exists for as long as its instance does.
 
@@ -1279,6 +1372,42 @@ def _session_of(runtime: NodeRuntime) -> apsw.Session:
     if runtime.session is None:
         raise WorldBug(f"the changeset session of node {runtime.node.path!r} is not attached")
     return runtime.session
+
+
+def _serialised_startup(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """The startup keywords as the state document reports them, one at a time.
+
+    Rendered at creation so that a keyword a document could never carry is a
+    refusal there rather than at the end of an episode, and one keyword at a
+    time so that the refusal can say which one. The hooks themselves still
+    receive the raw values.
+    """
+    startup: dict[str, Any] = {}
+    for keyword, value in kwargs.items():
+        try:
+            startup[keyword] = serialise(value)
+        except WorldBug as error:
+            # `serialise` speaks about tool results, which is what it is for
+            # everywhere else; this is the one caller that is not one, and it is
+            # the one that can say which keyword was the problem.
+            raise WorldBug(
+                f"startup keyword {keyword!r} must be JSON-able data, because the state "
+                f"document reports it: {error}"
+            ) from error
+    return startup
+
+
+def _fixture_files(fixture: Fixture | None) -> dict[str, str] | None:
+    """Per node path, the `file_sha256` the fixture's sidecar recorded. `None` for a blank one.
+
+    The root under `ROOT_PATH`, because a sidecar's version-1 fields describe the
+    root and `nodes` lists only what the root adds (`fixtures.py`).
+    """
+    if fixture is None:
+        return None
+    return {ROOT_PATH: fixture.meta.file_sha256} | {
+        node.path: node.file_sha256 for node in fixture.meta.nodes
+    }
 
 
 def _frozen_versions(fixture: Fixture | None, composition: Composition) -> dict[str, str]:
