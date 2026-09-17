@@ -117,8 +117,9 @@ Rules:
 - **What is tracked** is what today's changeset tracks: every world table except those in
   `World(untracked_tables=...)`, FTS5 shadow tables, and virtual tables. A table with no explicit
   primary key is refused at instance creation, as today. A row with `NULL` in any primary-key
-  column is never recorded, which is SQLite's rule; the DDL lint gains a rule refusing a nullable
-  primary-key column (§12).
+  column is never recorded, which is SQLite's rule; it cannot arise in a linted world, because a
+  STRICT table refuses `NULL` in a primary-key column and SH101 requires STRICT (measured 2026-09-17
+  on SQLite 3.45.1).
 - **Startup is not in the log.** The session attaches after the startup hooks have run, as today.
   Every write after that is in the log, including `inst.bulk()` writes, which carry `i: null`.
 - **No cap.** The log is as long as the episode made it. A consumer that wants less filters after
@@ -147,10 +148,12 @@ Every value is a JSON value, mapped from SQLite's storage classes:
 ### 3.5 The document before any call, and before `reset`
 
 - After `reset` and before any call: the full provenance, `call_count: 0`, `db.log: []`.
-- Over OpenEnv, before the first `reset`: there is no instance. `format`, `seahaven_version` and
-  `world` are answered; `fixture`, `episode_id`, `seed`, `now` and `startup` are `null`;
-  `call_count` is 0 and `db.log` is empty. A blank instance is distinguishable from no instance
-  because a blank instance has a `now`.
+- Over OpenEnv, before the first `reset`: there is no instance, and the **world's pinned**
+  formatter runs with no instance (§6). For the built-ins the document is: `format`,
+  `seahaven_version` and `world` answered; `fixture`, `episode_id`, `seed`, `now` and `startup`
+  `null`; `call_count` 0; `db.log` empty. A blank instance is distinguishable from no instance
+  because a blank instance has a `now`. After `reset`, the instance's formatter runs. Never a
+  default.
 
 ### 3.6 The fold, defined but not shipped
 
@@ -197,9 +200,12 @@ as `final_state` has only the last call's changes, which is the trade the caller
   override the world's pin for that instance. `state_format` joins `fixture`, `seed` and `now` as a
   reserved reset keyword: a startup hook that names a parameter `state_format` fails at
   registration, as one naming `fixture` does today.
-- An unknown format name, at `World(...)` or at `reset`/`instance`, is an error before any
-  instance is created; over OpenEnv it surfaces as the reset's `EXECUTION_ERROR` and the session
-  stays open, as any refused reset does.
+- An unknown format name is an error before any instance is created. A `seahaven.` name that is
+  not a built-in fails at `World(...)`. A custom name can only be checked at instance creation,
+  because a world registers its formatters after its `World(...)` line runs; so `World(state_format=
+  "acme.state/1")` is accepted at construction and fails at the first `instance`/`reset` if nothing
+  registered it by then. Over OpenEnv a refused reset surfaces as `EXECUTION_ERROR` and the
+  session stays open, as any refused reset does.
 - The format is fixed for the life of the instance. `inst.state()` answers it; `inst.state(format=
   "...")` answers another registered format for the same instance, in-process only. Over OpenEnv
   the state message carries no arguments, so the instance's format is the only one reachable.
@@ -211,14 +217,16 @@ A world may register formats of its own, for a caller whose needs differ from th
 
 ```python
 @world.state_format("acme.state/1")
-def acme_state(instance: seahaven.Instance) -> dict[str, Any]: ...
+def acme_state(world: seahaven.World, instance: seahaven.Instance | None) -> dict[str, Any]: ...
 ```
 
 - The name must contain exactly one `/` followed by a positive integer, and must not begin with
   `seahaven.`, which is reserved for built-ins.
-- The function receives the instance and returns a JSON-serialisable dict. It reads
+- The function receives the world and the instance, or `None` for the instance before the first
+  `reset` over OpenEnv (§3.5, §9), and returns a JSON-serialisable dict. With an instance it reads
   `instance.change_log()` and `instance.call_count` (§8), and anything else public on the
-  instance. A formatter that needs neither built-in's shape builds its own; one that wants a
+  instance; with `None` it defines its own "no instance yet" document, and one that raises on
+  `None` makes pre-reset `state` a `WorldBug`, which is the formatter author's contract to keep. A formatter that needs neither built-in's shape builds its own; one that wants a
   variation calls `instance.state(format="seahaven.state/1")` and edits the result. The document
   it returns must carry `format` as its first key with the registered name; the framework checks
   that and raises `WorldBug` if it does not.
@@ -331,8 +339,9 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
   lands; this project's docs phase owns that edit.
 - **`index.md`** lists `state.md`. `authoring.md` documents `World(state_format=...)` as required
   and the reserved reset keyword.
-- **Lint:** a new `SHnnn` rule refuses a primary-key column that is nullable, because a row with
-  `NULL` in its key is invisible to the log. `reference/lints.md` gains the entry.
+- **Lint:** no new rule. SH101's entry in `reference/lints.md` gains one sentence: STRICT is also
+  what keeps every row visible to the change log, because a STRICT table refuses `NULL` in a
+  primary-key column and such a row would otherwise never be recorded.
 - Every example in the docs runs under the docs test, as today.
 
 ## 13. Test plan
@@ -358,10 +367,12 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
   a name beginning with `seahaven.`, a duplicate, or a document whose first key is not the right
   `format` is refused.
 - **Choosing.** `World(...)` without `state_format` raises with the built-in names in the message;
-  an unknown name at `World`, `instance` and `reset` raises before any instance exists; a hook
+  an unknown `seahaven.` name raises at `World`, an unregistered custom name at `instance` and
+  `reset`, both before any instance exists; a custom pin registered after `World(...)` works; a hook
   parameter named `state_format` is refused at registration; the scaffold writes the pin and the
   scaffolded world passes `seahaven check`.
-- **OpenEnv.** In process: `state` before `reset` is §3.5; after `reset` it is the document; a
+- **OpenEnv.** In process: `state` before `reset` is §3.5 from the world's pinned formatter, and a
+  custom pin's formatter is called with `None`; after `reset` it is the document; a
   second `reset` starts a new log. Against a real server over the WebSocket: the whole document
   arrives, `SeahavenClient.state().model_dump()` round-trips it, and `reset(state_format=...)`
   selects the format.
