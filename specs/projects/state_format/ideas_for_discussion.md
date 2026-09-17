@@ -151,20 +151,24 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   counts `list_tools` steps.
 - The tool-count judge from the project overview's Example 1 runs over the trace; the
   changed-rows judge from Example 2 runs over the log.
-- Noted for the architecture step: OpenEnv's harness adapter calls `client.state()` after every
-  tool call and embeds the serialized state in each tool result's metadata. With a log-shaped
-  state, that is the whole log per call, quadratic over an episode on the harness side. The format
-  lever does not help: a format is fixed per episode at `reset`, and the harness's end-of-episode
-  `final_state` is the same `state()` as its per-step one, so a lighter format would lose the log
-  where it is needed in the default design. Resolved 2026-09-17: the design is sound as is.
-  Kiln-shaped callers use the default format and call `state()` once at the end. A per-step
-  poller that cares can pick a custom formatter at `reset`, one that emits only the log since the
-  last `state()` call; its per-step outputs concatenate into the full log, its harness's
-  `final_state` artifact holds only the last delta, and `state()` is non-idempotent under it, all
-  of which is that caller's trade. Two requirements follow: the `StateFormatter` interface gives a
-  formatter the whole log and lets it keep per-instance memory (a cursor); and `state()` under the
-  default format costs serialization only (log in memory, appended per call, no database work).
-  The quadratic cost of polling the default format per step is accepted, not designed around.
+- **Two built-in formats, locked 2026-09-17.** OpenEnv's rollout harness calls `client.state()`
+  after every tool call and embeds the result in that step's metadata, so polling the full-log
+  format per step is quadratic over an episode. A format is fixed per episode at `reset`, so the
+  answer is a second built-in format rather than an option:
+  - `seahaven.state/1`: the full document, the whole log. For a caller that reads `final_state`
+    once at the end, which is Kiln and every other consumer surveyed.
+  - `seahaven.state+last_step/1`: the same document with `db.log` filtered to the records of the
+    most recent call (`i == call_count - 1`). Idempotent, since it is scoped by the step counter
+    and not by when `state()` was last read; a per-step poller's outputs concatenate into the full
+    log, a gap shows as a jump in `call_count`, and before any call the log is empty. For a
+    per-step poller like the OpenEnv episode harness. Near trivial to build on the v1 formatter;
+    its cost is one more frozen format kept for ever.
+  - A caller whose needs differ registers a custom formatter. The interface requirement is that a
+    formatter receives the instance's whole log and its `call_count`; no per-instance memory is
+    needed for either built-in.
+  The docs present exactly these three cases, in that order, each with its reason. `state()`
+  under either built-in costs serialization only: the log in memory, appended per call, no
+  database work at read time.
 
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
