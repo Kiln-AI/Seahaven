@@ -36,6 +36,7 @@ def findings(tmp_path: Path, source: str, *, module: str = "tools/notes.py") -> 
         NOTES_SCHEMA,
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
+        state_format="seahaven.state/1",
     )
     return code_lint.run(stub_target(world, package_dir))
 

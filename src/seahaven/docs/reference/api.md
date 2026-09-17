@@ -41,6 +41,7 @@ class World:
         version: str,
         schema: str,
         *,
+        state_format: str | None = None,
         description: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
@@ -50,14 +51,17 @@ class World:
 
 One per world package, built at import in `world.py`. `schema` is the DDL as one string, usually
 from `sql_files`. `name` and `version` are informational and appear in the OpenEnv metadata and in
-every fixture's sidecar. `description` is the one-line description the OpenEnv metadata publishes —
-a free string, unvalidated, and the only thing that sets it; a world that gives none, or gives a
-string that is blank, publishes `Seahaven world <name>`. `fixtures_dir` defaults to `fixtures/` at the
-project root, found by walking up from the constructing module to the directory holding
-`pyproject.toml`, and to `fixtures/` beside the package where there is none. `work_dir` is where
-instance copies live; the default is a per-process directory under the system temp directory, which
-is swept of previous processes' leftovers, and a directory you name is used exactly as given and
-never swept. `untracked_tables` names tables the changeset session does not attach.
+every fixture's sidecar. `state_format` is **required** — it is spelled with a default only so that
+leaving it out is a `WorldBug` naming the built-in formats rather than a `TypeError` — and it pins
+the format `inst.state()` answers in for every instance of this world, so upgrading Seahaven never
+changes what a running eval saves. `description` is the one-line description the OpenEnv metadata
+publishes — a free string, unvalidated, and the only thing that sets it; a world that gives none, or
+gives a string that is blank, publishes `Seahaven world <name>`. `fixtures_dir` defaults to
+`fixtures/` at the project root, found by walking up from the constructing module to the directory
+holding `pyproject.toml`, and to `fixtures/` beside the package where there is none. `work_dir` is
+where instance copies live; the default is a per-process directory under the system temp directory,
+which is swept of previous processes' leftovers, and a directory you name is used exactly as given
+and never swept. `untracked_tables` names tables the changeset session does not attach.
 
 A `World` whose DDL does not execute cannot be constructed: the schema is built in memory to compute
 the schema hash, and SQLite's own message is reported. Nor is one whose `name` is not a single
@@ -69,13 +73,16 @@ a separator, a leading dot or a NUL is refused with `not a world name`.
 | `world.tool(obj=None, *, name=None, description=None, transaction=None)` | register a tool, as a decorator or a call. Passing a built `Tool` and any of the three keywords is refused — a factory decided them |
 | `world.middleware(obj=None)` | register a middleware, as a decorator or a call. Order is registration order, outermost first |
 | `world.instance_startup(obj=None)` | register a startup hook, as a decorator or a call |
-| `world.instance(fixture=None, *, seed=None, now=None, **startup_kwargs)` | make an instance; a context manager |
+| `world.instance(fixture=None, *, seed=None, now=None, state_format=None, **startup_kwargs)` | make an instance; a context manager. `state_format` overrides the world's pin for that instance alone |
+| `world.state_format(name)` | register a state format of this world's own: a decorator over `(world, instance \| None) -> dict`, which answers the value of `state` and nothing else |
+| `world.resolve_state_format(name)` | the formatter a name answers to — a built-in, or one this world registered. `WorldBug` for an unknown name |
 | `world.fixtures()` | every fixture in the fixtures directory, by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only |
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |
 | `world.accepted_startup_kwargs` | every keyword some hook names |
+| `world.pinned_state_format` | the format name given to `World(state_format=...)` |
 | `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir` | as given, plus the hash of the normalised DDL |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
@@ -103,10 +110,12 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.tools()` | the tool list with JSON schemas, as `{"name", "description", "input_schema"}`. Control tools are never in it |
 | `inst.inspect()` | a read-only `Db` on a second connection: every table, the instance clock, opened once and kept. Never a tool |
 | `inst.changes()` | the cumulative changeset since creation, as `list[Change]` |
+| `inst.state(format=None)` | the state document as a plain dict: the framework's envelope, plus `state` from the instance's format. `format` answers in another registered format instead, for the same instance |
 | `inst.freeze(id, description)` | mint a fixture from the current state; returns the `Fixture`. Refuses inside `bulk()` |
 | `inst.bulk()` | a context manager yielding the instance's own `Ctx`, in one transaction, for loading rows fast |
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
 | `inst.id`, `inst.fixture`, `inst.seed` | the instance id, the fixture id (or `None`), the derived seed bytes |
+| `inst.episode_id`, `inst.caller_seed`, `inst.fixture_sha256`, `inst.startup`, `inst.state_format` | the provenance the state document reports: the episode (the instance id in process), the `seed=` as given, the fixture file's hash, the startup keywords, and the format this instance answers in |
 | `inst.clock`, `inst.world`, `inst.state_path` | the clock, the world, and the instance's own database file |
 
 The tool name is positional-only, so a world may have a tool argument called `name`.

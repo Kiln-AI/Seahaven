@@ -387,6 +387,7 @@ world = World(
     "race",
     "1.0.0",
     "CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
     fixtures_dir=tmp / "fixtures",
     work_dir=tmp / "work",
 )

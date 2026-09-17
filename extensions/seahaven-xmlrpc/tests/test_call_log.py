@@ -78,6 +78,7 @@ def test_the_log_is_off_unless_the_world_asks_for_it(tmp_path: Path) -> None:
         "no_log",
         "1.0.0",
         seahaven.sql_files("projecttracker", "schema"),
+        state_format="seahaven.state/1",
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
     )
@@ -100,6 +101,7 @@ def test_asking_for_the_log_without_the_ddl_is_the_authors_mistake(tmp_path: Pat
         "log_without_a_table",
         "1.0.0",
         seahaven.sql_files("projecttracker", "schema"),
+        state_format="seahaven.state/1",
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
     )

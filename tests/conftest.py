@@ -152,6 +152,7 @@ def build_world(
     """
     options.setdefault("fixtures_dir", tmp_path / "fixtures")
     options.setdefault("work_dir", tmp_path / "work")
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(name, version, schema, **options)
     register_test_tools(world)
     return world

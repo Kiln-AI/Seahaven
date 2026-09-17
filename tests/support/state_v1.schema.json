@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A Seahaven state document under a built-in format",
+  "description": "functional_spec.md §3.1 and §3.2. additionalProperties is false throughout, so a field added by accident to the envelope or to a log record fails the test that reads this.",
+  "type": "object",
+  "required": [
+    "format",
+    "seahaven_version",
+    "world",
+    "fixture",
+    "episode_id",
+    "seed",
+    "now",
+    "startup",
+    "call_count",
+    "state"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format": {"enum": ["seahaven.state/1", "seahaven.state+last_step/1"]},
+    "seahaven_version": {"type": "string"},
+    "world": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"}
+      }
+    },
+    "fixture": {
+      "type": ["object", "null"],
+      "required": ["id", "file_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "episode_id": {"type": ["string", "null"]},
+    "seed": {"type": ["integer", "null"]},
+    "now": {"type": ["string", "null"]},
+    "startup": {"type": ["object", "null"]},
+    "call_count": {"type": "integer", "minimum": 0},
+    "state": {
+      "type": "object",
+      "required": ["db"],
+      "additionalProperties": false,
+      "properties": {
+        "db": {
+          "type": "object",
+          "required": ["log"],
+          "additionalProperties": false,
+          "properties": {
+            "log": {"type": "array", "items": {"$ref": "#/$defs/record"}}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "required": ["i", "subworld", "table", "op", "key", "before", "after"],
+      "additionalProperties": false,
+      "properties": {
+        "i": {"type": ["integer", "null"], "minimum": 0},
+        "subworld": {"type": "null"},
+        "table": {"type": "string"},
+        "op": {"enum": ["insert", "update", "delete"]},
+        "key": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/value"}},
+        "before": {"type": ["object", "null"], "additionalProperties": {"$ref": "#/$defs/value"}},
+        "after": {"type": ["object", "null"], "additionalProperties": {"$ref": "#/$defs/value"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"op": {"const": "insert"}}},
+          "then": {"properties": {"before": {"type": "null"}, "after": {"type": "object"}}}
+        },
+        {
+          "if": {"properties": {"op": {"const": "delete"}}},
+          "then": {"properties": {"before": {"type": "object"}, "after": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"op": {"const": "update"}}},
+          "then": {"properties": {"before": {"type": "object"}, "after": {"type": "object"}}}
+        }
+      ]
+    },
+    "value": {"type": ["string", "number", "null"]}
+  }
+}

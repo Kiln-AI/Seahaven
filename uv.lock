@@ -1789,6 +1789,7 @@ serve = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "packaging" },
     { name = "projecttracker" },
     { name = "pytest" },
@@ -1808,6 +1809,7 @@ provides-extras = ["serve"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "jsonschema", specifier = ">=4" },
     { name = "packaging", specifier = ">=24" },
     { name = "projecttracker", editable = "worlds/projecttracker" },
     { name = "pytest", specifier = ">=8" },

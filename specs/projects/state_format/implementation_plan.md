@@ -18,7 +18,7 @@ move, then the old is removed. Details are in `functional_spec.md` (FS) and `arc
   `test_fold.py` with `tests/support/fold.py`, `test_ids.py`, the pytest-marker seed test, the
   "no database work in `state()`" precursor on `change_log()`.
 
-- [ ] **Phase 2: Formats and the world pin.** `seahaven/state.py` with `envelope`, `document`,
+- [x] **Phase 2: Formats and the world pin.** `seahaven/state.py` with `envelope`, `document`,
   the two built-ins and name validation (ARCH §5); `World(state_format=)` required,
   `RESET_ARGUMENTS`, `world.state_format()`, `resolve_state_format`, `__copy__` (ARCH §5.2);
   `Instance.state()` and the formatting guard (ARCH §5.3); `InstanceManager.create` changes and

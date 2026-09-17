@@ -66,6 +66,7 @@ def test_the_registered_tool_is_the_one_the_factory_built(tmp_path: Any) -> None
         "registers",
         "1.0.0",
         seahaven.sql_files("projecttracker", "schema"),
+        state_format="seahaven.state/1",
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
     )

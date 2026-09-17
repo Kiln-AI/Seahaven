@@ -180,7 +180,10 @@ def test_a_world_that_is_one_module_is_refused_in_a_sentence(
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "flat"\n', encoding="utf-8")
     (tmp_path / "flat.py").write_text(
         "import seahaven\n\n"
-        'world = seahaven.World("flat", "1.0.0", "CREATE TABLE t (id TEXT PRIMARY KEY) STRICT;")\n',
+        "world = seahaven.World(\n"
+        '    "flat", "1.0.0", "CREATE TABLE t (id TEXT PRIMARY KEY) STRICT;",\n'
+        '    state_format="seahaven.state/1",\n'
+        ")\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)

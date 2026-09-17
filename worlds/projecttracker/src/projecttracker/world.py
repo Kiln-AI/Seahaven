@@ -11,6 +11,10 @@ world = seahaven.World(
     name="projecttracker",
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema"),
+    # The shape `inst.state()` answers in, pinned here at the world's creation.
+    # Changing it changes what every eval of this world saves, so bump
+    # `version` with it.
+    state_format="seahaven.state/1",
     # The one line an OpenEnv hub shows beside the name. The README beside this
     # package is the card's body and nothing is derived from it, so this
     # sentence is kept in step with the README's opening paragraph by hand.

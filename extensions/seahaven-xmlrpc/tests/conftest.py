@@ -78,6 +78,7 @@ def probe(tmp_path: Path) -> Callable[..., seahaven.World]:
             "probe",
             tracker.version,
             tracker.schema,
+            state_format=tracker.pinned_state_format,
             fixtures_dir=tmp_path / "fixtures",
             work_dir=tmp_path / "work",
         )

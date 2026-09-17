@@ -37,6 +37,7 @@ world = seahaven.World(
     name="$package",
     version="1.0.0",
     schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 

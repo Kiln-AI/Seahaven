@@ -70,6 +70,13 @@ def test_the_package_name_is_the_world_name_normalised(scaffold: Path) -> None:
     assert 'module-name = "my_world"' in (scaffold / "pyproject.toml").read_text(encoding="utf-8")
 
 
+def test_the_scaffold_pins_a_state_format(scaffold: Path) -> None:
+    """The pin is chosen once, at the world's creation, and the scaffold chooses it."""
+    source = (scaffold / "src" / "my_world" / "world.py").read_text(encoding="utf-8")
+
+    assert 'state_format="seahaven.state/1"' in source
+
+
 def test_the_scaffold_pins_the_installed_minor_version(scaffold: Path) -> None:
     requirement = seahaven_requirement()
     assert requirement.startswith("seahaven~=")

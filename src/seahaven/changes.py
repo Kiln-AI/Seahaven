@@ -101,15 +101,21 @@ class LogRecord:
     after: dict[str, Any] | None
 
     def to_dict(self) -> dict[str, Any]:
-        """The wire shape, in the field order `functional_spec.md` §3.2 publishes."""
+        """The wire shape, in the field order `functional_spec.md` §3.2 publishes.
+
+        The three dicts are copied: the document is the caller's to edit, and
+        `functional_spec.md` §6's recipe for a custom formatter is to read a
+        built-in's `state` and change it. A shallow copy is the whole of it
+        because every value is a JSON scalar by the time `_jsonable` is done.
+        """
         return {
             "i": self.i,
             "subworld": self.subworld,
             "table": self.table,
             "op": self.op,
-            "key": self.key,
-            "before": self.before,
-            "after": self.after,
+            "key": dict(self.key),
+            "before": None if self.before is None else dict(self.before),
+            "after": None if self.after is None else dict(self.after),
         }
 
 

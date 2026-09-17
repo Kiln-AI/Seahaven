@@ -72,6 +72,7 @@ world = seahaven.World(
         created_at TEXT NOT NULL
     ) STRICT;
     """,
+    state_format="seahaven.state/1",
 )
 
 
@@ -163,6 +164,7 @@ world = seahaven.World(
     name="ledger",
     version="1.0.0",
     schema="CREATE TABLE entries (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -234,7 +236,7 @@ All of it at import, with a message naming the tool and the parameter. A tool is
 
 A middleware is refused if it is not callable with three positional arguments. A startup hook is
 refused unless the context is its one and only positional parameter — none, or two, or a `*args` is
-refused alike — and if it names a parameter `fixture`, `seed` or `now`.
+refused alike — and if it names a parameter `fixture`, `seed`, `now` or `state_format`.
 
 All of these raise `seahaven.WorldBug`, which is the framework's word for "the author has a
 mistake". A `WorldBug` is never shown to an agent.
@@ -260,6 +262,7 @@ world = seahaven.World(
     name="notes",
     version="1.0.0",
     schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -364,6 +367,7 @@ world = seahaven.World(
     name="notes",
     version="1.0.0",
     schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 seen: list[str] = []
 
@@ -412,8 +416,8 @@ with world.instance() as inst:
 materialised and the connection is set up, before the first tool call. Several may be registered —
 an extension may bring one — and they run in registration order.
 
-The hook's keyword arguments are the `reset()` arguments beyond `fixture`, `seed` and `now`. That is
-how a per-instance parameter reaches world code:
+The hook's keyword arguments are the `reset()` arguments beyond `fixture`, `seed`, `now` and
+`state_format`. That is how a per-instance parameter reaches world code:
 
 ```python
 import seahaven
@@ -423,6 +427,7 @@ world = seahaven.World(
     version="1.0.0",
     schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL, author TEXT NOT NULL)"
     " STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -451,10 +456,10 @@ except seahaven.WorldBug as error:
 unknown-argument detection for the whole world — and a misspelled `reset` argument then silently
 does nothing instead of failing before the instance exists.
 
-A hook may not name a parameter `fixture`, `seed` or `now`; those are `reset`'s own. Hooks put what
-they worked out in `ctx.state`, and tools read it from there. A principal is application code: the
-world stores `user_id` and its tools read it. Rows a hook writes are *not* in the changeset — the
-session is attached after the hooks have run.
+A hook may not name a parameter `fixture`, `seed`, `now` or `state_format`; those are `reset`'s
+own. Hooks put what they worked out in `ctx.state`, and tools read it from there. A principal is
+application code: the world stores `user_id` and its tools read it. Rows a hook writes are *not*
+in the changeset — the session is attached after the hooks have run.
 
 If a hook cannot do its job — a `user_id` naming nobody — raise `seahaven.WorldBug`. Instance
 creation fails, and an episode never runs against state that was set up wrong.
@@ -510,6 +515,7 @@ world = seahaven.World(
         INSERT INTO notes_fts (rowid, body) VALUES (new.rowid, new.body);
     END;
     """,
+    state_format="seahaven.state/1",
 )
 
 world.tool(
