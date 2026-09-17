@@ -137,7 +137,7 @@ Every value is a JSON value, mapped from SQLite's storage classes:
 | SQLite | JSON |
 |---|---|
 | INTEGER | number. SQLite integers are 64-bit; a JavaScript reader loses precision above 2^53. The docs say so; the format does not work around it. |
-| REAL | number. (Open question §14.2 for infinities.) |
+| REAL | number. An infinity renders as `null`: JSON carries neither infinities nor NaN, and SQLite itself stores NaN as NULL, so this is SQLite's own coercion one step further. Less precise, not wrong; a reader cannot tell a NULL column from an infinite one. The conversion carries a one-line comment stating that trade. |
 | TEXT | string |
 | BLOB | string, base64 |
 | NULL | `null` |
@@ -366,9 +366,7 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
 Numbered so they can be answered by number.
 
 1. *Answered 2026-09-17:* `seed` is `int | None`; `bytes` is dropped from the API (§8).
-2. **Non-finite reals.** SQLite cannot store NaN (it becomes `NULL`) but can store infinities,
-   which JSON cannot carry. Options: refuse them at log time as a `WorldBug` (they cannot come
-   from a well-formed world), or the strings `"Infinity"`/`"-Infinity"`. I lean `WorldBug`.
+2. *Answered 2026-09-17:* infinities render as `null` (§3.4).
 3. **`episode_id` in process.** Proposed above as the instance id, so the field is never null on
    a live instance. Alternative: `null` in process and the OpenEnv episode id over the wire, plus
    an `instance_id` field always. One field is simpler; two are more honest about which id it is.
