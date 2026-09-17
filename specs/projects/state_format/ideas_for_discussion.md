@@ -170,6 +170,18 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   under either built-in costs serialization only: the log in memory, appended per call, no
   database work at read time.
 
+**Batch 8 (2026-09-17), §6 closed with no new decision:**
+
+- The judge system is the evaluator's, outside Seahaven. The research established that the
+  evaluator has several workable options over the agreed log (SQL over a materialised copy, Jinja
+  in a Python-only evaluator where judges are trusted, a DSL if scale demands one), which is all
+  the format design needed to know. Whether a DSL is needed is the evaluator's TBD.
+- Seahaven ships no loader or helper; readers may be in any language.
+- The only Seahaven-side facts are already decided in §3: a JSON document, one flat log with the
+  shape in Appendix B. The functional spec states the SQLite-to-JSON value mapping as detail
+  (integers and reals as numbers, text as strings, NULL as `null`, blobs as base64), noting that
+  64-bit integers exceed JavaScript's exact range.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is
