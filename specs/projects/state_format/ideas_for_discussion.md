@@ -188,6 +188,15 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
 - A consumer that wants less filters after the fact, or registers a custom formatter. Seahaven adds
   no special support for either.
 
+**Batch 10 (2026-09-17), §8 closed: control tools deprecated:**
+
+- `controller_run_sql` and `controller_changes` stay callable for now, unchanged in behaviour and
+  still behind `--include-control-tools` over the wire, and are marked deprecated in code.
+- They leave the docs entirely. Every doc that grades or inspects an episode uses `state()`:
+  `serving.md`, `testing.md`, `concepts.md`, the README's grading example, and the incoming
+  `openenv.md`. No alias between `controller_changes` and the formatter; it is legacy, not a second
+  surface.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is
