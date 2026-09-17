@@ -367,9 +367,8 @@ Numbered so they can be answered by number.
 
 1. *Answered 2026-09-17:* `seed` is `int | None`; `bytes` is dropped from the API (§8).
 2. *Answered 2026-09-17:* infinities render as `null` (§3.4).
-3. **`episode_id` in process.** Proposed above as the instance id, so the field is never null on
-   a live instance. Alternative: `null` in process and the OpenEnv episode id over the wire, plus
-   an `instance_id` field always. One field is simpler; two are more honest about which id it is.
+3. *Answered 2026-09-17:* `episode_id` is the OpenEnv episode id over the wire and the instance id
+   in process (§3.1); no separate `instance_id` field.
 4. **The name `change_log()`.** `inst.log()` reads as logging. Alternatives: `changelog()`,
    `row_changes()`.
 5. **Where custom formatters register.** Proposed on the world, like tools. Alternative: a
