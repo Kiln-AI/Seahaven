@@ -159,6 +159,11 @@ Rules:
 - **Startup is not in the log.** Startup hooks run at instance creation, before any call, and no
   session records them. Every write after that is in the log, including `inst.bulk()` writes,
   which carry `i: null`.
+- **A call made inside `bulk()` belongs to the block.** `inst.call(...)` inside an `inst.bulk()`
+  block is supported, and the rows it writes go into the block's transactions: they commit or
+  roll back with the block, not with the call. They are therefore the block's writes and carry
+  `i: null` like the rest of them, once each; a block that raised leaves none of them. The call
+  still takes its ordinal (§7) and its call-log entry, so `call_count` counts it either way.
 - **No cap.** The log is as long as the episode made it. A consumer that wants less filters after
   the fact or registers a custom formatter (§6); the framework truncates nothing.
 

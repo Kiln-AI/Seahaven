@@ -159,6 +159,14 @@ the block touched, appended when the block exits, and a block that raised leaves
 node. The transactions are inner: the recording must read each changeset after they have all
 committed or rolled back. Startup hooks run before any session exists and stay out.
 
+`_recording` is re-entrant per instance, and the outermost one records: `_dispatch`'s
+`_recording(i)` inside an open `bulk()` recording yields and does nothing else. That is the one
+nesting there is, `inst.call(...)` inside a `bulk()` block, which `Instance._held` and
+`docs/composition.md` both support. A nested recording of its own would read its changeset while
+the block's transactions are still open -- logging rows the block may yet roll back, and logging
+them again under the block's own recording when it commits, which is one row and two records. The
+call's rows therefore land under the outer `i`, which for `bulk()` is `None` (FS §3.2).
+
 ### 3.3 The call log
 
 `_logging_call(name, arguments)` takes `copy.deepcopy(arguments)` on entry, before the chain

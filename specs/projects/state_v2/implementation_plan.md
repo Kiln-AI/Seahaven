@@ -15,7 +15,7 @@ anything on that branch that assumes an instance is one store is wrong here.
 
 ## Phases
 
-- [ ] **Phase 1: The change log and the call log, per node.** `LogRecord` with `world`,
+- [x] **Phase 1: The change log and the call log, per node.** `LogRecord` with `world`,
   `CallRecord`, `render_log` with the node path and the rendered-value sort, `tracked_tables`,
   `open_session`, the infinity mapping (ARCH §2.1, §3.4, §3.5); `NodeRuntime.tracked` and
   `.columns`, one session per node per call in `_dispatch` and per `bulk()`, `_logging_call`, the
