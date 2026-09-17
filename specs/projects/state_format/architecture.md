@@ -14,7 +14,7 @@ Section numbers in `functional_spec.md` are cited as "FS §n".
 | Module | Change |
 |---|---|
 | `seahaven/changes.py` | Gains `LogRecord`, `render_log()`, a per-instance column cache, the JSON value mapping (`_jsonable` handles infinities), and `tracked_tables()`. `Change`, `render()` and `start_session()` keep their behaviour. |
-| `seahaven/state.py` | **New.** The formatter protocol, the two built-in formatters, format-name validation, the pre-reset document, and `SEAHAVEN_STATE_V1` / `SEAHAVEN_STATE_LAST_STEP_V1` name constants. |
+| `seahaven/state.py` | **New.** The formatter protocol, the two built-in formatters (each handling the no-instance case), format-name validation, and `SEAHAVEN_STATE_V1` / `SEAHAVEN_STATE_LAST_STEP_V1` name constants. |
 | `seahaven/instances.py` | `Instance` gains the log store, the call counter, `state()`, `change_log()`, `call_count`, `episode_id`, `caller_seed`, `fixture_sha256`, `startup`, `state_format`; per-call and per-bulk sessions; the formatting guard. `InstanceManager.create` gains `state_format` and `episode_id`, resolves the formatter first, serialises the startup keywords. |
 | `seahaven/world.py` | `World(..., state_format: str)` required; `RESET_ARGUMENTS` gains `state_format`; `world.state_format()` registration; `world.resolve_state_format()`; `__copy__` carries the registry. |
 | `seahaven/ids.py` | `_seed_bytes` and `instance_seed` narrow to `int | None`. |
@@ -169,7 +169,7 @@ read-only property over `_call_count`.
 ## 5. Formats and formatters (`state.py`)
 
 ```python
-type Formatter = Callable[["Instance"], dict[str, Any]]
+type Formatter = Callable[["World", "Instance | None"], dict[str, Any]]
 
 SEAHAVEN_STATE_V1 = "seahaven.state/1"
 SEAHAVEN_STATE_LAST_STEP_V1 = "seahaven.state+last_step/1"
@@ -178,33 +178,40 @@ BUILTIN_PREFIX = "seahaven."
 _NAME = re.compile(r"^[A-Za-z0-9_.+-]+/[1-9][0-9]*$")
 
 def check_format_name(name: str) -> None       # syntax; WorldBug naming the rule
-def before_reset(world: World, format: str) -> dict[str, Any]   # FS §3.5, the no-instance document
 ```
+
+A formatter takes the world and an optional instance. `None` is the state before the first
+`reset` over OpenEnv (FS §3.5): the world's pinned formatter runs with it, so there is no
+framework-built pre-reset document and no default. In process an instance always exists.
 
 ### 5.1 The built-ins
 
-`state_v1(instance)` builds FS §3.1 in field order:
+`state_v1(world, instance)` builds FS §3.1 in field order:
 
 ```python
 {"format": SEAHAVEN_STATE_V1,
  "seahaven_version": seahaven.__version__,
- "world": {"name": w.name, "version": w.version},
- "fixture": {"id": inst.fixture, "file_sha256": inst.fixture_sha256} if inst.fixture else None,
- "episode_id": inst.episode_id, "seed": inst.caller_seed, "now": inst.clock.iso(),
- "startup": inst.startup, "call_count": inst.call_count,
- "db": {"log": [r.to_dict() for r in inst.change_log()]}}
+ "world": {"name": world.name, "version": world.version},
+ "fixture": {"id": inst.fixture, "file_sha256": inst.fixture_sha256} if inst and inst.fixture else None,
+ "episode_id": inst.episode_id if inst else None,
+ "seed": inst.caller_seed if inst else None,
+ "now": inst.clock.iso() if inst else None,
+ "startup": inst.startup if inst else None,
+ "call_count": inst.call_count if inst else 0,
+ "db": {"log": [r.to_dict() for r in inst.change_log()] if inst else []}}
 ```
 
-`state_last_step_v1(instance)` is `state_v1` with the log filtered to `r.i == call_count - 1`
-and `format` replaced; `i: None` records never pass the filter (FS §4).
+`state_last_step_v1(world, instance)` is `state_v1` with the log filtered to
+`r.i == call_count - 1` and `format` replaced; `i: None` records never pass the filter (FS §4);
+with no instance the log is empty.
 
 ### 5.2 Registration and resolution (`world.py`)
 
 - `World.__init__(..., *, state_format: str, ...)`: keyword-only, no default. `check_format_name`;
   if the name begins with `seahaven.` it must be in `BUILTIN_FORMATS`, else `WorldBug` listing
   the built-ins. A name outside the prefix is a custom format and is resolved at instance
-  creation (§6), because it is registered after the `World(...)` line runs. Stored as
-  `self.state_format`.
+  creation (§6), because it is registered after the `World(...)` line runs (decided 2026-09-17).
+  Stored as `self.state_format`.
 - `world.state_format(name)` is a decorator/call like `world.tool`: `check_format_name`; refuse
   the `seahaven.` prefix; refuse a duplicate; require a callable; store in
   `self._state_formats: dict[str, Formatter]`. Open for the life of the world.
@@ -222,7 +229,7 @@ def state(self, format: str | None = None) -> dict[str, Any]:
         formatter = self._formatter if format is None else self.world.resolve_state_format(format)
         self._formatting = True
         try:
-            document = formatter(self)
+            document = formatter(self.world, self)
         finally:
             self._formatting = False
     if not document or next(iter(document)) != "format" or document["format"] != name:
@@ -272,8 +279,9 @@ the same sentence. Nothing else changes.
   `state_format=` and `episode_id=` to `world.instance(...)`. `self._episode_id` is read from the
   instance afterwards.
 - `state` property: `SeahavenState(step_count=self._steps, **instance.state())` with an instance;
-  without one, `SeahavenState(step_count=0, **state.before_reset(self.world,
-  self.world.state_format))`.
+  without one, `SeahavenState(step_count=0, **formatter(self.world, None))` where `formatter` is
+  `self.world.resolve_state_format(self.world.state_format)`, the world's pin. The same
+  `format`-first check `Instance.state` applies is applied here.
 - `SeahavenState(State)`: one declared field, `format: str` (with a description, for the reason
   the current fields have them), and the base class's `extra="allow"` carries the rest. A typed
   model cannot serve custom formats, whose documents are arbitrary; the built-in documents are
@@ -292,12 +300,11 @@ the same sentence. Nothing else changes.
 
 ## 11. Lint
 
-FS §12 asks for a rule refusing a nullable primary-key column. **Measured 2026-09-17 (SQLite
-3.45.1): a STRICT table refuses `NULL` in any primary-key column with `NOT NULL constraint
-failed`, single and composite keys alike, and only non-STRICT tables accept it.** SH101 already
-requires STRICT, so the hazard cannot reach a linted world. Proposed: no new rule; SH101's
-`lints.md` entry gains one sentence saying STRICT is also what keeps every row visible to the
-change log (open item §17.1).
+No new rule (decided 2026-09-17). **Measured on SQLite 3.45.1: a STRICT table refuses `NULL` in
+any primary-key column with `NOT NULL constraint failed`, single and composite keys alike, and
+only non-STRICT tables accept it.** SH101 already requires STRICT, so the hazard cannot reach a
+linted world. SH101's `lints.md` entry gains one sentence saying STRICT is also what keeps every
+row visible to the change log.
 
 ## 12. Documentation
 
@@ -347,13 +354,16 @@ Unit tests live beside the module they pin; every FS §13 item maps to one below
   one; `startup` given and empty; `state_last_step_v1` per step, concatenation equals the full
   log, empty before any call; a custom formatter registered, selected by `instance(state_format=)`,
   refused for a `seahaven.` name, a duplicate, a non-callable, a bad name, a wrong first key;
-  `World(...)` without the argument; unknown names at `World`, `instance`; the world's pin naming
-  a custom format registered later; `before_reset`; the built-in documents validate against
+  `World(...)` without the argument; an unknown `seahaven.` name at `World`, an unregistered
+  custom name at `instance`; the world's pin naming a custom format registered later; each
+  built-in with `instance=None`; a custom formatter called with `None` before `reset` and one that
+  raises on it surfacing as `WorldBug`; the built-in documents validate against
   `tests/support/state_v1.schema.json`.
 - `tests/test_world.py`: `RESET_ARGUMENTS` refusal for `state_format`; `__copy__` carries formats.
 - `tests/test_ids.py`: `bytes` seed refused; the pytest marker test in `tests/test_pytest_plugin.py`
   follows.
-- `tests/test_env.py`: `state` before `reset` is `before_reset`; after `reset` the document with
+- `tests/test_env.py`: `state` before `reset` is the world's pinned formatter with `None`; after
+  `reset` the document with
   `step_count`; `reset(state_format=)` selects; a second `reset` starts a new log; the two existing
   state tests are rewritten to the document.
 - `tests/test_server.py`: over the WebSocket, `env.state().model_dump()` carries every FS §3.1
@@ -389,17 +399,12 @@ compares documents with `episode_id` masked; over OpenEnv a caller who passes `e
 
 ## 17. Open items
 
-1. **Drop the lint rule.** §11 measured that STRICT already refuses NULL in a primary-key column
-   and SH101 requires STRICT, so FS §12's new rule cannot fire on a linted world. Proposal: remove
-   it from the functional spec and add one sentence to SH101's entry instead.
-2. **When a custom pin is checked.** `World(state_format="acme.state/1")` names a format that is
-   registered after the constructor runs, so it can only be resolved at instance creation (§5.2).
-   FS §5 says unknown names error "at `World(...)`"; proposal: built-in names at construction,
-   custom names at first instance creation, both before any directory exists.
-3. **`format` before `reset` under a custom pin.** `before_reset` emits the fixed FS §3.5 shape
-   with `format` set to the world's pin (§9). Under a custom pin that names a shape the document
-   does not have. Alternatives: `format` is always `seahaven.state/1` before reset; or `null`.
-   Proposal: the pin, documented as "the pre-reset document is fixed and format-independent".
+1. *Decided 2026-09-17:* no lint rule (§11); the functional spec is updated.
+2. *Decided 2026-09-17:* built-in names checked at `World(...)`, custom names at first instance
+   creation (§5.2); the functional spec is updated.
+3. *Decided 2026-09-17:* a formatter takes `(world, instance | None)`; before `reset` the world's
+   pinned formatter runs with `None`, after `reset` the instance's runs; no framework-built
+   document and no default (§5, §9); the functional spec is updated.
 4. **`SeahavenState` as an open model.** §9 types only `format` and lets `extra="allow"` carry
    the rest, because custom formats make a typed model impossible. FS §9 says "its fields are
    §3.1's". Proposal: the open model, with the built-in shape pinned by a JSON Schema in `tests/`.
