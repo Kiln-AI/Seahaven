@@ -63,7 +63,8 @@ anything on that branch that assumes an instance is one store is wrong here.
   fifty `.changes()` sites across sixteen files, `tests/test_composite_changes.py` first -- and
   reword the source comments that describe the session; `bench/recording.py` retargeted at
   `instance._runtime` with its two tests (ARCH §14), the probe only, no numbers yet. Docs are
-  touched only as far as keeping the docs test green requires. Every suite green: framework, `worlds/projecttracker`,
+  touched only as far as keeping the docs test green requires. Every suite green: framework,
+  `worlds/projecttracker`,
   `extensions/seahaven-xmlrpc`.
   *Reference:* the old branch's phase 4 for the deprecation's attribution and its test, the
   `DEPRECATED` set, and the probe's leg design and report prose rules. *Not reference:* its caller
