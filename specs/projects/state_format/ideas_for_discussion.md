@@ -120,6 +120,22 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
 - Confirmed from batch 4: no whole database, no whole rows, key separate with changed non-key
   columns only on updates, log only with the fold defined in the spec, `subworld` on every record.
 
+**Batch 6 (2026-09-17), §4 closed:**
+
+- Both of §4's P2 formats are gone. Per-call deltas are the v1 log; there is no
+  `seahaven.state+sqlite/1` and no format that carries the database file, ever.
+- Ordering questions are answered by the log. Untouched rows are answered by lookup: the fixture,
+  by world name, version, fixture id and hash; for a blank instance, the world's DDL plus what the
+  startup hooks wrote.
+- Provenance gains `startup`: the reset keywords beyond `fixture`, `seed`, `now` and
+  `state_format`, the ones the startup hooks received (`{"user_id": "u_12"}`). They are the last
+  input the starting state depends on, and the principal the episode ran as is judge-relevant on
+  its own. `seed` and `now` stay at the root as batch 2 has them and are not repeated under
+  `startup`.
+- Reproducing a startup hook's output is the world author's concern, not the format's. Nearly all
+  startup SQL is DDL, most of the rest seeds enums, and a world whose hooks draw on the clock or
+  randomness while also running without fixtures has opted into a situation it can handle itself.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is
