@@ -43,7 +43,6 @@ pytest.importorskip(
 from fastapi import WebSocketDisconnect
 from openenv import GenericEnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
-from openenv.core.env_server.types import Observation
 from openenv.core.utils import convert_to_ws_url
 from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import connect as ws_connect
@@ -133,7 +132,8 @@ def test_the_typed_client_drives_a_session_end_to_end(world: World) -> None:
     fixture_id = _freeze(world)
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(fixture=fixture_id, seed=7)
-        assert type(reset.observation) is Observation
+        assert isinstance(reset.observation, SeahavenObservation)
+        assert reset.observation.result is None
         assert reset.observation.metadata == {
             "fixture": fixture_id,
             "now": INSTANT_ISO,

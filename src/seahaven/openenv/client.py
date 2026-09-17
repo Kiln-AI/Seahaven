@@ -13,11 +13,9 @@ asynchronous code from the same method; writing them in terms of the public
 observation, so the sketch in the component document is spelled out here rather
 than copied.
 
-It also overrides two private methods of the base client, which are fixes and
-not conveniences: `_disconnect_async` closes more politely than the base does,
-and `_reset_async` parses a reset as the plain `Observation` the server answers
-it with. Each docstring says why, and what it costs to override a private method
-to get it.
+It also closes more politely than the base client does, which is a fix and not a
+convenience: `_disconnect_async` below says why, and what it costs to override a
+private method to get it.
 """
 
 import asyncio
@@ -154,36 +152,29 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         return action.model_dump()
 
     def _parse_result(self, payload: dict[str, Any]) -> StepResult[Observation]:
-        """A step frame as a `StepResult` carrying a `SeahavenObservation`.
+        """A reply frame as a `StepResult` carrying a `SeahavenObservation`.
 
-        This is the base client's hook for `step`, and a `CallToolAction` result
-        is the frame that carries a `SeahavenObservation`. A `ListToolsAction`
-        answers a `ListToolsObservation`, which has a `tools` list and no
-        `result`; it does not come through here, and `list_tools` below says
-        why. A `reset` does not come through here either: `_reset_async` below
-        parses that frame as the plain `Observation` the server answers it with.
+        The base client parses the reply to a `step` and the reply to a `reset`
+        through this one hook, so both arrive as a `SeahavenObservation`. A tool
+        call fills `tool_name` and one of `result` and `error`. A reset fills
+        only the inherited `metadata`, because the server answers a reset with a
+        plain `Observation` and this model's own three fields all have defaults.
+
+        Reading `result` off a reset is therefore `None` at runtime rather than
+        an error, which is why this client is parameterised on `Observation`
+        instead: `reset(...).observation.result` does not type-check, and
+        `metadata` is how a reset is read.
+
+        A `ListToolsAction` answers a `ListToolsObservation`, which has a
+        `tools` list and no `result`; it does not come through here, and
+        `list_tools` below says why.
         """
-        return _step_result(payload, SeahavenObservation)
-
-    async def _reset_async(self, **kwargs: Any) -> StepResult[Observation]:
-        """A reset frame as a `StepResult` carrying a plain `Observation`.
-
-        The server answers `reset` with OpenEnv's base `Observation`, its
-        `metadata` carrying `fixture`, `now` and `tools`, because no tool was
-        called. The base client parses that reply through `_parse_result`, the
-        one hook it also uses for `step`, so the two frames cannot be told apart
-        there and the reset would arrive as a `SeahavenObservation` with every
-        field but `metadata` at its default. This parses it as what it is.
-
-        Like `_disconnect_async`, this overrides a private method, verified
-        against **openenv 0.4.2**, and `test_client.py` asserts the base class
-        still has it. If an upgrade ever routes `reset` around this override,
-        the frame parses as a `SeahavenObservation` instead: `metadata` is still
-        on it and still carries the facts, so the cost is the type, never the
-        data.
-        """
-        response = await self._send_and_receive({"type": "reset", "data": kwargs})
-        return _step_result(response.get("data", {}), Observation)
+        return StepResult(
+            observation=SeahavenObservation.model_validate(payload.get("observation", {})),
+            reward=payload.get("reward"),
+            done=payload.get("done", False),
+            metadata=payload.get("metadata"),
+        )
 
     def _parse_state(self, payload: dict[str, Any]) -> SeahavenState:
         return SeahavenState.model_validate(payload)
@@ -233,13 +224,3 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         )
         observation = response.get("data", {}).get("observation", {})
         return list(observation.get("tools", []))
-
-
-def _step_result(payload: dict[str, Any], model: type[Observation]) -> StepResult[Observation]:
-    """A reply frame's `data` as a `StepResult`, its observation parsed as `model`."""
-    return StepResult(
-        observation=model.model_validate(payload.get("observation", {})),
-        reward=payload.get("reward"),
-        done=payload.get("done", False),
-        metadata=payload.get("metadata"),
-    )

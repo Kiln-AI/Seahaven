@@ -27,7 +27,6 @@ pytest.importorskip(
 
 from openenv.core.env_client import EnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
-from openenv.core.env_server.types import Observation
 
 from seahaven.openenv import SeahavenClient, SeahavenObservation, SeahavenState
 from tests.serving import serving
@@ -122,48 +121,27 @@ def test_state_refuses_a_frame_that_does_not_name_a_world(client: SeahavenClient
         client._parse_state({"episode_id": "ep-1", "step_count": 0})
 
 
-def test_a_reset_frame_parses_as_a_plain_observation(
-    client: SeahavenClient, monkeypatch: pytest.MonkeyPatch
+def test_a_reset_frame_parses_through_the_step_hook_with_only_its_metadata(
+    client: SeahavenClient,
 ) -> None:
-    """`_reset_async` parses the frame a reset answers: a base `Observation`, facts in `metadata`.
+    """A reset frame comes through `_parse_result`, because the base client has one hook.
 
-    The socket is stubbed with the envelope the server sends, so this drives the
-    override itself and not a helper beside it: what it sent, and what it made
-    of the reply.
+    The server answers a reset with a plain `Observation`, and this is what a
+    typed client makes of that frame: a `SeahavenObservation` carrying the facts
+    in `metadata`, with the three fields of a tool call left at their defaults.
+    `reset(...).observation.result` is `None` at runtime, which is why the
+    client is parameterised on `Observation` so that reading it does not
+    type-check.
     """
     facts = {"fixture": "start", "now": INSTANT_ISO, "tools": 6}
-    sent: list[dict[str, Any]] = []
-
-    async def answer(message: dict[str, Any]) -> dict[str, Any]:
-        sent.append(message)
-        return {
-            "type": "observation",
-            "data": {
-                "observation": {"metadata": facts},
-                "reward": None,
-                "done": False,
-                "metadata": facts,
-            },
-        }
-
-    monkeypatch.setattr(client, "_send_and_receive", answer)
-    result = asyncio.run(client._reset_async(fixture="start", seed=7))
-    assert sent == [{"type": "reset", "data": {"fixture": "start", "seed": 7}}]
-    assert type(result.observation) is Observation
-    assert result.observation.metadata == facts
-    assert (result.reward, result.done, result.metadata) == (None, False, facts)
-
-
-def test_a_reset_frame_is_not_parsed_through_the_step_hook(client: SeahavenClient) -> None:
-    """`_parse_result` is the step hook, and it would type a reset as a tool call.
-
-    The base client sends both frames through `_parse_result`; the override of
-    `_reset_async` is what keeps a reset out of it. This pins what the hook
-    does to a reset frame on its own, so the test above cannot pass by
-    accident of the two parsers agreeing.
-    """
-    result = client._parse_result({"observation": {"metadata": {"fixture": None}}})
+    result = client._parse_result(
+        {"observation": {"metadata": facts}, "reward": None, "done": False, "metadata": facts}
+    )
     assert isinstance(result.observation, SeahavenObservation)
+    assert result.observation.metadata == facts
+    assert (result.observation.tool_name, result.observation.result) == ("", None)
+    assert result.observation.error is None
+    assert (result.reward, result.done, result.metadata) == (None, False, facts)
 
 
 def test_the_observation_model_refuses_a_frame_it_does_not_know(client: SeahavenClient) -> None:
@@ -178,8 +156,9 @@ def test_the_observation_model_refuses_a_frame_it_does_not_know(client: Seahaven
 def test_the_client_drives_a_world_synchronously(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(now=INSTANT_ISO)
-        assert type(reset.observation) is Observation
+        assert isinstance(reset.observation, SeahavenObservation)
         assert reset.observation.metadata["now"] == INSTANT_ISO
+        assert reset.observation.result is None
         names = [tool["name"] for tool in env.list_tools()]
         assert "rows" in names and "controller_run_sql" not in names
         assert env.call("execute", sql="INSERT INTO notes VALUES ('n1', 'b', 0)").result == {
@@ -267,21 +246,17 @@ def test_the_client_is_a_context_manager_that_closes_its_session(world: World) -
 # --- the seam under the polite close ---------------------------------------
 
 
-@pytest.mark.parametrize("hook", ["_disconnect_async", "_reset_async"])
-def test_the_private_hooks_this_client_overrides_are_still_there(hook: str) -> None:
-    """The check that fails loudly if OpenEnv ever moves either of these.
+def test_the_private_hook_this_client_overrides_is_still_there() -> None:
+    """The check that fails loudly if OpenEnv ever moves this method.
 
-    `SeahavenClient` overrides two *private* methods of `EnvClient`.
+    `SeahavenClient` overrides one *private* method of `EnvClient`.
     `_disconnect_async` makes a close wait for the server, which is what keeps a
-    server's log free of a traceback per session; `_reset_async` parses a reset
-    frame as the plain `Observation` the server answers it with, instead of the
-    tool-call shape `_parse_result` builds for a step. Each docstring has its
-    own story. An OpenEnv that renamed or dropped either method would leave the
-    override defining something nobody calls, and the only symptom would be
-    noise in somebody else's log, or a reset typed as a tool call. This says so
-    here instead.
+    server's log free of a traceback per session; its docstring has the story.
+    An OpenEnv that renamed or dropped the method would leave the override
+    defining something nobody calls, and the only symptom would be noise in
+    somebody else's log. This says so here instead.
     """
-    assert hasattr(EnvClient, hook), (
-        f"openenv no longer has the {hook} hook SeahavenClient overrides"
+    assert hasattr(EnvClient, "_disconnect_async"), (
+        "openenv no longer has the _disconnect_async hook SeahavenClient overrides"
     )
-    assert getattr(SeahavenClient, hook) is not getattr(EnvClient, hook)
+    assert SeahavenClient._disconnect_async is not EnvClient._disconnect_async
