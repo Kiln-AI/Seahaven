@@ -16,7 +16,9 @@ this.
   - P2: allow multiple formats.
 - **Other environment state**
   - Tool counts: total, and total by tool name.
-  - Tool calls: a list of tool calls and their params.
+  - Tool calls: a list of tool calls and their params. Restart decision: opt-in, as
+    `seahaven.state+calls/1`, because a harness whose trace spans worlds cannot line it up with
+    this document otherwise.
   - Tool runtime? No: we're mocked.
   - Step count.
   - Tool error counts.
@@ -121,39 +123,49 @@ one store.
 
 ### What comes over, and what restarts
 
-The split is decided here in the spec, not left to a coding phase. The lists below are a first cut;
-`implementation_plan.md` carries the final, per-phase version once the questions in this restart
-are answered.
+The split is decided here in the spec, not left to a coding phase; `implementation_plan.md` says
+per phase what is reference and what is not. Decided 2026-09-17, after the questions the restart
+raised (`functional_spec.md` §14, items 8-15).
 
-**Bring over** (replay onto `main`, adapted where composition demands it):
+**Bring over** (written again against `main`, with the old branch as reference):
 
-- `state.py` whole: `envelope`, `document`, `check_format_name`, the two built-in formats, and the
-  name rules.
+- `state.py`: `envelope`, `document`, `check_format_name`, the built-in formats and the name
+  rules.
 - The record shape and its rendering: `LogRecord` with `to_dict()` in field order, `render_log`,
   the SQLite-to-JSON value mapping, sorting on rendered key values, `_jsonable`'s infinity rule.
-- The per-call session design, extended to one session per node per call.
-- `Instance.state()` and its guards: the formatting guard keyed on the thread, the refusal inside a
-  transaction, refusal after `destroy()`.
+- The per-call session design, now one session per node per call.
+- `Instance.state()` and its guards: the formatting guard keyed on the thread and checked ahead
+  of the gate, the refusal inside a transaction, refusal after `destroy()`, the document copied so
+  it aliases nothing.
 - `world.state_format(...)` as the registration decorator, `world.pinned_state_format` as the pin,
   the registry copied by `World.copy()`, `RESET_ARGUMENTS` gaining `state_format`.
-- The OpenEnv surface: `SeahavenState` as the document plus `step_count`, `WorldRef` and
-  `FixtureRef`, `reset(state_format=...)`, the episode id minted before the instance, and the gate
-  tests that prove the whole document arrives over the WebSocket.
-- The deprecation of `controller_run_sql` attributed to the caller's line with `skip_file_prefixes`.
+- The OpenEnv surface: `SeahavenState` as the document plus `step_count`, `reset(state_format=...)`,
+  the episode id minted before the instance and passed to the manager, and the gate tests that
+  prove the whole document arrives over the WebSocket to the typed and the stock client.
+- The deprecation of `controller_run_sql`, attributed to the caller's line with
+  `skip_file_prefixes`, and the docs' account of when Python shows it.
 - Test support: the fold as test code, the oracle over SQLite's own cumulative changeset, the
-  published JSON schema with `additionalProperties: false`.
+  published JSON schema with `additionalProperties: false` -- as flat files under `tests/`.
 - Seed narrowing to `int | None`.
-- The `bench/recording.py` probe and its report section, retargeted at per-node runtimes.
+- The `bench/recording.py` probe, its report section and its reporting rules, retargeted at
+  per-node runtimes and run last.
 
-**Restart** (re-decided or re-authored against `main`):
+**Restart** (re-decided against `main`; the old branch is not reference for these):
 
-- The `subworld` field: renamed, typed and populated to match `Change.world`.
-- The envelope's provenance: composition and per-node fixture identity.
-- Where the format pin is required and which pin governs a tree.
-- Call ordinals on `main`'s two-stage dispatch (`call` → `_target` → `_dispatch`), and nested calls.
+- The node field on a record: `world`, a string, the canonical path, `main` for the root --
+  composition's definition, adopted. Not `subworld`, never `null`.
+- The envelope's provenance: `composition` and `fixture.nodes`, both keyed by path, beside a kept
+  `world`.
+- The pin on a tree: required on every `World`; the root's pin governs an instance and the root's
+  registry resolves.
+- Ordinals: `main`'s two-stage dispatch already gives the rule, and the rule itself is narrower --
+  only dispatched calls count, and `i` groups rather than joins.
+- A third built-in, `seahaven.state+calls/1`, because a document cannot be lined up with a trace
+  that spans worlds.
 - The removal of `Instance.changes()`, `Change`, `render()` and `controller_changes`, re-planned
-  against the callers `main` added for composition.
-- Everything in `src/seahaven/docs/`: new page set, new house style (`AGENTS.md` "Docs style"),
-  and `serving_and_openenv.md` in place of the deleted `serving.md` and `openenv.md`.
-- The `BACKLOG.md` edits, which target a file `main` deleted on purpose. Deferred findings now go to
-  `specs/projects/<project>/backlog.md` and are closed before merge.
+  against the callers `main` added for composition, with the migration rule fixed in the spec.
+- Everything in `src/seahaven/docs/`: `main`'s page set, `AGENTS.md`'s "Docs style", and
+  `serving_and_openenv.md` in place of the deleted `serving.md` and `openenv.md`.
+- The `BACKLOG.md` edits, which target a file `main` deleted on purpose. Deferred findings go to
+  `specs/projects/state_v2/backlog.md` and are closed before merge.
+- The measured cost: void under per-node sessions, taken again in the last phase.
