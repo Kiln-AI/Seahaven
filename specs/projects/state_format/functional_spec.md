@@ -369,8 +369,7 @@ Numbered so they can be answered by number.
 2. *Answered 2026-09-17:* infinities render as `null` (§3.4).
 3. *Answered 2026-09-17:* `episode_id` is the OpenEnv episode id over the wire and the instance id
    in process (§3.1); no separate `instance_id` field.
-4. **The name `change_log()`.** `inst.log()` reads as logging. Alternatives: `changelog()`,
-   `row_changes()`.
+4. *Answered 2026-09-17:* `inst.change_log()` (§8).
 5. **Where custom formatters register.** Proposed on the world, like tools. Alternative: a
    process-wide registry, so an extension's formatter is available to every world without each
    registering it. The world-level one keeps the "everything is registered against the world"
