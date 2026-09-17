@@ -106,8 +106,9 @@ def _dispatch(self, target, arguments):
         ctx = frame.ctx(target.node.key, call)
         if tool.control:
             return control.dispatch(self, ctx)      # not a call: no ordinal, no session, no entry
+        recorded = _jsonable_arguments(target.name, arguments)   # WorldBug here: no ordinal (§3.3)
         i = self._next_ordinal()
-        with self._recording(i), self._logging_call(target.name, arguments):
+        with self._recording(i), self._logging_call(target.name, recorded):
             with in_call():
                 return target.node.agent_chain(ctx, call)
 ```
@@ -152,18 +153,21 @@ propagates as a `WorldBug`-class failure of the instance; nothing is appended.
 
 ### 3.2 `bulk()`
 
-`_bulk` wraps its block in `self._recording(None)` outside the root's transaction, so authoring
-writes land in the log with `i: null` (FS §3.2), on every node the block touched, appended when
-the block exits. The transaction is inner: the recording must read each changeset after the
-block has committed or rolled back. Startup hooks run before any session exists and stay out.
+`main`'s `_bulk` opens every node's transaction on an `ExitStack` before the block runs, so a
+bulk write that reaches two stores lands in both or in neither. `_recording(None)` wraps that
+stack from outside, so authoring writes land in the log with `i: null` (FS §3.2), on every node
+the block touched, appended when the block exits, and a block that raised leaves nothing on any
+node. The transactions are inner: the recording must read each changeset after they have all
+committed or rolled back. Startup hooks run before any session exists and stay out.
 
 ### 3.3 The call log
 
-`_logging_call(name, arguments)` serialises the arguments with `call.serialise` before the chain
-runs -- a `WorldBug` there is raised before dispatch and before `_next_ordinal`, so a call whose
-arguments cannot be JSON takes no ordinal (FS §4.2) -- and in its `finally` appends
-`CallRecord(name, serialised, error)`, where `error` is `str(exc)` for whatever the chain raised,
-or `None`. The name is `target.name`, which under composition is the root surface's name for the
+`_jsonable_arguments(name, arguments)` runs `call.serialise` over the arguments before
+`_next_ordinal`, so a call whose arguments cannot be JSON is a `WorldBug` that names the call and
+takes no ordinal (FS §4.2); `serialise`'s own message speaks of tool results, so it is wrapped, as
+the startup-keyword refusal is. `_logging_call(name, recorded)` then appends
+`CallRecord(name, recorded, error)` in its `finally`, where `error` is `str(exc)` for whatever the
+chain raised, or `None`. The name is `target.name`, which under composition is the root surface's name for the
 tool, prefix included. Nested calls through a `WorldHandle` never reach `_dispatch` and add no
 entry.
 
