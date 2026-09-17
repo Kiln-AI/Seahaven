@@ -24,7 +24,7 @@ Ten names on this page live outside `seahaven/__init__.py`, in two groups:
 import seahaven
 
 seahaven.World, seahaven.Instance, seahaven.Ctx, seahaven.Tool, seahaven.Call
-seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.Change, seahaven.Fixture
+seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.LogRecord, seahaven.Fixture
 seahaven.SeahavenError, seahaven.WorldBug
 seahaven.ToolError, seahaven.ArgumentError, seahaven.DbError, seahaven.UnknownTool
 seahaven.sql_files, seahaven.helpers, seahaven.sandbox
@@ -109,13 +109,14 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.call(name, /, **arguments)` | run one tool: validation, the middleware chain, the tool, on the calling thread, under the instance's lock. Raises the world's `ToolError` subclasses |
 | `inst.tools()` | the tool list with JSON schemas, as `{"name", "description", "input_schema"}`. Control tools are never in it |
 | `inst.inspect()` | a read-only `Db` on a second connection: every table, the instance clock, opened once and kept. Never a tool |
-| `inst.changes()` | the cumulative changeset since creation, as `list[Change]` |
+| `inst.change_log()` | every row this instance has changed, one record per row per call, in call order, as `list[LogRecord]` |
 | `inst.state(format=None)` | the state document as a plain dict: the framework's envelope, plus `state` from the instance's format. `format` answers in another registered format instead, for the same instance |
 | `inst.freeze(id, description)` | mint a fixture from the current state; returns the `Fixture`. Refuses inside `bulk()` |
 | `inst.bulk()` | a context manager yielding the instance's own `Ctx`, in one transaction, for loading rows fast |
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
 | `inst.id`, `inst.fixture`, `inst.seed` | the instance id, the fixture id (or `None`), the derived seed bytes |
 | `inst.episode_id`, `inst.caller_seed`, `inst.fixture_sha256`, `inst.startup`, `inst.state_format` | the provenance the state document reports: the episode (the instance id in process), the `seed=` as given, the fixture file's hash, the startup keywords, and the format this instance answers in |
+| `inst.call_count` | how many calls have been dispatched to this instance; the last call's ordinal is one less. Control tools and `inst.tools()` are not calls |
 | `inst.clock`, `inst.world`, `inst.state_path` | the clock, the world, and the instance's own database file |
 
 The tool name is positional-only, so a world may have a tool argument called `name`.
@@ -222,22 +223,23 @@ class Tool:
 ```
 
 `from_function` is what a tool factory — a helper, an extension — builds its tool with. `control` is
-the framework's own flag for the control tools and cannot be set through it.
+the framework's own flag for the control tool and cannot be set through it.
 
-## `Change`
+## `LogRecord`
 
 ```py
-change.table  # the table
-change.op  # "insert" | "update" | "delete"
-change.key  # the row's primary key columns, as a dict
-change.before, change.after  # row dicts, or None where not applicable
-change.to_dict()  # the wire shape an eval reads
+record.i  # the ordinal of the call that made the change, or None for a bulk() write
+record.subworld  # always None in this release
+record.table  # the table
+record.op  # "insert" | "update" | "delete"
+record.key  # the row's primary key columns, as a dict, in key order
+record.before, record.after  # row dicts, or None where not applicable
+record.to_dict()  # the published shape, in the published field order
 ```
 
-`before` and `after` hold only the columns the change carries. A changeset marks the rest
-`apsw.no_change`, which is not the same as `NULL`, so an update's `before` holds the key columns and
-the old values of what changed — flattening the two would turn "changed the assignee" into "rewrote
-the row".
+An insert's `after` and a delete's `before` are the whole row. An update carries exactly the non-key
+columns that call changed, old values in `before` and new in `after`; the key is in `record.key` and
+in neither side. A primary-key rewrite is a delete plus an insert, never an update.
 
 ## `Fixture`
 

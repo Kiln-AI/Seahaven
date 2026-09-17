@@ -3,16 +3,16 @@
 The fold is defined by the spec so that any reader, in any language, computes the
 same one. This is that definition as code, and the framework does not ship it:
 `tests/test_fold.py` checks it against SQLite's own cumulative changeset, which
-is the oracle the definition was written from.
+`tests/support/oracle.py` supplies and which the definition was written from.
 """
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-from seahaven.changes import Change, LogRecord
+from seahaven.changes import LogRecord
 
-__all__ = ["NetChange", "fold", "net_of_changes"]
+__all__ = ["NetChange", "fold"]
 
 type Columns = dict[str, Any]
 
@@ -38,26 +38,6 @@ def fold(log: Iterable[LogRecord]) -> list[NetChange]:
         # untouched, which is what the spec means by "starting from untouched".
         groups[group] = _compose(groups.get(group), record)
     return _sorted(net for net in groups.values() if net is not None)
-
-
-def net_of_changes(changes: Iterable[Change]) -> list[NetChange]:
-    """SQLite's own cumulative changeset in the same shape, as the oracle to compare against.
-
-    The one difference to undo is the key: a `Change` repeats it inside an
-    update's `before`, and a `NetChange` -- like a `LogRecord` -- keeps it in
-    `key` alone.
-    """
-    return _sorted(
-        NetChange(
-            subworld=None,
-            table=change.table,
-            op=change.op,
-            key=change.key,
-            before=_without(change.before, change.key) if change.op == "update" else change.before,
-            after=change.after,
-        )
-        for change in changes
-    )
 
 
 def _compose(current: NetChange | None, record: LogRecord) -> NetChange | None:

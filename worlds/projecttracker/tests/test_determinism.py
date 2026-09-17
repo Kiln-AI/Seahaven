@@ -4,7 +4,7 @@
 framework -- Seahaven promises a fixed clock and a seeded source, and a world that
 reaches past `ctx` for either gets what it asked for. This module is where this
 world says it does not: a scripted sequence of calls against one fixture and one
-seed produces the same identifiers, the same keys and the same changeset every
+seed produces the same identifiers, the same keys and the same change log every
 time, and a different seed produces different identifiers.
 """
 
@@ -32,10 +32,10 @@ def scripted(seed: int) -> tuple[list[Any], list[dict[str, Any]]]:
         instance.call("add_comment", issue_id=issue["id"], body="On it.")
         instance.call("transition_issue", issue_id=issue["id"], status="in_progress")
         answers = [person, issue, instance.call("get_issue", issue_id=issue["id"])]
-        return answers, [change.to_dict() for change in instance.changes()]
+        return answers, [record.to_dict() for record in instance.change_log()]
 
 
-def test_one_seed_replays_the_ids_the_keys_and_the_changeset() -> None:
+def test_one_seed_replays_the_ids_the_keys_and_the_change_log() -> None:
     """Two runs of the same script agree on everything an eval could grade."""
     first_answers, first_changes = scripted(seed=7)
     second_answers, second_changes = scripted(seed=7)
@@ -44,9 +44,9 @@ def test_one_seed_replays_the_ids_the_keys_and_the_changeset() -> None:
     # And it really did write something, so agreeing is not agreeing about nothing.
     assert first_answers[1]["key"] == "ENG-41"
     # `teams` is in there because minting a key bumps the team's counter, which
-    # is a row change like any other and is exactly the kind of thing a changeset
+    # is a row change like any other and is exactly the kind of thing a log
     # comparison would otherwise miss.
-    assert {change["table"] for change in first_changes} == {
+    assert {record["table"] for record in first_changes} == {
         "users",
         "teams",
         "issues",

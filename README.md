@@ -94,7 +94,7 @@ for rollout in range(100):
         "big_co", seed=rollout
     ) as world_instance:  # a private copy of the fixture, in ms
         run_agent(world_instance)  # your agent, your harness
-        reward = grade(world_instance.changes())  # the net diff the agent left behind
+        reward = grade(world_instance.state())  # the state document: provenance and the change log
 ```
 
 **Serve it:** Host and OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.

@@ -22,8 +22,8 @@ pytestmark = pytest.mark.seahaven(fixture=None, now=NOW)
 _ADA = ("ada@tracker.invalid", "Ada", "admin")
 
 
-def _user_changes(instance: seahaven.Instance) -> list[seahaven.Change]:
-    return [change for change in instance.changes() if change.table == "users"]
+def _user_records(instance: seahaven.Instance) -> list[seahaven.LogRecord]:
+    return [record for record in instance.change_log() if record.table == "users"]
 
 
 def test_a_fault_a_handler_raises_carries_the_worlds_own_code(
@@ -63,17 +63,17 @@ def test_a_faulted_call_writes_nothing(instance: seahaven.Instance) -> None:
     rendered *inside* the call would return normally and commit the row it had
     already written. There would be two Adas.
 
-    The changeset is read for the `users` table alone, because the reading itself
-    is a call and this world logs every call: what is asserted is that the faulted
-    call left nothing in the world's own tables. The log's side of the same
-    rollback is `test_call_log.py`'s.
+    The change log is read for the `users` table alone, because the reading
+    itself is a call and this world logs every call: what is asserted is that the
+    faulted call left nothing in the world's own tables. The log's side of the
+    same rollback is `test_call_log.py`'s.
     """
     rpc(instance, "user.create", *_ADA)
-    before = _user_changes(instance)
+    before = _user_records(instance)
     with pytest.raises(xmlrpc.client.Fault):
         rpc(instance, "user.create", "ada@tracker.invalid", "Ada Again", "member")
     assert [user["name"] for user in rpc(instance, "user.list")] == ["Ada"]
-    assert _user_changes(instance) == before
+    assert _user_records(instance) == before
 
 
 def test_a_handler_that_returns_what_xml_rpc_cannot_carry_is_a_world_bug(

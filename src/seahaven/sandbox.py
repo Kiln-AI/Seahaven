@@ -177,8 +177,8 @@ _PRAGMAS = frozenset({"data_version"})
 # the table's shape -- *inside* the agent's statement, so it arrives here like
 # anything else the statement asks for. Denied, the session stores the
 # `SQLITE_AUTH` and every later `changeset()` fails with it: one agent write to a
-# table the world's own fixtures never touched, and `Instance.changes()` -- the
-# eval's score -- is gone for the life of the instance.
+# table the world's own fixtures never touched, and that call's records -- the
+# eval's score -- are gone.
 #
 # `_wrote_a_row` is what keeps this from being a pragma the agent can ask. The
 # session's question can only follow a row write that was already allowed, so the

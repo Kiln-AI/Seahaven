@@ -301,10 +301,9 @@ verified.
   stand.
 - **Verify end-to-end, through the real entry point.** Every defect that has cost a review round on
   this project passed its unit test and failed on a real call. Phase 4's second-worst defect — a
-  denied authorizer call latching `SQLITE_AUTH` into the changeset session and voiding
-  `Instance.changes()` for the life of an instance — was found this way and by nothing else: the
-  unit tests were green, because the session had already been shown every table a world's own
-  fixtures seeded.
+  denied authorizer call latching `SQLITE_AUTH` into the changeset session and voiding everything
+  the instance had recorded — was found this way and by nothing else: the unit tests were green,
+  because the session had already been shown every table a world's own fixtures seeded.
 - **A mutation harness that edits the repository must never be killed; it must be waited out.** The
   harnesses that mutate the working tree rather than a copy — the `ty` survivor check, and the pass
   that names every test a mutant kills — restore each file in a `finally`, which protects against a

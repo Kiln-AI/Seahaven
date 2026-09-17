@@ -71,10 +71,10 @@ def app(
 ) -> FastAPI:
     """The ASGI app serving one world: one session per instance, many sessions.
 
-    `include_control_tools` makes `controller_run_sql` and `controller_changes`
-    callable over the wire. They are never listed either way; the flag is for a
-    harness that drives the world itself, and a server an agent talks to should
-    not have it.
+    `include_control_tools` makes `controller_run_sql` callable over the wire. It
+    is never listed either way; the flag is for a harness that drives the world
+    itself, and a server an agent talks to should not have it. The tool is
+    deprecated: `state` is what a harness reads now.
 
     `session_timeout` is seconds of inactivity before OpenEnv reaps a session,
     or `None` for no reaper. It is passed as part of a `ConcurrencyConfig`

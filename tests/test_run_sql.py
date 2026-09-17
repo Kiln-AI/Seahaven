@@ -161,24 +161,30 @@ def test_a_write_to_a_listed_table_commits_with_the_call(tmp_path: Path) -> None
             {"points": 9},
             {"points": 5},
         ]
-        # Net, as a changeset always is: the seeded insert and this update are
-        # one insert of the row as it now stands.
-        assert {"id": "i1", "title": "first", "points": 9} in [
-            change.after for change in instance.changes()
+        # Net per call and not across calls: the seeding's insert and this
+        # call's update are two records, not one insert of the row as it stands.
+        assert [
+            (record.i, record.op, record.after)
+            for record in instance.change_log()
+            if record.key == {"id": "i1"}
+        ] == [
+            (None, "insert", {"id": "i1", "title": "first", "points": 3}),
+            (0, "update", {"points": 9}),
         ]
 
 
-def test_a_write_to_a_table_the_world_never_wrote_leaves_the_changeset_readable(
+def test_a_write_to_a_table_the_world_never_wrote_leaves_the_log_readable(
     tmp_path: Path,
 ) -> None:
-    """The changeset session's first sight of a table happens inside the agent's statement.
+    """A session's first sight of a table happens inside the agent's statement.
 
     SQLite asks `PRAGMA table_xinfo` then, and a denial is not an error the
-    statement reports -- the session stores it and every later `changeset()`
-    raises `SQLITE_AUTH` instead. So the damage shows up nowhere near the write:
-    the call succeeds, the row is there, and the eval's score is gone for the
-    life of the instance. `attachments` is the table the seeding never touches,
-    which is what makes this the agent's write and not the world's.
+    statement reports -- the session stores it and the `changeset()` that ends
+    the call raises `SQLITE_AUTH` instead. So the damage shows up nowhere near
+    the write: the call succeeds, the row is there, and the eval's score is gone.
+    A session lives for one call, so *every* call is a first sighting of every
+    table it writes, and `attachments` -- which the seeding never touches -- is
+    the one the world itself has never written either.
     """
     world = sql_world(tmp_path, read_only=False)
     with world.instance(None) as instance:
@@ -187,25 +193,25 @@ def test_a_write_to_a_table_the_world_never_wrote_leaves_the_changeset_readable(
         ask(instance, "INSERT INTO attachments (id, blob) VALUES ('a1', NULL)")
 
         assert sorted(
-            (change.table, change.op, tuple(change.key.items())) for change in instance.changes()
+            (record.table, record.op, tuple(record.key.items())) for record in instance.change_log()
         ) == [
             ("attachments", "insert", (("id", "a1"),)),
             ("issues", "insert", (("id", "i1"),)),
             ("issues", "insert", (("id", "i2"),)),
             ("salaries", "insert", (("person", "alice"),)),
         ]
-        # Every shape of write, each the first this session sees of its table,
-        # and the control tool reads the same changeset through its own path.
+        # Every shape of write, each of them its own call's first sighting of
+        # the table it touches.
         ask(instance, "UPDATE attachments SET blob = x'00' WHERE id = 'a1'")
         ask(instance, "DELETE FROM issues WHERE id = 'i2'")
-        rendered = instance.call("controller_changes")
-        assert sorted(
-            (change["table"], change["op"], change["key"]["id"])
-            for change in rendered
-            if change["table"] != "salaries"
-        ) == [
-            ("attachments", "insert", "a1"),
-            ("issues", "insert", "i1"),
+        assert [
+            (record.i, record.table, record.op)
+            for record in instance.change_log()
+            if record.i is not None
+        ] == [
+            (0, "attachments", "insert"),
+            (1, "attachments", "update"),
+            (2, "issues", "delete"),
         ]
 
 

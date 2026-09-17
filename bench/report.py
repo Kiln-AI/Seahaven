@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from bench.baseline import BaselinePoint, Share
 from bench.environment import Environment
 from bench.harness import Summary, significant
+from bench.recording import Recording
 from bench.runner import Cache
 from bench.sweep import Cell, Isolation, Point, Sweep
 from bench.workloads import WORKLOADS
@@ -42,6 +43,7 @@ class Results:
     cold_skipped: str | None
     baseline: tuple[BaselinePoint, ...] = ()
     share: Share | None = None
+    recording: tuple[Recording, ...] = ()
     sweep: Sweep | None = None
     isolation: Isolation | None = None
 
@@ -65,6 +67,7 @@ def render(results: Results) -> str:
         _method(results),
         *_baseline(results),
         *_share(results),
+        *_recording(results),
         *_sweep(results),
         *_isolation(results),
         *_repeatability(results),
@@ -148,7 +151,7 @@ def _method(results: Results) -> str:
 **The world.** ProjectTracker `agency`, the framework's largest fixture: twelve people, nine
 projects, six hundred issues with six months of history. Every call goes through
 `Instance.call`, which is the path an eval takes -- argument validation, the middleware chain,
-the per-call transaction, the tool, the changeset session, the serialiser.
+the per-call transaction, the tool, the change log's session, the serialiser.
 
 **The workloads.**
 
@@ -165,7 +168,7 @@ fixed number of calls per session, so two passes of one configuration do identic
 
 **The write mix's warm and cold columns differ by more than a cache.** Its warm-up writes as many
 rows as the measured pass will, so a warm write pass runs on an instance carrying a pass worth of
-extra rows and changeset entries while a cold one runs on a virgin instance. An instance's write
+extra rows and log records while a cold one runs on a virgin instance. An instance's write
 cost climbs with those rows by roughly the size of the gap between the two columns, so the write
 mix's cold/warm axis mixes cache state with accumulated state and should not be read as a cache
 effect. The read workload has no such confound: it writes nothing.
@@ -241,12 +244,103 @@ connection, whose read-only authorizer runs a Python callback while SQLite prepa
     ]
 
 
+def _recording(results: Results) -> list[str]:
+    if not results.recording:
+        return []
+    rows = "\n".join(_recording_rows(probe) for probe in results.recording)
+    findings = "\n\n".join(_wrapped(_recording_finding(probe)) for probe in results.recording)
+    calls = min(probe.calls for probe in results.recording)
+    # Only when this run produced one: a standalone `recording` report has no
+    # noise floor of its own to point at.
+    floor = (
+        " Read the totals against section 6's noise floor before calling them a difference, and"
+        if results.sweep is not None
+        else " Read the totals as approximate, and"
+    )
+    return [
+        f"""## 3. What the change log costs a call
+
+Each workload on one instance, recorded three ways. The first is what Seahaven does: a session
+opened and attached per call, its changeset read when the call's transaction is done, and the
+records rendered into the log. The second opens and attaches the same session per call and reads
+nothing out of it, so the gap to the first is `changeset()` and `render_log`. The third is the
+shape before this release, one session for the whole pass and read by nobody, so the gap to the
+second is everything a *fresh* session does that a warmed-up one does not: opening it, attaching
+its tables, its first sighting of each table it records, and freeing a populated change buffer at
+`close()`. Neither of the last two is a configuration Seahaven offers.
+
+| Workload | Leg | Per call | Against one session |
+|---|---|---:|---:|
+{rows}
+
+{findings}
+
+{
+            _wrapped(
+                f"From {calls} calls down each leg, alternated pass by pass so that an instance's "
+                "write cost climbing with its own rows is not handed to whichever leg ran last."
+                f"{floor} read the *split* more loosely still: the fresh-session leg is the "
+                "noisiest of the three and has been seen to move by more than its own size "
+                "between runs, while the rendering share holds. What that leg is made of differs "
+                "by workload, and this probe does not separate the pieces -- read the per-workload "
+                "findings above for which of them can be doing the work at all."
+            )
+        }"""
+    ]
+
+
+def _recording_rows(probe: Recording) -> str:
+    """One workload's three legs.
+
+    The stable share is rounded and the noisy one takes the remainder, so the
+    middle row and the finding below the table cannot disagree by a point. A
+    workload that wrote no rows gets no middle figure at all: there is nothing
+    for the leg above it to have rendered, so whatever separates them is noise,
+    and printing it as a percentage would invite it to be read.
+    """
+    total = round(probe.overhead * 100)
+    rendering = round(probe.rendering * 100)
+    middle = f"{total - rendering:+d}%" if probe.wrote_rows else "noise"
+    return "\n".join(
+        (
+            f"| `{probe.workload}` | a session per call | {_ms(probe.per_call_seconds)} "
+            f"| {total:+d}% |",
+            f"| `{probe.workload}` | a session per call, never read | {_ms(probe.unread_seconds)} "
+            f"| {middle} |",
+            f"| `{probe.workload}` | one long-lived session | {_ms(probe.long_lived_seconds)} "
+            f"| -- |",
+        )
+    )
+
+
+def _recording_finding(probe: Recording) -> str:
+    total = round(probe.overhead * 100)
+    rendering = round(probe.rendering * 100)
+    if not probe.wrote_rows:
+        return (
+            f"**`{probe.workload}`** costs about {total:+d}% against the framework's previous "
+            "shape. No call of the pass gave its session a row, so there was nothing to render "
+            "and nothing to free: what it pays is a session opened and attached per call, and an "
+            "empty `changeset()` read back. Its two comparison legs therefore differ by that "
+            "empty read alone, so whatever separates them here is not a measurement of anything "
+            "and the split is left unreported."
+        )
+    return (
+        f"**`{probe.workload}`** costs about {total:+d}% against the framework's previous shape, "
+        f"of which roughly {rendering:+d} points are reading the changeset and rendering the "
+        f"records and the remaining {total - rendering:+d} are what a fresh session per call costs "
+        "over a warmed-up one. The first of those is work that used to happen once an episode, "
+        "when an eval asked for the changeset; it happens per call now, because a per-call record "
+        "is what the change log is."
+    )
+
+
 def _sweep(results: Results) -> list[str]:
     sweep = results.sweep
     if sweep is None:
         return []
     sections = [
-        """## 3. The gate sweep
+        """## 4. The gate sweep
 
 One table per workload and cache state. **Calls/s** is the whole process: every session's calls
 over the pass's wall time. **spread** is (max - min) / median over the repeats -- this cell's own
@@ -254,7 +348,7 @@ noise. **worst** is the longest any single call waited.
 
 Two things these tables cannot show. **Fairness**, except through `worst`: every session is given
 the same number of calls, so a pass does not end until the worst-served one has had all of them,
-and a count per session would read the same at every gate size. Section 4, which is bounded by
+and a count per session would read the same at every gate size. Section 5, which is bounded by
 time rather than by calls, is where unfairness is visible. And **`Calls/s` and `worst` are not
 independent**: a pass ends when its slowest session finishes, so a configuration that leaves one
 session waiting also spends the tail of its pass below full load, which lowers the rate of exactly
@@ -305,7 +399,7 @@ def _isolation(results: Results) -> list[str]:
         f"gate size does to everybody else when one call is slow."
     )
     return [
-        f"""## 4. One slow call, {probe.readers} ordinary sessions
+        f"""## 5. One slow call, {probe.readers} ordinary sessions
 
 {intro}
 
@@ -338,7 +432,7 @@ def _repeatability(results: Results) -> list[str]:
     )
     median_spread = spreads[len(spreads) // 2]
     return [
-        f"""## 5. Repeatability, and the noise floor
+        f"""## 6. Repeatability, and the noise floor
 
 Each cell was measured {_times(sweep.repeats)}, in a different order each pass.
 
@@ -414,7 +508,7 @@ def _derived(results: Results) -> str:
         f"calls/s and the worst observed wait, for the default this machine computes ({default}) "
         "and for the ungated control."
     )
-    return f"""## 6. Derived: the quickest gate, the default, and no gate at all
+    return f"""## 7. Derived: the quickest gate, the default, and no gate at all
 
 {intro}
 

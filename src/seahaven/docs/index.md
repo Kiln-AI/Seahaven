@@ -46,13 +46,13 @@ def add_note(ctx: seahaven.Ctx, body: str) -> dict[str, str]:
 with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
     note = inst.call("add_note", body="buy milk")
     assert note["created_at"] == "2026-06-01T09:00:00.000Z"
-    assert [change.op for change in inst.changes()] == ["insert"]
+    assert [record.op for record in inst.change_log()] == ["insert"]
 ```
 
 That is the whole framework in one screen: a declaration, a function whose signature is its
-published contract, an instance that is a private copy, a frozen clock, and a changeset an eval can
-grade. A real world spreads the same three things over a package — `seahaven new <name>` lays one
-out — and adds fixtures, errors and an error handler.
+published contract, an instance that is a private copy, a frozen clock, and a change log an eval
+can grade. A real world spreads the same three things over a package — `seahaven new <name>`
+lays one out — and adds fixtures, errors and an error handler.
 
 ## Reading order
 
@@ -62,7 +62,7 @@ out — and adds fixtures, errors and an error handler.
 | [authoring.md](authoring.md) | Writing tools, errors and the error handler, middleware, startup hooks, schema rules |
 | [fixtures.md](fixtures.md) | Freezing, forking, generators, descriptions for eval authors |
 | [testing.md](testing.md) | The pytest plugin, what to test in a world |
-| [serving.md](serving.md) | `seahaven serve`, the OpenEnv client, control tools, publishing to a hub |
+| [serving.md](serving.md) | `seahaven serve`, the OpenEnv client, reading the instance, publishing to a hub |
 | [extensions.md](extensions.md) | The extension contract, the XML-RPC example |
 | [projecttracker.md](projecttracker.md) | A walkthrough of the reference world |
 

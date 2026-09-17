@@ -32,7 +32,7 @@ with projecttracker.world.instance("agency", seed=7) as tracker:
 
     # A writing tool, and the trail it leaves.
     tracker.call("transition_issue", issue_id=issue["id"], status="done")
-    assert any(change.table == "issue_events" for change in tracker.changes())
+    assert any(record.table == "issue_events" for record in tracker.change_log())
 ```
 
 ## The package

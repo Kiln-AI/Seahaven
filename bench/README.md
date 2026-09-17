@@ -14,6 +14,7 @@ From the repository root:
 ```sh
 uv run python -m bench all --out bench/results/latest.md    # everything, ~10 min
 uv run python -m bench baseline                             # one thread, ~1 min
+uv run python -m bench recording                            # what the change log costs, ~1 min
 uv run python -m bench sweep --progress                     # the gate sweep, ~9 min
 uv run python -m bench isolation                            # the slow-call probe, ~1 min
 ```
@@ -57,6 +58,7 @@ reading again from the new tables rather than keeping the old one.
 | `workloads.py` | the two workloads over `agency`, and the slow statement |
 | `runner.py` | one measured point: N sessions, a cache state, a fixed number of calls |
 | `baseline.py` | one thread: what a call costs, and how much of it is SQLite |
+| `recording.py` | one thread: what the change log's per-call session costs a call |
 | `sweep.py` | the gate sweep, and the slow-call isolation probe |
 | `environment.py` | what the numbers were produced on |
 | `report.py` | the markdown, caveats first |

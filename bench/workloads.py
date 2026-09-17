@@ -3,7 +3,7 @@
 `architecture.md` §10 names them: one-row read, write mix. Both drive the world
 the way an eval does -- `world.instance("agency")`, then `instance.call(...)` --
 so what is measured is the whole call: argument validation, the middleware chain,
-the transaction, the tool, the changeset session and the serialiser.
+the transaction, the tool, the change log's session and the serialiser.
 
 `agency` and not a world of the benchmark's own, because a benchmark on a
 purpose-built schema measures the benchmark. This is the world the framework

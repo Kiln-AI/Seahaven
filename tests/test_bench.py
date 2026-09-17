@@ -14,7 +14,8 @@ enough to exercise every path and the suite is not the place to spend minutes.
 """
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +35,13 @@ from bench.harness import (
     significant,
     summarise,
     timed_loop,
+)
+from bench.recording import (
+    HasRecorded,
+    Recording,
+    long_lived_session,
+    recording,
+    unread_sessions,
 )
 from bench.runner import calls_per_worker, measure, sessions
 from bench.sweep import Isolation, Point, isolation, sweep
@@ -163,7 +171,7 @@ def test_the_write_mix_writes_an_issues_short_life(agency: Instance) -> None:
     assert issue["assignee_id"] is not None
     comments = agency.call("list_comments", issue_id=issue["id"])["comments"]
     assert [comment["body"] for comment in comments] == ["benchmark comment 1"]
-    changed = {change.table for change in agency.changes()}
+    changed = {record.table for record in agency.change_log()}
     assert {"issues", "comments", "issue_events", "teams"} <= changed
 
 
@@ -191,6 +199,64 @@ def test_the_share_statements_are_the_ones_the_world_runs(agency: Instance) -> N
     row = agency.inspect().rows(SHARE_STATEMENTS[0], issue_id)
     assert len(row) == 1
     assert agency.call("get_issue", issue_id=issue_id)["key"] == row[0]["key"]
+
+
+@pytest.mark.parametrize("workload", list(WORKLOADS))
+def test_the_recording_probe_times_every_leg_of_a_workload(world: World, workload: str) -> None:
+    """Every leg ran and every leg is reported. No ordering, for `share`'s reasons.
+
+    At the calls this test can afford the difference between two legs is smaller
+    than one scheduler preemption, so asserting which is larger would be a coin
+    toss. What is deterministic is that the probe ran the calls it says it ran,
+    that no leg is zero, and that the shares are the differences they claim.
+    """
+    measured = recording(world, workload=workload, calls=CALLS, repeats=1)
+
+    assert measured.workload == workload
+    assert measured.calls == calls_per_worker(WORKLOADS[workload], CALLS)
+    legs = (measured.per_call_seconds, measured.unread_seconds, measured.long_lived_seconds)
+    assert all(leg > 0 for leg in legs), legs
+    assert measured.overhead == pytest.approx(
+        (measured.per_call_seconds - measured.long_lived_seconds) / measured.long_lived_seconds
+    )
+    assert measured.rendering == pytest.approx(
+        (measured.per_call_seconds - measured.unread_seconds) / measured.long_lived_seconds
+    )
+    # Asked of the sessions the pass opened, which is why the read workload can
+    # say it wrote nothing without the probe knowing what a `read` is.
+    assert measured.wrote_rows is (workload != "read")
+
+
+@pytest.mark.parametrize("leg", [long_lived_session, unread_sessions])
+def test_a_comparison_leg_records_but_writes_no_log_and_is_put_back(
+    agency: Instance, leg: Callable[[Instance], AbstractContextManager[HasRecorded]]
+) -> None:
+    """Both legs still record; neither renders. Each restores the real one on the way out.
+
+    Asking the leg's own session what it holds is what makes this a test of the
+    legs rather than of the log: a leg that stopped opening a session at all
+    would still write nothing to the log, and the probe would go on reporting a
+    split it had stopped measuring.
+    """
+    before = len(agency.change_log())
+
+    with leg(agency) as has_recorded:
+        assert not has_recorded()
+        agency.call("create_issue", project_id=_a_project(agency), title="not in the log")
+        assert has_recorded()
+        # Any call of the pass, not the last one: a leg whose answer went back to
+        # False here would let `wrote_rows` turn on what the last call happened
+        # to be, and the report suppresses a workload's whole split on it.
+        agency.call("list_projects")
+        assert has_recorded()
+    assert len(agency.change_log()) == before
+
+    agency.call("create_issue", project_id=_a_project(agency), title="in the log")
+    assert len(agency.change_log()) > before
+
+
+def _a_project(instance: Instance) -> str:
+    return str(instance.call("list_projects")["projects"][0]["id"])
 
 
 def test_the_share_legs_are_three_timings_of_one_pass(world: World) -> None:
@@ -323,11 +389,28 @@ def test_the_probe_quotes_one_window_and_not_a_pool(world: World) -> None:
     assert f"{min(cell.worst_window)}-{max(cell.worst_window)}" in document
 
 
+def test_a_recording_only_report_points_at_no_section_it_did_not_write(world: World) -> None:
+    """`python -m bench recording` writes section 3 and nothing else to refer to."""
+    document = report.render(
+        report.Results(
+            environment=capture(),
+            command="python -m bench recording --quick",
+            seconds=1.0,
+            cold_skipped=None,
+            recording=(recording(world, workload="read", calls=CALLS, repeats=1),),
+        )
+    )
+
+    assert "## 3. What the change log costs" in document
+    assert "section 6" not in document
+    assert "## 6." not in document
+
+
 def test_the_report_carries_its_caveats_before_its_numbers(world: World) -> None:
     document = report.render(_results(world))
     assert document.index("What these numbers are") < document.index("## Environment")
     assert document.index("## Environment") < document.index("## Method")
-    for heading in ("## 1. Baseline", "## 3. The gate sweep", "## 5. Repeatability", "## 6."):
+    for heading in ("## 1. Baseline", "## 4. The gate sweep", "## 6. Repeatability", "## 7."):
         assert heading in document
     assert "never a gate" in document
     assert "read`, warm cache" in document
@@ -385,6 +468,16 @@ def _results(
             ),
         ),
         share=Share(calls=CALLS, call_seconds=0.001, db_seconds=0.0002, cursor_seconds=0.0001),
+        recording=(
+            Recording(
+                workload="write_mix",
+                calls=CALLS,
+                per_call_seconds=0.0012,
+                unread_seconds=0.0011,
+                long_lived_seconds=0.001,
+                wrote_rows=True,
+            ),
+        ),
         sweep=measured,
         isolation=Isolation(cells=(), workload="read", readers=WORKERS, seconds=0.1, repeats=1),
     )
@@ -406,7 +499,7 @@ def test_main_writes_a_report_and_leaves_the_gate_alone(tmp_path: Path) -> None:
     assert instances.concurrency() == before
     document = out.read_text()
     assert document.startswith("# Seahaven benchmark")
-    assert "## 4. One slow call" in document
+    assert "## 5. One slow call" in document
 
 
 def test_main_refuses_to_overwrite_a_hand_written_reading(tmp_path: Path) -> None:

@@ -63,8 +63,8 @@ See [fixtures.md](fixtures.md).
 ## Instance
 
 An **instance** is a private copy of a fixture's SQLite file plus one connection, one clock, one id
-generator and one changeset session. It lives for minutes, in a working directory under the system
-temp directory, and it is what an episode actually drives.
+generator and the change log it has been building. It lives for minutes, in a working directory
+under the system temp directory, and it is what an episode actually drives.
 
 ```python
 import projecttracker
@@ -191,10 +191,12 @@ deterministic tiebreak — order by a column *and* by the id — or two identica
 the order of rows sharing a value. Anything outside the world, such as a live external tool an eval
 also gives the agent, is outside the promise by rule.
 
-## Changeset
+## Change log
 
-`inst.changes()` returns what the instance has changed since it was created: a list of records
-carrying the table, the operation, the row's key, and the row before and after.
+`inst.change_log()` returns every row the instance has changed since it was created, one record per
+row per call, in call order: each record carries the ordinal of the call that made it, the table,
+the operation, the row's key, and the row before and after. `inst.state()` is the same log inside a
+document of provenance, which is what an eval saves.
 
 ```python
 import projecttracker
@@ -202,18 +204,21 @@ import projecttracker
 with projecttracker.world.instance("small_startup") as inst:
     issue = inst.call("get_issue", key="ENG-3")
     inst.call("transition_issue", issue_id=issue["id"], status="done")
-    changed = {(change.table, change.op) for change in inst.changes()}
+    changed = {(record.table, record.op) for record in inst.change_log()}
     assert ("issues", "update") in changed
 ```
 
-**A changeset is a net difference, not a log of calls.** It is the difference between the fixture
-and the current state:
+**A record is the net of its call, and the log is not net across calls.** Within one call:
 
 - a write that leaves a value unchanged records nothing;
 - an insert followed by an update of the same row is one insert;
-- a call that rolled back leaves no trace;
-- rows written by startup hooks are not in it — the session is attached after the hooks have run,
-  because those rows are the world's setup and not the agent's work;
+- a call that rolled back leaves no trace.
+
+A row touched by two calls appears twice, once per call, so counting rows straight off the log
+overcounts. And:
+
+- rows written by startup hooks are not in it — they run before any call has a session, because
+  those rows are the world's setup and not the agent's work;
 - tables the world names in `World(untracked_tables=...)` are not in it, and neither are FTS5's
   shadow tables.
 

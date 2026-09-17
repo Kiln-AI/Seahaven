@@ -153,7 +153,7 @@ Runs the OpenEnv server for this world: one world, many sessions, one worker pro
 | `--max_concurrent_envs N` | `500` | how many sessions may be open at once |
 | `--concurrency N` | `min(cpus, 16)` | how many tool calls execute at once; `0` for no gate |
 | `--session-timeout SECONDS` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the control tools callable over the wire; they are never listed |
+| `--include-control-tools` | off | make the control tool callable over the wire; it is never listed |
 
 ```sh
 seahaven serve

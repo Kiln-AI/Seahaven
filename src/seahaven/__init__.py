@@ -15,7 +15,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from seahaven import helpers, sandbox
 from seahaven.call import Call
-from seahaven.changes import Change, LogRecord
+from seahaven.changes import LogRecord
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx
 from seahaven.db import Db
@@ -41,7 +41,6 @@ except PackageNotFoundError:  # imported from a source tree that was never insta
 __all__ = [
     "ArgumentError",
     "Call",
-    "Change",
     "Clock",
     "Ctx",
     "Db",

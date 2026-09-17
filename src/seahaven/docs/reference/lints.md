@@ -67,10 +67,10 @@ be declared with one of the types SQLite allows there — `INT`, `INTEGER`, `REA
 implicit `rowid` does not count.
 
 **Why.** Two reasons, and the second is the hard one. A row with no key cannot be identified in a
-`Change`, so **a table without a primary key cannot be tracked in a changeset** — the framework
-refuses to attach one, and every write to that table is invisible to the eval grading the run. And a
-list ordered without a unique tiebreak is not deterministic, which is the other thing this framework
-is for.
+`LogRecord`, so **a table without a primary key cannot be tracked in the change log** — the
+framework refuses to attach one, and every write to that table is invisible to the eval grading the
+run. And a list ordered without a unique tiebreak is not deterministic, which is the other thing
+this framework is for.
 
 **Fix.** `give <name> a PRIMARY KEY; SQLite's implicit rowid is not one`. A join table takes a
 composite key: `PRIMARY KEY (issue_id, label_id)`.
@@ -142,8 +142,8 @@ per instance.
 
 **Rule.** A registered tool whose description is empty or whitespace. Asked of the `World` rather
 than of the source, because a description is a docstring *or* a `description=` *or* whatever a
-factory put on the `Tool`, and only the registry knows which. The framework's two control tools are
-exempt: they are never listed and never reach an agent.
+factory put on the `Tool`, and only the registry knows which. The framework's own control tool is
+exempt: it is never listed and never reaches an agent.
 
 **Why.** The description is the whole of what an agent reads to decide whether to call the tool. A
 tool without one is a tool that will not be called, or will be called wrongly.

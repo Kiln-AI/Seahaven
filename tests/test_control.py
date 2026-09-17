@@ -1,9 +1,13 @@
-"""The framework's own two tools, driven the way an eval drives them.
+"""The framework's own tool, driven the way an eval drives it.
 
 Everything here goes through `Instance.call`, because that is the whole of the
 control path: the generic machinery (validation, serialisation, the bypasses) is
 pinned in `test_instances.py` against a stand-in control tool, and what these
-tests are about is the two real ones.
+tests are about is the real one.
+
+`controller_run_sql` is deprecated and warns on every call, so the tests that are
+not about the warning silence it: what they pin is the tool, and a `pytest.warns`
+around each of them would say nothing the two deprecation tests do not.
 """
 
 import os
@@ -19,10 +23,14 @@ import pytest
 from seahaven import control, sandbox
 from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
-from seahaven.errors import ArgumentError, DbError, WorldBug
+from seahaven.errors import ArgumentError, DbError, UnknownTool, WorldBug
 from seahaven.instances import Instance
 from seahaven.world import World
 from tests.conftest import WAIT, Caller, build_world
+
+# Every call through `control.dispatch` warns (`functional_spec.md` §11). The two
+# tests below are the ones that assert it; everywhere else it is noise.
+pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 
 SCHEMA = """
 CREATE TABLE notes (
@@ -255,39 +263,56 @@ def test_a_bad_argument_is_an_argument_error(instance: Instance) -> None:
         instance.call("controller_run_sql", sql=17)
     with pytest.raises(ArgumentError):
         instance.call("controller_run_sql", sql="SELECT 1", params="n1")
-    with pytest.raises(ArgumentError):
-        instance.call("controller_changes", table="notes")
 
 
-def test_controller_changes_renders_every_call_that_wrote(instance: Instance) -> None:
-    add(instance, "n1", body="first")
-    add(instance, "n2", body="second")
-
-    changed = instance.call("controller_changes")
-
-    assert [(change["table"], change["op"], change["key"]) for change in changed] == [
-        ("notes", "insert", {"id": "n1"}),
-        ("notes", "insert", {"id": "n2"}),
-    ]
-    assert changed[0]["before"] is None
-    assert changed[0]["after"] == {"id": "n1", "body": "first", "n": 0}
+def test_controller_run_sql_says_it_is_deprecated(instance: Instance) -> None:
+    """In process, which is where a server raises it too: no client ever sees this one."""
+    with pytest.warns(DeprecationWarning, match=r"read inst\.state\(\) instead"):
+        assert instance.call("controller_run_sql", sql="SELECT 1")["rows"] == [[1]]
 
 
-def test_controller_changes_is_the_instances_own_changeset(instance: Instance) -> None:
-    """A thin wrapper and nothing else: the same rows `Instance.changes()` renders."""
-    add(instance, "n1")
+def test_the_deprecation_is_reported_against_the_callers_own_line(instance: Instance) -> None:
+    """The line an eval would fix, not a frame inside the framework.
 
-    assert instance.call("controller_changes") == [
-        change.to_dict() for change in instance.changes()
-    ]
+    What makes a `DeprecationWarning` actionable is where it points, and Python's
+    own deduplication keys on that location: attributed to `instances.py` every
+    call in a process shares one key and a user under `-W default` is told once,
+    ever. `pytest.warns` cannot see the difference -- it installs an `always`
+    filter -- so the attribution is asserted directly.
+    """
+    with pytest.warns(DeprecationWarning) as raised:
+        instance.call("controller_run_sql", sql="SELECT 1")
+
+    (warning,) = raised
+    assert warning.filename == __file__
+    assert Path(warning.filename).parent != Path(control.__file__).parent
 
 
-def test_neither_control_tool_is_offered_to_the_agent(instance: Instance) -> None:
+def test_controller_changes_is_gone(instance: Instance) -> None:
+    """Removed with `Instance.changes()`: an unregistered name, like any other."""
+    with pytest.raises(UnknownTool):
+        instance.call("controller_changes")
+
+
+def test_a_world_may_now_register_a_tool_named_controller_changes(tmp_path: Path) -> None:
+    """The name left `CONTROL_TOOL_NAMES` with the tool, so a world may have it."""
+    world: World = build_world(tmp_path, SCHEMA)
+
+    @world.tool
+    def controller_changes(ctx: Ctx) -> dict[str, str]:
+        """A world's own tool, which happens to carry the retired name."""
+        return {"mine": "yes"}
+
+    with world.instance(None) as instance:
+        assert "controller_changes" in {tool["name"] for tool in instance.tools()}
+        assert instance.call("controller_changes") == {"mine": "yes"}
+
+
+def test_the_control_tool_is_not_offered_to_the_agent(instance: Instance) -> None:
     listed = {tool["name"] for tool in instance.tools()}
 
     assert "controller_run_sql" not in listed
-    assert "controller_changes" not in listed
-    assert instance.call("controller_changes") == []
+    assert instance.call("controller_run_sql", sql="SELECT 1")["rows"] == [[1]]
 
 
 def test_control_calls_bypass_the_middleware_chain(tmp_path: Path) -> None:
@@ -301,7 +326,6 @@ def test_control_calls_bypass_the_middleware_chain(tmp_path: Path) -> None:
 
     with world.instance(None) as instance:
         instance.call("controller_run_sql", sql="SELECT 1")
-        instance.call("controller_changes")
         add(instance, "n1")
 
     assert seen == ["execute"]
@@ -314,28 +338,21 @@ def test_a_control_call_from_inside_a_call_does_not_deadlock(tmp_path: Path) -> 
 
     @world.tool
     def audited(ctx: Ctx) -> dict[str, Any]:
-        """Write, then ask the framework what has changed so far."""
+        """Write, then ask the framework to read the instance back."""
         ctx.db.execute("INSERT INTO notes (id, body) VALUES ('n1', 'b')")
-        return {"changed": holder[0].call("controller_changes")}
+        return {"counted": holder[0].call("controller_run_sql", sql="SELECT count(*) FROM notes")}
 
     with world.instance(None) as instance:
         holder.append(instance)
 
-        # The changeset session records a row as it is written, so the call sees
-        # its own write in flight. What is being pinned is that it answers at
-        # all: the same thread already holds the instance lock.
-        assert instance.call("audited") == {
-            "changed": [
-                {
-                    "table": "notes",
-                    "op": "insert",
-                    "key": {"id": "n1"},
-                    "before": None,
-                    "after": {"id": "n1", "body": "b", "n": 0},
-                }
-            ]
-        }
-        assert [change["key"] for change in instance.call("controller_changes")] == [{"id": "n1"}]
+        # The control read runs on its own connection and sees the committed
+        # state, so the row written a line earlier is not in it. What is being
+        # pinned is that it answers at all: the same thread already holds the
+        # instance lock.
+        assert instance.call("audited")["counted"]["rows"] == [[0]]
+        assert instance.call("controller_run_sql", sql="SELECT count(*) FROM notes")["rows"] == [
+            [1]
+        ]
 
 
 def test_a_control_call_answers_while_another_instance_holds_the_lock(tmp_path: Path) -> None:

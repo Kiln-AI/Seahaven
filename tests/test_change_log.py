@@ -91,6 +91,7 @@ def test_rows_a_startup_hook_wrote_are_not_in_the_log(tmp_path: Path) -> None:
         ctx.db.execute("INSERT INTO notes VALUES ('seeded', 'from a hook', 0)")
 
     with world.instance(None) as instance:
+        assert instance.inspect().rows("SELECT id FROM notes") == [{"id": "seeded"}]
         assert instance.change_log() == []
 
 
@@ -181,10 +182,10 @@ def test_every_dispatched_call_consumes_an_ordinal(instance: Instance) -> None:
     assert keys(instance) == [(2, "n2")]
 
 
-def test_control_tools_and_tool_listing_are_not_calls(instance: Instance) -> None:
+@pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+def test_a_control_tool_and_tool_listing_are_not_calls(instance: Instance) -> None:
     instance.tools()
     instance.call("controller_run_sql", sql="SELECT 1")
-    instance.call("controller_changes")
 
     assert instance.call_count == 0
     assert instance.change_log() == []

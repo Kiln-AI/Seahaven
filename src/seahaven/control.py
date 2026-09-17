@@ -1,15 +1,14 @@
-"""The framework's own two tools: what an eval asks an instance, not what an agent does.
+"""The framework's own tool: what an eval asks an instance, not what an agent does.
 
-`controller_run_sql` and `controller_changes` are registered on every world, are
-never in its tool list, and are dispatched straight from `Instance.call` --
-around the middleware chain, the world's error handler, the per-call transaction
-and the concurrency gate. An eval asking what an instance holds wants the real
-answer and the real message, and it must not have to wait behind the agent's
-queue to get one.
+`controller_run_sql` is registered on every world, is never in its tool list, and
+is dispatched straight from `Instance.call` -- around the middleware chain, the
+world's error handler, the per-call transaction and the concurrency gate. An eval
+asking what an instance holds wants the real answer and the real message, and it
+must not have to wait behind the agent's queue to get one.
 
-Both are thin wrappers: a read-only handle on the instance is what one reads
-through and `Instance.changes()` is the changeset the other renders. Nothing here
-writes SQL of its own or decides what a `Change` looks like.
+It is deprecated: `inst.state()` is what an eval reads now, and every call
+through here warns. It is a thin wrapper -- a read-only handle on the instance is
+what it reads through -- and it writes no SQL of its own.
 
 A control call takes the instance lock like any call, so it never interleaves
 with a step on the same instance, and it asks the instance for what it needs with
@@ -27,6 +26,8 @@ be a second thread changing it under a cursor that is stepping. See
 import dataclasses
 import functools
 import inspect
+import os
+import warnings
 from collections.abc import Callable
 from types import FunctionType
 from typing import Any
@@ -43,13 +44,27 @@ from seahaven.instances import Instance
 from seahaven.sandbox import Authorizer
 from seahaven.tool import Tool
 
-__all__ = ["TOOLS", "controller_changes", "controller_run_sql", "dispatch"]
+__all__ = ["DEPRECATED", "TOOLS", "controller_run_sql", "dispatch"]
+
+# The control tools whose calls warn. `functional_spec.md` §11 keeps
+# `controller_run_sql` working and unscheduled for removal; `state()` is what
+# replaced it.
+DEPRECATED = frozenset({"controller_run_sql"})
+
+# Every frame inside the framework, so that `warnings.warn` walks past all of
+# them and reports the caller's own line. A `stacklevel` cannot do this: a
+# control tool is reached through `Instance.call` in process, through the OpenEnv
+# layer over the wire, and by calling `dispatch` directly, which are three
+# different depths.
+_FRAMEWORK = (os.path.dirname(os.path.abspath(__file__)) + os.sep,)
 
 
 def controller_run_sql(
     instance: Instance, ctx: Ctx, sql: str, params: list[SqlValue] | None = None
 ) -> dict[str, Any]:
-    """Read the instance with one SQL statement, through its own read-only handle.
+    """Deprecated: read inst.state() instead.
+
+    Read the instance with one SQL statement, through its own read-only handle.
 
     Every table, including the ones the framework knows nothing about -- FTS5's
     shadow tables, a world's untracked tables, SQLite's own -- and the
@@ -81,11 +96,6 @@ def controller_run_sql(
     except DbError as error:
         raise showing_sqlite_text(error) from error
     return to_result(result)
-
-
-def controller_changes(instance: Instance, ctx: Ctx) -> list[dict[str, Any]]:
-    """Every row the instance has changed since it was created, as an eval grades them."""
-    return [change.to_dict() for change in instance.changes()]
 
 
 class _ControlAuthorizer(Authorizer):
@@ -138,13 +148,27 @@ def dispatch(instance: Instance, ctx: Ctx) -> Any:
     it was really given, and the result goes through the same serialiser as every
     other call, so a control tool that answers with `bytes` or a `set` is the
     same `WorldBug` a world's tool would be rather than silently-decoded text or
-    an order that changes between runs. Neither control tool can: a BLOB reaches
-    an eval as base64 text from both of them, as it does from `run_sql` and from
-    a changeset.
+    an order that changes between runs. `controller_run_sql` cannot: a BLOB
+    reaches an eval as base64 text from it, as it does from `run_sql`.
+
+    A call of a deprecated control tool warns here, before anything else: this is
+    the one frame every route into a control tool passes through, and
+    `skip_file_prefixes` walks out of the framework from it, so the warning is
+    reported against the caller's own line. Python's filters then apply to that
+    location and not to this one: the defaults show it when the caller is
+    `__main__` and hide it otherwise, `-W default::DeprecationWarning` shows it
+    either way, and the deduplication makes it once per call site rather than
+    once per call.
     """
     call = ctx.call
     if call is None:
         raise WorldBug("a control tool is dispatched from a context bound to its call")
+    if call.tool.name in DEPRECATED:
+        warnings.warn(
+            f"{call.tool.name} is deprecated: read inst.state() instead",
+            DeprecationWarning,
+            skip_file_prefixes=_FRAMEWORK,
+        )
     call = dataclasses.replace(call, arguments=call.tool.validate(call.arguments))
     ctx = ctx.with_call(call)
     # The instance first: a control function is a wrapper over the instance, and
@@ -172,6 +196,6 @@ def _control_tool(fn: FunctionType) -> Tool:
     return dataclasses.replace(tool, fn=fn, control=True)
 
 
-# Registered on every `World` at construction. Built once, at import: they carry
-# no world and no instance, so one pair serves every world in the process.
-TOOLS: tuple[Tool, ...] = (_control_tool(controller_run_sql), _control_tool(controller_changes))
+# Registered on every `World` at construction. Built once, at import: it carries
+# no world and no instance, so one tool serves every world in the process.
+TOOLS: tuple[Tool, ...] = (_control_tool(controller_run_sql),)

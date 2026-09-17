@@ -91,12 +91,9 @@ def test_the_schema_is_the_sql_files_on_disk_in_filename_order() -> None:
     )
 
 
-def test_the_registry_holds_every_tool_and_the_two_control_tools() -> None:
-    """The control tools are on every world; the rest is this world's whole surface."""
-    assert set(world.tools) == WORLD_TOOLS | HELPERS | {
-        "controller_run_sql",
-        "controller_changes",
-    }
+def test_the_registry_holds_every_tool_and_the_control_tool() -> None:
+    """The control tool is on every world; the rest is this world's whole surface."""
+    assert set(world.tools) == WORLD_TOOLS | HELPERS | {"controller_run_sql"}
 
 
 def test_the_tool_list_an_agent_sees_is_the_twenty_five_and_the_two_helpers() -> None:

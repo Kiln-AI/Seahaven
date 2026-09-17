@@ -32,7 +32,7 @@ move, then the old is removed. Details are in `functional_spec.md` (FS) and `arc
   `test_server.py` (FS §9). This phase is the gate: if the document does not arrive whole over
   the wire, stop and report before anything else is built on it.
 
-- [ ] **Phase 4: Remove the old surface.** Delete `Instance.changes()`, `Change`, `render()`, the
+- [x] **Phase 4: Remove the old surface.** Delete `Instance.changes()`, `Change`, `render()`, the
   long-lived session and `controller_changes`; deprecate `controller_run_sql` (ARCH §1, §2.1, §3.1,
   §8, §13); switch the fold test's oracle to `tests/support/oracle.py` (ARCH §14); rewrite every
   test and doc example that called `changes()` or `controller_changes` to the log, minimally, so

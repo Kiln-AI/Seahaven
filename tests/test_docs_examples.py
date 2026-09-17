@@ -258,7 +258,7 @@ _RECEIVER_TYPES = {
     "ids": "ids",
     "call": "call",
     "tool": "tool",
-    "change": "change",
+    "record": "record",
     "fixture": "fixture",
 }
 
@@ -315,14 +315,14 @@ def receivers(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
                 "ids": ctx.ids,
                 "call": seahaven.Call(name=tool.name, arguments={}, tool=tool),
                 "tool": tool,
-                "change": inst.changes()[0],
+                "record": inst.change_log()[0],
                 "fixture": fixture,
             }
 
 
 @pytest.mark.parametrize("page", pages(), ids=PAGE_IDS)
 def test_every_documented_member_exists(page: Path, receivers: dict[str, object]) -> None:
-    """`inst.freeze`, `ctx.ids.uuid`, `change.after`: resolved on a real object.
+    """`inst.freeze`, `ctx.ids.uuid`, `record.after`: resolved on a real object.
 
     Over the whole page and not only its code, because a member table is exactly
     where a reference page invents a name nobody notices.

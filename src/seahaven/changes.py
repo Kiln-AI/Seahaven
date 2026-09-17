@@ -1,21 +1,17 @@
 """What an instance changed, as data an eval can grade on.
 
-Two readings of the same mechanism. The **change log** is the ordered record of
-every row the instance changed after startup, one record per row per call: a
-session is opened for each call, and what it recorded is rendered and appended
-when the call's transaction is done. The **changeset** is the net difference
-between the fixture and the current state, from one session that runs for the
-life of the instance.
+The **change log** is the ordered record of every row the instance changed after
+startup, one record per row per call: a session is opened for each call, and what
+it recorded is rendered and appended when the call's transaction is done.
 
-Either way the session extension is what speaks, and its rule is the same: a
-write that leaves a value unchanged records nothing, an insert followed by an
-update of the same row is one insert, and a call that rolled back leaves no
-trace. Over one call that makes a log record the net of its call; over the
-instance it makes a changeset the net of the episode.
+The session extension is what speaks, and its rule is what makes a record the net
+of its call: a write that leaves a value unchanged records nothing, an insert
+followed by an update of the same row is one insert, and a call that rolled back
+leaves no trace.
 
-No session sees the startup hooks. The per-call sessions do not exist yet when
-they run, and the long-lived one is attached after them, so seed rows are
-starting state rather than agent changes.
+No session sees the startup hooks. They run at instance creation, before the
+first call opens a session of its own, so seed rows are starting state rather
+than agent changes.
 """
 
 import base64
@@ -33,10 +29,8 @@ if TYPE_CHECKING:  # `world.py` imports this module's callers; the annotation is
     from seahaven.world import World
 
 __all__ = [
-    "Change",
     "LogRecord",
     "open_session",
-    "render",
     "render_log",
     "tracked_tables",
 ]
@@ -47,35 +41,6 @@ _OPS: dict[str, Literal["insert", "update", "delete"]] = {
     "UPDATE": "update",
     "DELETE": "delete",
 }
-
-
-@dataclass(frozen=True)
-class Change:
-    """One row the instance changed, with its columns named.
-
-    `before` and `after` hold only the columns the change carries: a changeset
-    marks the rest `apsw.no_change`, which is not the same as `NULL`, and
-    flattening the two would turn "changed the assignee" into "rewrote the row".
-    An update's `before` therefore holds the key columns and the old values of
-    what changed, its `after` the new values of what changed, and `key` the
-    primary key either way.
-    """
-
-    table: str
-    op: Literal["insert", "update", "delete"]
-    key: dict[str, Any]
-    before: dict[str, Any] | None
-    after: dict[str, Any] | None
-
-    def to_dict(self) -> dict[str, Any]:
-        """The wire shape: what `controller_changes` returns and an eval reads."""
-        return {
-            "table": self.table,
-            "op": self.op,
-            "key": self.key,
-            "before": self.before,
-            "after": self.after,
-        }
 
 
 @dataclass(frozen=True)
@@ -151,35 +116,6 @@ def open_session(conn: apsw.Connection, tracked: Sequence[str]) -> apsw.Session:
     for table in tracked:
         session.attach(table)
     return session
-
-
-def render(changeset: bytes, conn: apsw.Connection) -> list[Change]:
-    """The changeset as `Change` records, in the changeset's own order.
-
-    That order is by table and then by rowid, which is deterministic for a given
-    sequence of writes, so two identical runs render identically.
-    """
-    columns: dict[str, tuple[list[str], list[int]]] = {}
-    changes = []
-    for change in apsw.Changeset.iter(changeset):
-        table = change.name
-        if table not in columns:
-            columns[table] = _columns(conn, table)
-        names, key_positions = columns[table]
-        op = _OPS[change.op]
-        # The key is in whichever side of the change has it: an insert has only
-        # `new`, everything else carries the old row's key in `old`.
-        source = change.new if op == "insert" else change.old
-        changes.append(
-            Change(
-                table=table,
-                op=op,
-                key=_row(names, source, key_positions) or {},
-                before=_row(names, change.old),
-                after=_row(names, change.new),
-            )
-        )
-    return changes
 
 
 def render_log(
@@ -314,12 +250,12 @@ def _refuse_a_table_with_no_primary_key(conn: apsw.Connection, table: str) -> No
     """A table with no explicit primary key cannot be tracked, so it is not attached quietly.
 
     The session extension attaches one happily and then records nothing for it:
-    every write to it would be missing from the changeset with nothing to say so.
+    every write to it would be missing from the change log with nothing to say so.
     """
     _names, key = _columns(conn, table)
     if not key:
         raise WorldBug(
-            f"table {table!r} has no explicit primary key, so the changeset could not record its "
+            f"table {table!r} has no explicit primary key, so the change log could not record its "
             f"writes; give it one, or name it in World(untracked_tables=...)"
         )
 

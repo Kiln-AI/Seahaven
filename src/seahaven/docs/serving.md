@@ -144,32 +144,40 @@ tool argument called `tool`.
 The stock OpenEnv client works too — `SeahavenClient` adds the typed observation and the two
 conveniences, not a different protocol.
 
-## Control tools
+## Reading the instance
 
-An eval needs to read the instance it is grading: run inspection SQL, fetch the changeset. In
-OpenEnv an instance *is* its connection, so those reads travel over the session's own connection as
-tools. There is no separate control plane, no listener, no token and no instance id.
+An eval reads what the episode left behind from the `state` message, which answers the state
+document: the framework's provenance envelope plus the change log. Over OpenEnv that is
+`SeahavenClient.state()`; in process it is `inst.state()`.
 
-The framework registers two on every world:
+### The control tool
+
+For a read the document does not answer — arbitrary inspection SQL — the framework registers one
+control tool on every world:
 
 | Tool | What it does |
 |---|---|
 | `controller_run_sql(sql, params=None)` | one statement on a read-only connection of the instance's own: every table, the instance clock, no caps, SQLite's own error text. Result shape as `run_sql` |
-| `controller_changes()` | the changeset, as JSON |
 
-They are thin wrappers over the instance: they own no SQL and no rendering. `controller_changes` is
-`inst.changes()`. `controller_run_sql` reads through the instance's own read-only control
-connection and **not** through the `inspect()` handle — same file, same read-only opener, a second
-connection, because a control read borrows connection-level state for the length of a statement
-while `inspect()` is the handle you read through on any thread you like. Their arguments are
-validated like any tool's, so a bad `sql` argument is an `ArgumentError`. Nothing else about a
-normal call applies: no middleware, no error handler, no transaction and no gate, because an eval
-wants the real message.
+**It is deprecated**: `state` is what an eval reads now. A call raises a `DeprecationWarning` in
+the process that serves it, reported against your own calling line rather than a frame inside the
+framework. Python's filters then apply to *that* location, so what you see depends on where your
+call lives: from a script you ran directly the defaults show it, once per call site; from an
+imported module the defaults hide it, so run with `-W default::DeprecationWarning`, which shows it
+once per call site either way rather than once per call. It is not scheduled for removal.
 
-**Over a server they exist only with `--include-control-tools`.** Without the flag, calling one is
+It is a thin wrapper over the instance and owns no SQL of its own. It reads through the instance's
+own read-only control connection and **not** through the `inspect()` handle — same file, same
+read-only opener, a second connection, because a control read borrows connection-level state for the
+length of a statement while `inspect()` is the handle you read through on any thread you like. Its
+arguments are validated like any tool's, so a bad `sql` argument is an `ArgumentError`. Nothing else
+about a normal call applies: no middleware, no error handler, no transaction and no gate, because an
+eval wants the real message.
+
+**Over a server it exists only with `--include-control-tools`.** Without the flag, calling it is
 `UnknownTool` in exactly the words an unregistered name earns, so an agent cannot tell the two apart
-and a hub deployment does not expose them. They never appear in the tool list, flag or not. In
-process, `inst.call("controller_changes")` always reaches them, and `inst.tools()` never lists them.
+and a hub deployment does not expose it. It never appears in the tool list, flag or not. In process,
+`inst.call("controller_run_sql", sql=...)` always reaches it, and `inst.tools()` never lists it.
 
 ## Operator options
 
@@ -180,7 +188,7 @@ process, `inst.call("controller_changes")` always reaches them, and `inst.tools(
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls execute at once; `0` for no gate |
 | `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the control tools callable over the wire |
+| `--include-control-tools` | off | make the control tool callable over the wire |
 | `--world module:attr` | the convention | which world to serve |
 
 **The idle reaper matters.** A held session costs its fixture copy on disk and about a megabyte of
@@ -191,7 +199,7 @@ live eval is reaped and short enough that a crashed harness does not accumulate 
 
 The gate bounds how many tool calls execute at once. It never bounds admission: calls queue, and
 nothing is rejected. A call takes the gate before the instance lock, so a queued call cannot block a
-`destroy` or a `freeze`; instance creation, tool listing and the control tools bypass it entirely.
+`destroy` or a `freeze`; instance creation, tool listing and the control tool bypass it entirely.
 
 Its default follows the process's CPU affinity, which respects a container's limit rather than the
 host's core count.

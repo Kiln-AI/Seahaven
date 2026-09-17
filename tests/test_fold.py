@@ -1,10 +1,10 @@
 """The fold: the net diff of an episode, computed from its change log.
 
 `functional_spec.md` §3.6 defines the fold so that any reader computes the same
-net diff from a saved document, and SQLite is the oracle it was defined from:
-the instance's own long-lived session has been recording the whole episode, and
-its changeset is the net diff by construction. Every episode shape the suite
-exercises is folded and compared against it.
+net diff from a saved document, and SQLite is the oracle it was defined from: a
+session of the test's own records the whole episode, and its changeset is the net
+diff by construction. Every episode shape the suite exercises is folded and
+compared against it.
 """
 
 from collections.abc import Callable
@@ -15,7 +15,8 @@ import pytest
 from seahaven.instances import Instance
 from seahaven.world import World
 from tests.conftest import build_world
-from tests.support.fold import fold, net_of_changes
+from tests.support.fold import fold
+from tests.support.oracle import recording
 from tests.test_changes import BLOB_KEY_SCHEMA, add
 
 # A fixture is what makes an update and a delete possible at all: a row has to
@@ -117,10 +118,24 @@ def started(tmp_path: Path) -> World:
 def test_the_fold_of_the_log_is_the_cumulative_changeset(
     started: World, episode: Callable[[Instance], None]
 ) -> None:
-    with started.instance("start") as instance:
+    with started.instance("start") as instance, recording(instance) as sqlite:
         episode(instance)
 
-        assert fold(instance.change_log()) == net_of_changes(instance.changes())
+        assert fold(instance.change_log()) == sqlite.net_diff()
+
+
+def test_the_oracle_sees_the_rows_the_episode_left_behind(started: World) -> None:
+    """Not a comparison of two empty lists: SQLite's own answer has the episode in it."""
+    with started.instance("start") as instance, recording(instance) as sqlite:
+        a_bit_of_everything(instance)
+
+        net = sqlite.net_diff()
+
+    assert {(change.op, change.key["id"]) for change in net} == {
+        ("insert", "n3"),
+        ("update", "n1"),
+        ("update", "n2"),
+    }
 
 
 def test_the_fold_drops_what_cancelled_out(started: World) -> None:

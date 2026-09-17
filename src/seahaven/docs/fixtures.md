@@ -81,7 +81,7 @@ assert fixture.parent_id is None
 with world.instance("seeded") as inst:
     assert inst.inspect().one("SELECT count(*) AS n FROM notes") == {"n": 1000}
     # A fresh instance of a fixture has changed nothing yet.
-    assert inst.changes() == []
+    assert inst.change_log() == []
 ```
 
 `freeze` cannot run inside a `bulk()` block: the rows are not committed yet, and a fixture of

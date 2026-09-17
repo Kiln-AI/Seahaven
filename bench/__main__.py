@@ -2,10 +2,11 @@
 
     uv run python -m bench all --out bench/results/latest.md
 
-Four subcommands -- `baseline`, `sweep`, `isolation`, `all` -- because a sweep
-takes minutes and someone changing the harness wants one measurement back in
-seconds. `--quick` shrinks every count to something a test can afford; it is not
-a measurement and the report it writes says the counts it used.
+Five subcommands -- `baseline`, `recording`, `sweep`, `isolation`, `all` --
+because a sweep takes minutes and someone changing the harness wants one
+measurement back in seconds. `--quick` shrinks every count to something a test
+can afford; it is not a measurement and the report it writes says the counts it
+used.
 """
 
 import argparse
@@ -18,6 +19,7 @@ from bench import report
 from bench.baseline import baseline, share
 from bench.environment import capture
 from bench.harness import cold_cache_supported, quiet_logging
+from bench.recording import recording
 from bench.runner import CACHES, Cache
 from bench.sweep import DEFAULT_GATES, DEFAULT_WORKERS, isolation, sweep
 from bench.workloads import WORKLOADS
@@ -76,6 +78,14 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command in ("baseline", "all")
                 else None
             ),
+            recording=(
+                tuple(
+                    recording(world, workload=name, calls=args.calls, repeats=args.repeats)
+                    for name in WORKLOADS
+                )
+                if args.command in ("recording", "all")
+                else ()
+            ),
             sweep=(
                 sweep(
                     world,
@@ -122,7 +132,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("baseline", "sweep", "isolation", "all"),
+        choices=("baseline", "recording", "sweep", "isolation", "all"),
         help="which measurements to run",
     )
     parser.add_argument("--out", default=None, help="write the report here instead of stdout")
@@ -136,7 +146,10 @@ def _parser() -> argparse.ArgumentParser:
         "--baseline-calls", type=int, default=BASELINE_CALLS, help="calls per baseline pass"
     )
     parser.add_argument(
-        "--calls", type=int, default=SWEEP_CALLS, help="calls per session per sweep pass"
+        "--calls",
+        type=int,
+        default=SWEEP_CALLS,
+        help="calls per session per sweep or recording pass",
     )
     parser.add_argument(
         "--gates",

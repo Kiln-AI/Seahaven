@@ -8,6 +8,7 @@ and where.
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -468,6 +469,27 @@ def test_a_formatter_that_refuses_no_instance_says_so(world: World) -> None:
 
     with pytest.raises(WorldBug, match="needs an episode"):
         state_module.document(world, None, "acme.strict/1", strict)
+
+
+def test_state_is_serialisation_only_with_a_long_log(instance: Instance) -> None:
+    """A thousand records, and reading the document is still memory and dict building.
+
+    The bound is deliberately loose -- a second is orders of magnitude above what
+    this costs -- because what it is guarding is the shape of the cost, not the
+    speed of the machine: a `state()` that went back to the database per record,
+    or grew quadratic in the log, would miss it by a wide margin.
+    """
+    with instance.bulk() as ctx:
+        ctx.db.executemany(
+            "INSERT INTO notes VALUES (?, 'body', 0)", [(f"n{n}",) for n in range(1000)]
+        )
+    assert len(instance.change_log()) == 1000
+
+    started = time.perf_counter()
+    document = instance.state()
+
+    assert time.perf_counter() - started < 1.0
+    assert len(document["state"]["db"]["log"]) == 1000
 
 
 def test_state_does_no_database_work(instance: Instance) -> None:

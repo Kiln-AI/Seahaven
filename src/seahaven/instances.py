@@ -1,20 +1,20 @@
 """A live world: a private copy of a fixture, and everything a call into it needs.
 
 An instance is a file in a working directory, a connection on it, a frozen clock,
-a seeded id stream, a change log, a changeset session and a lock. `world.instance(...)` makes
-one, `inst.call(...)` runs a tool on it, and `inst.destroy()` (or leaving its
+a seeded id stream, a change log and a lock. `world.instance(...)` makes one,
+`inst.call(...)` runs a tool on it, and `inst.destroy()` (or leaving its
 `with` block) takes the files away again. Nothing is shared between two
 instances: two instances of one fixture are two copies of one file.
 
 Three rules hold the concurrency together.
 
-*One lock per instance.* `call`, `changes`, `change_log`, `state`, `freeze`, `bulk`, `destroy`
+*One lock per instance.* `call`, `change_log`, `state`, `freeze`, `bulk`, `destroy`
 and the opens inside `inspect()` and `_control_db()` take it, so calls into one instance
 serialise and a destroy waits for the call in flight. Reads through the `inspect()` handle
 afterwards do not take it: that handle is the caller's, to read from whatever
 thread it likes. The lock is an `RLock` because a control tool is called with it
-already held and then asks the instance for something -- its changeset, its
-control handle -- that takes it again on the same thread.
+already held and then asks the instance for something -- its control handle --
+that takes it again on the same thread.
 
 *The gate before the lock.* The concurrency gate bounds how many tool calls run
 at once across the process. It is taken before the instance lock, so a call
@@ -40,17 +40,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 
-import apsw
-
 from seahaven.call import Call, serialise
-from seahaven.changes import (
-    Change,
-    LogRecord,
-    open_session,
-    render,
-    render_log,
-    tracked_tables,
-)
+from seahaven.changes import LogRecord, open_session, render_log, tracked_tables
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, build_blank, open_inspection, open_instance
@@ -213,7 +204,6 @@ class Instance:
         clock: Clock,
         ctx: Ctx,
         db: Db,
-        session: apsw.Session,
         tracked: tuple[str, ...],
         dir: Path,
         world: World,
@@ -260,9 +250,8 @@ class Instance:
         self._formatting: int | None = None
         self.closed = False
         # Re-entrant: a control tool holds this lock and then asks the instance
-        # for its changeset or its control handle, which take it again.
+        # for its control handle, which takes it again.
         self.lock = threading.RLock()
-        self._session = session
         self._manager = manager
         self._inspection: Db | None = None
         self._control: Db | None = None
@@ -329,11 +318,6 @@ class Instance:
                     self.state_path, self.clock, self.ctx.instance.seed, INSPECTION_STREAM
                 )
             return self._inspection
-
-    def changes(self) -> list[Change]:
-        """Every row this instance has changed since it was created."""
-        with self._held():
-            return render(self._session.changeset(), self.db.conn)
 
     def change_log(self) -> list[LogRecord]:
         """Every row this instance has changed, one record per row per call, in call order.
@@ -566,20 +550,16 @@ class Instance:
     def _close(self) -> None:
         """Release every handle the instance holds.
 
-        The session goes before the connection it records on. APSW tolerates the
-        other order (it finalises a session with its connection), but a session
-        is a growing buffer of every row the instance changed, and releasing it
-        first is what makes a destroyed instance cost nothing.
-
-        Both read-only handles -- the caller's, from `inspect()`, and the control
-        tools' own -- are closed here as well; either may never have been opened.
+        No session outlives a call -- each one is opened and closed inside
+        `_recording` -- so what is left here are the connections. Both read-only
+        handles, the caller's from `inspect()` and the control tool's own, may
+        never have been opened.
         """
         for handle in (self._inspection, self._control):
             if handle is not None:
                 handle.close()
         self._inspection = None
         self._control = None
-        self._session.close()
         self.db.close()
 
     def _log_call(self, name: str, started: float, outcome: str) -> None:
@@ -698,9 +678,6 @@ class InstanceManager:
                 clock=clock,
                 ctx=ctx,
                 db=db,
-                # Opened after the hooks, so what they wrote is starting state
-                # rather than a change the agent made.
-                session=open_session(db.conn, tracked),
                 tracked=tracked,
                 dir=directory,
                 world=world,

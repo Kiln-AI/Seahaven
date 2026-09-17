@@ -215,7 +215,6 @@ def test_list_tools_never_lists_a_control_tool(world: World) -> None:
         env.reset()
         names = [tool.name for tool in listing(env).tools]
         assert "controller_run_sql" not in names
-        assert "controller_changes" not in names
         assert "rows" in names
 
 
@@ -303,6 +302,9 @@ def test_a_control_tool_is_unknown_without_the_flag(env: SeahavenEnv) -> None:
     }
 
 
+# `controller_run_sql` is deprecated and warns on every call. These tests are about the
+# tool, not the warning; `tests/test_control.py` is where the warning itself is pinned.
+@pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 def test_a_control_tool_is_callable_with_the_flag(world: World) -> None:
     env = SeahavenEnv(world, include_control_tools=True)
     env.reset()
@@ -313,13 +315,10 @@ def test_a_control_tool_is_callable_with_the_flag(world: World) -> None:
         "row_count": 1,
         "truncated": False,
     }
-    changes = call(env, "controller_changes").result
-    assert isinstance(changes, list)
-    assert [change["table"] for change in changes] == ["notes"]
 
 
 def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World) -> None:
-    """The flag admits the control tools and nothing else."""
+    """The flag admits the control tool and nothing else."""
     env = SeahavenEnv(world, include_control_tools=True)
     env.reset()
     assert call(env, "controller_nonsense").error == {

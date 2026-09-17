@@ -13,7 +13,7 @@ extension. There is no registry, no entry point and no discovery.
 - **Register itself.** The world registers what it wants, by name, in its own `__init__`. An
   extension that registered itself on import would make a world's tool surface depend on its import
   order.
-- **Set `control`.** That flag is the framework's, for its two control tools, and
+- **Set `control`.** That flag is the framework's, for its own control tool, and
   `Tool.from_function` cannot set it.
 
 Everything an extension exports is something the world passes to `world.tool(...)`,

@@ -89,9 +89,9 @@ def test_a_world_tool_searches_the_index(searching: Instance) -> None:
     assert "[login]" in found[0]["excerpt"]
 
 
-def test_the_index_is_not_in_the_changeset(searching: Instance) -> None:
-    """Three rows written, three shadow tables filled, three changes."""
-    assert [change.table for change in searching.changes()] == ["issues"] * 3
+def test_the_index_is_not_in_the_change_log(searching: Instance) -> None:
+    """Three rows written, three shadow tables filled, three records."""
+    assert [record.table for record in searching.change_log()] == ["issues"] * 3
 
 
 def test_the_world_conforms_to_itself_with_an_index_in_it(searching: Instance) -> None:
@@ -109,13 +109,13 @@ def test_it_freezes_and_forks_with_the_index_intact(tmp_path: Path) -> None:
     with world.instance("seeded") as forked:
         assert [row["id"] for row in forked.call("search", query="dark")] == ["i3"]
         assert conformance.differences(forked.db.conn, forked.world) == []
-        # A fork starts with no changes of its own, index or not.
-        assert forked.changes() == []
+        # A fork starts with a log of its own, empty, index or not.
+        assert forked.change_log() == []
 
         forked.call(
             "execute", sql="INSERT INTO issues (id, title, body) VALUES ('i4', 'New', 'thing')"
         )
-        assert [change.table for change in forked.changes()] == ["issues"]
+        assert [record.table for record in forked.change_log()] == ["issues"]
 
 
 MATCH_QUERY = "SELECT rowid FROM issues_fts WHERE issues_fts MATCH 'login'"
@@ -230,11 +230,12 @@ def test_a_write_to_the_index_is_still_refused_at_a_writable_door(tmp_path: Path
                 "run_sql", query="INSERT INTO issues_fts_data (id, block) VALUES (99, x'00')"
             )
 
-        # The net changeset: the seeded insert and this update collapse into one
-        # insert carrying the new title, and the index is in neither.
-        written = [change for change in instance.changes() if change.key == {"id": "i1"}]
-        assert [change.table for change in written] == ["issues"]
-        after = written[0].after
+        # The log: the seeded insert and this update are one record each, and
+        # the index is in neither.
+        written = [record for record in instance.change_log() if record.key == {"id": "i1"}]
+        assert [record.table for record in written] == ["issues", "issues"]
+        assert [record.op for record in written] == ["insert", "update"]
+        after = written[1].after
         assert after is not None and after["title"] == "Renamed"
 
 
@@ -256,6 +257,9 @@ def test_describe_schema_describes_the_index_as_the_world_declared_it(tmp_path: 
     }
 
 
+# `controller_run_sql` is deprecated and warns on every call. These tests are about the
+# tool, not the warning; `tests/test_control.py` is where the warning itself is pinned.
+@pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 def test_control_sql_reads_the_shadow_tables_nothing_else_may(searching: Instance) -> None:
     """No allowlist at all: the index an eval wants to look at is readable through control."""
     result = searching.call("controller_run_sql", sql="SELECT count(*) FROM issues_fts_docsize")
@@ -263,6 +267,7 @@ def test_control_sql_reads_the_shadow_tables_nothing_else_may(searching: Instanc
     assert result["rows"] == [[3]]
 
 
+@pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 def test_control_sql_can_search_the_index_with_nothing_listed(searching: Instance) -> None:
     """The adjacent case to the door above: an eval grades a search world by searching it.
 
