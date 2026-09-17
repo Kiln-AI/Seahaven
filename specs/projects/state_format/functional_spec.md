@@ -222,6 +222,12 @@ def acme_state(instance: seahaven.Instance) -> dict[str, Any]: ...
   that and raises `WorldBug` if it does not.
 - Registration is open for the life of the world, like tools and middleware, and an extension
   may register one. Registering a name twice, or a built-in name, fails.
+- Formats resolve against the instance's world. In a composition (a later project; `subworld` is
+  reserved for it) that is the root world: a formatter registered on the root sees the whole
+  composed log, `subworld` values included, and formats all of it. A sub-world's own registrations
+  serve it when it runs standalone and are not inherited by a root that composes it, unless the
+  composition design says otherwise. Every formatter, the built-ins included, must therefore accept
+  a log whose `subworld` is not always `null`.
 - Formatters run under the instance lock and never in a transaction; they read, they do not
   write. One that writes raises `WorldBug`.
 
@@ -370,10 +376,7 @@ Numbered so they can be answered by number.
 3. *Answered 2026-09-17:* `episode_id` is the OpenEnv episode id over the wire and the instance id
    in process (§3.1); no separate `instance_id` field.
 4. *Answered 2026-09-17:* `inst.change_log()` (§8).
-5. **Where custom formatters register.** Proposed on the world, like tools. Alternative: a
-   process-wide registry, so an extension's formatter is available to every world without each
-   registering it. The world-level one keeps the "everything is registered against the world"
-   rule the framework already has.
+5. *Answered 2026-09-17:* on the world, resolved against the instance's (root) world (§6).
 
 ## 15. Non-goals
 
