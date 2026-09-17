@@ -86,7 +86,7 @@ it. Sections below are left as argued; where a decision overrides a section, the
 - **The ordered per-call change log is the authoritative data.** It strictly dominates the net
   diff (the diff is a fold of the log; the log cannot be recovered from the diff), it answers
   intermediate-value and ordering questions, and it attributes every row change to the call that
-  made it, which the diff cannot. Each entry is tagged with the call ordinal `i` from `calls`.
+  made it, which the diff cannot. Each entry is tagged with the call ordinal `i` (batch 7 defines it).
 - **The document carries the log only; no net diff beside it.** Decided 2026-09-15: one source of
   truth, no invariant between two blocks to keep for ever. The net diff is defined, not shipped:
   the format spec states the fold exactly (insert+update = insert, insert+delete = nothing,
@@ -103,8 +103,7 @@ it. Sections below are left as argued; where a decision overrides a section, the
   changed is the trace's business, not the state's. §3 is closed for the database block.
 - **Composition**: every log record carries `subworld`, `null` for the root, naming the sub-world
   the table belongs to, so a composed world's document is one flat list that still materialises to
-  one table. `calls` entries carry `subworld` too, for the tool. How `counters.by_tool` keys a
-  namespaced tool is settled with the composition design, not here.
+  one table. (Batch 7 later removed the `calls` block, so `subworld` appears on log records only.)
 **Batch 5 (2026-09-15), §3 closed for the database block** (the `calls` block is §5's and is not
 approved yet; the example in Appendix B is the agreed shape for `db.log`):
 
@@ -143,20 +142,24 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   stores the trace; OpenEnv's own episode record stores `messages` and a `tool_trace` beside the
   final state. State carries neither a call list nor counters, and `subworld` appears only on log
   records.
-- `i` survives as the join key. The spec defines it: every call dispatched to the instance, in
+- `i` survives as the join key (confirmed 2026-09-17). The spec defines it: every call dispatched to the instance, in
   order from 0, including calls that errored or were refused as unknown, excluding control tools
   and tool listing. Over OpenEnv it is the harness's Nth `CallToolAction`; in-process, the Nth
   `inst.call`. A judge that asks which call changed a row joins `i` against the trace.
-- Proposed, awaiting a decision: one integer at the root, the number of calls so far, so a consumer
-  can check its trace and the state agree before joining on `i`. Not OpenEnv's `step_count`, which
-  also counts `list_tools` steps.
+- `call_count` at the root (confirmed 2026-09-17): the number of calls so far, so a consumer can
+  check its trace and the state agree before joining on `i`. Not OpenEnv's `step_count`, which also
+  counts `list_tools` steps.
 - The tool-count judge from the project overview's Example 1 runs over the trace; the
   changed-rows judge from Example 2 runs over the log.
 - Noted for the architecture step: OpenEnv's harness adapter calls `client.state()` after every
   tool call and embeds the serialized state in each tool result's metadata. With a log-shaped
-  state, that is the whole log per call, quadratic over an episode on the harness side. `state()`
-  must therefore be cheap to produce repeatedly (the log kept in memory and appended per call, not
-  rebuilt), and the docs should say what a per-step `state()` costs.
+  state, that is the whole log per call, quadratic over an episode on the harness side. The format
+  lever does not help: a format is fixed per episode at `reset`, and the harness's end-of-episode
+  `final_state` is the same `state()` as its per-step one, so a lighter format would lose the log
+  where it is needed. It is also only OpenEnv's own rollout harness that does this; Kiln and every
+  other consumer surveyed call `state()` once, at the end. What Seahaven owes: `state()` costs
+  serialization only (the log kept in memory and appended per call, no database work), and the docs
+  say so.
 
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
