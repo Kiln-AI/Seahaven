@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # State Format (v2: restarted on top of composition)
