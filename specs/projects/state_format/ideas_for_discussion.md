@@ -156,10 +156,15 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   state, that is the whole log per call, quadratic over an episode on the harness side. The format
   lever does not help: a format is fixed per episode at `reset`, and the harness's end-of-episode
   `final_state` is the same `state()` as its per-step one, so a lighter format would lose the log
-  where it is needed. It is also only OpenEnv's own rollout harness that does this; Kiln and every
-  other consumer surveyed call `state()` once, at the end. What Seahaven owes: `state()` costs
-  serialization only (the log kept in memory and appended per call, no database work), and the docs
-  say so.
+  where it is needed in the default design. Resolved 2026-09-17: the design is sound as is.
+  Kiln-shaped callers use the default format and call `state()` once at the end. A per-step
+  poller that cares can pick a custom formatter at `reset`, one that emits only the log since the
+  last `state()` call; its per-step outputs concatenate into the full log, its harness's
+  `final_state` artifact holds only the last delta, and `state()` is non-idempotent under it, all
+  of which is that caller's trade. Two requirements follow: the `StateFormatter` interface gives a
+  formatter the whole log and lets it keep per-instance memory (a cursor); and `state()` under the
+  default format costs serialization only (log in memory, appended per call, no database work).
+  The quadratic cost of polling the default format per step is accepted, not designed around.
 
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
