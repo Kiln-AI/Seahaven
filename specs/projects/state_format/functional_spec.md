@@ -49,7 +49,7 @@ Three consequences drive everything below:
 ```jsonc
 {
   "format": "seahaven.state/1",
-  "seahaven_version": "0.3.0",
+  "seahaven_version": "0.0.1",
   "world": {"name": "projecttracker", "version": "1.0.0"},
   "fixture": {"id": "small_startup", "file_sha256": "…"},     // null for a blank instance
   "episode_id": "…",
@@ -121,6 +121,8 @@ Rules:
   primary-key column (§12).
 - **Startup is not in the log.** The session attaches after the startup hooks have run, as today.
   Every write after that is in the log, including `inst.bulk()` writes, which carry `i: null`.
+- **No cap.** The log is as long as the episode made it. A consumer that wants less filters after
+  the fact or registers a custom formatter (§6); the framework truncates nothing.
 
 ### 3.3 Order
 
@@ -189,8 +191,8 @@ as `final_state` has only the last call's changes, which is the trade the caller
   default. A `World` constructed without it raises at construction, and the message names the
   current built-in formats. Every existing world in the repo (ProjectTracker, the example
   extension's world, every `World(...)` in tests, docs and `bench/`) gains the argument; accepted
-  as a breaking change, since the framework is private and pre-alpha and every world is ours. The scaffold (`seahaven new`) writes `state_format=` with the current
-  primary format into the generated `world.py`, so a pin is chosen once, at the world's creation.
+  as a breaking change, since the framework is private and pre-alpha and every world is ours. The scaffold (`seahaven new`) writes `state_format="seahaven.state/1"` into the generated
+  `world.py`, so a pin is chosen once, at the world's creation.
 - `reset(state_format=...)` over OpenEnv and `world.instance(state_format=...)` in-process
   override the world's pin for that instance. `state_format` joins `fixture`, `seed` and `now` as a
   reserved reset keyword: a startup hook that names a parameter `state_format` fails at
@@ -321,8 +323,10 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
   registration, presented as three cases in this order, each with its reason: `final_state` read
   once at the end uses `seahaven.state/1`; a per-step reader like OpenEnv's episode harness uses
   `seahaven.state+last_step/1`; a caller whose needs differ registers its own. Then: the fold and
-  the two traps (overcounting, comparing logs), the value mapping, the fixture lookup for the
-  starting state, the compatibility contract, and why nothing derivable is in the document.
+  the two traps (overcounting, comparing logs), the value mapping, the lookup for the starting
+  state (the fixture by world, version, id and hash; for a blank instance the DDL plus what the
+  startup hooks wrote, which the format does not promise to make reproducible), the compatibility
+  contract, and why nothing derivable is in the document.
 - **`openenv.md`**, arriving from another branch, is updated to the new state surface once it
   lands; this project's docs phase owns that edit.
 - **`index.md`** lists `state.md`. `authoring.md` documents `World(state_format=...)` as required
@@ -380,7 +384,8 @@ Numbered so they can be answered by number.
 
 ## 15. Non-goals
 
-A net diff in the document; tool calls, counts or results in the document; a whole-database or
-whole-row format; a schema block; filtering options on `state()`; a judge language, a DSL, or a
+A net diff, a summary or counts in the document; an ignore list; an `indirect` flag; tool calls or
+results in the document; a whole-database or whole-row format; a schema block or fingerprint;
+filtering options on `state()` or a cap on the log; a judge language, a DSL, or a
 loader/helper shipped by Seahaven; removing the control tools; composition itself (`subworld` is
 reserved, always `null`); changing `inst.changes()`.
