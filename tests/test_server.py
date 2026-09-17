@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+import seahaven
 from seahaven import instances
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
@@ -136,8 +137,9 @@ def test_the_typed_client_drives_a_session_end_to_end(world: World) -> None:
         env.call("execute", sql=insert("n1"))
         assert ids(env.call("rows", sql="SELECT id FROM notes ORDER BY id")) == ["n0", "n1"]
         state = env.state()
-        assert (state.world, state.fixture, state.now) == (world.name, fixture_id, INSTANT_ISO)
-        assert state.step_count == 4
+        assert (state.world.name, state.world.version) == (world.name, world.version)
+        assert state.fixture is not None and state.fixture.id == fixture_id
+        assert (state.now, state.step_count, state.call_count) == (INSTANT_ISO, 4, 3)
 
 
 def test_the_stock_client_drives_the_same_session(world: World) -> None:
@@ -165,8 +167,8 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
             "metadata": {},
         }
         state = env.state()
-        assert state["world"] == world.name
-        assert state["fixture"] == fixture_id
+        assert state["world"] == {"name": world.name, "version": world.version}
+        assert state["fixture"]["id"] == fixture_id
 
 
 def test_a_tool_error_reaches_the_stock_client_as_data(world: World) -> None:
@@ -191,6 +193,118 @@ def test_a_world_bug_reaches_the_client_as_an_error_frame(tmp_path: Path) -> Non
         env.reset()
         with pytest.raises(RuntimeError, match="the world is wrong"):
             env.call("misuse")
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+
+
+# --- the state document, over the wire -------------------------------------
+
+# `functional_spec.md` §9's confirmation step, and the gate this project's
+# implementation plan put at this phase: an earlier session established that a
+# subclass's fields travel over the websocket state message while `GET /state`
+# strips them (`BACKLOG.md` B13), and nothing above `SeahavenState` works unless
+# that holds for a document with nested models and an arbitrarily deep `state`
+# in it. So it is driven over a real socket rather than assumed.
+
+
+@pytest.fixture
+def document_world(tmp_path: Path) -> World:
+    """The notes world with a startup keyword, so no envelope field is empty."""
+    world = build_world(tmp_path)
+
+    @world.instance_startup
+    def tenant(ctx: Ctx, *, tenant: str = "acme") -> None:
+        """Accept the keyword; the document reports it whatever the hook does."""
+
+    return world
+
+
+# The one episode both clients drive: a fixture, a seed, a named episode, a
+# startup keyword and one write, so every envelope field below has a value that
+# is not the default.
+EPISODE: dict[str, Any] = {"seed": 7, "episode_id": "ep-1", "tenant": "globex"}
+WRITE = CallToolAction(tool_name="execute", arguments={"sql": insert("n1")})
+
+
+def expected_document(world: World, fixture_id: str) -> dict[str, Any]:
+    """What `EPISODE` plus `WRITE` leaves behind, field by field, as §3.1 defines it."""
+    sha256 = {fixture.id: fixture.meta.file_sha256 for fixture in world.fixtures()}[fixture_id]
+    return {
+        "format": "seahaven.state/1",
+        "seahaven_version": seahaven.__version__,
+        "world": {"name": world.name, "version": world.version},
+        "fixture": {"id": fixture_id, "file_sha256": sha256},
+        "episode_id": "ep-1",
+        "seed": 7,
+        "now": INSTANT_ISO,
+        "startup": {"tenant": "globex"},
+        "call_count": 1,
+        "state": {
+            "db": {
+                "log": [
+                    {
+                        "i": 0,
+                        "subworld": None,
+                        "table": "notes",
+                        "op": "insert",
+                        "key": {"id": "n1"},
+                        "before": None,
+                        "after": {"id": "n1", "body": "a body", "n": 0},
+                    }
+                ]
+            }
+        },
+    }
+
+
+def test_the_whole_document_arrives_over_the_websocket(document_world: World) -> None:
+    """Every field of `functional_spec.md` §3.1, with the value it has in process."""
+    fixture_id = _freeze(document_world)
+    with serving(document_world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(fixture=fixture_id, **EPISODE)
+        env.call("execute", sql=insert("n1"))
+        state = env.state()
+    assert state.model_dump(exclude={"step_count"}) == expected_document(document_world, fixture_id)
+    assert state.step_count == 1
+
+
+def test_the_stock_client_sees_the_same_document(document_world: World) -> None:
+    """No Seahaven on the client side at all: the document is plain JSON.
+
+    The same episode driven twice against the same server answers the same
+    document down to the last field, which is `functional_spec.md` §15's
+    determinism read over the wire: the episode id is the one both were given,
+    and everything else is the world's or the episode's.
+    """
+    fixture_id = _freeze(document_world)
+    with serving(document_world) as url:
+        with GenericEnvClient(base_url=url) as generic:
+            generic.reset(fixture=fixture_id, **EPISODE)
+            generic.step(WRITE.model_dump())
+            stock = generic.state()
+        with SeahavenClient(base_url=url) as typed:
+            typed.reset(fixture=fixture_id, **EPISODE)
+            typed.call("execute", sql=insert("n1"))
+            document = typed.state().model_dump()
+    assert stock == expected_document(document_world, fixture_id) | {"step_count": 1}
+    assert stock == document
+
+
+def test_reset_selects_a_state_format_over_the_wire(world: World) -> None:
+    """The state message carries no arguments, so the episode's format is the only one."""
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(state_format="seahaven.state+last_step/1")
+        env.call("execute", sql=insert("n1"))
+        env.call("execute", sql=insert("n2"))
+        state = env.state()
+    assert state.format == "seahaven.state+last_step/1"
+    assert [record["key"]["id"] for record in state.state["db"]["log"]] == ["n2"]
+
+
+def test_an_unknown_state_format_is_an_error_frame_and_the_session_survives(world: World) -> None:
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        with pytest.raises(RuntimeError, match="state format"):
+            env.reset(state_format="acme.state/1")
+        env.reset()
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 

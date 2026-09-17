@@ -26,7 +26,7 @@ move, then the old is removed. Details are in `functional_spec.md` (FS) and `arc
   every `World(...)` in the repo, docs examples included (ARCH §10). Tests: `test_state.py`,
   `test_world.py` additions, scaffold tests, `tests/support/state_v1.schema.json`.
 
-- [ ] **Phase 3: OpenEnv.** `reset(state_format=, episode_id)`, the `state` property before and
+- [x] **Phase 3: OpenEnv.** `reset(state_format=, episode_id)`, the `state` property before and
   after `reset`, `SeahavenState` typed over the envelope, client docstring (ARCH §9). Tests:
   `test_env.py` rewritten state tests, `test_client.py`, and the WebSocket confirmation in
   `test_server.py` (FS §9). This phase is the gate: if the document does not arrive whole over

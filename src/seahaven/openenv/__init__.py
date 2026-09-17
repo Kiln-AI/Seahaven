@@ -28,17 +28,25 @@ from openenv.core.env_server.mcp_types import (
 from openenv.core.env_server.types import ConcurrencyConfig
 
 from seahaven.openenv.client import SeahavenClient
-from seahaven.openenv.env import SeahavenEnv, SeahavenObservation, SeahavenState
+from seahaven.openenv.env import (
+    FixtureRef,
+    SeahavenEnv,
+    SeahavenObservation,
+    SeahavenState,
+    WorldRef,
+)
 from seahaven.world import World
 
 __all__ = [
     "CallToolAction",
+    "FixtureRef",
     "ListToolsAction",
     "ListToolsObservation",
     "SeahavenClient",
     "SeahavenEnv",
     "SeahavenObservation",
     "SeahavenState",
+    "WorldRef",
     "app",
 ]
 
