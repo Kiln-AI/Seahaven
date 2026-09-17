@@ -46,7 +46,7 @@ anything on that branch that assumes an instance is one store is wrong here.
   the aliasing fixes and their tests. *Not reference:* its envelope (single world, single file)
   and its sweep list (`main` added twelve sites and four helpers since).
 
-- [ ] **Phase 3: OpenEnv.** `reset(state_format=, episode_id)` through the manager, the `state`
+- [x] **Phase 3: OpenEnv.** `reset(state_format=, episode_id)` through the manager, the `state`
   property before and after `reset`, `SeahavenState` typed over the envelope with `WorldRef`,
   `NodeRef`, `FixtureRef` and `FileRef`, `_composition()` and `_episode_id` removed, `main`'s
   `step()` and `_listing()` kept, client docstring (ARCH §9). Tests: `test_env.py` state tests

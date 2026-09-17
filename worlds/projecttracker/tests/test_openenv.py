@@ -95,7 +95,12 @@ def test_the_typed_client_lists_and_calls_this_worlds_tools() -> None:
         assert observation.result["email"] == "ada@tracker.invalid"
         assert observation.result["created_at"] == FIXTURE_NOW
         state = env.state()
-        assert (state.world, state.fixture, state.now) == ("projecttracker", "empty", FIXTURE_NOW)
+        assert state.world.name == "projecttracker"
+        assert state.fixture is not None and state.fixture.id == "empty"
+        assert state.now == FIXTURE_NOW
+        # The document, not a placeholder: the user this session created is in
+        # the change log the state message carried back.
+        assert [record["table"] for record in state.state["db"]["log"]] == ["users"]
 
 
 def test_reset_names_the_person_the_session_drives_the_tracker_as() -> None:

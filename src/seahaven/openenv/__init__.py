@@ -34,17 +34,29 @@ from openenv.core.env_server.types import ConcurrencyConfig
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from seahaven.openenv.client import SeahavenClient
-from seahaven.openenv.env import SeahavenEnv, SeahavenObservation, SeahavenState
+from seahaven.openenv.env import (
+    FileRef,
+    FixtureRef,
+    NodeRef,
+    SeahavenEnv,
+    SeahavenObservation,
+    SeahavenState,
+    WorldRef,
+)
 from seahaven.world import World
 
 __all__ = [
     "CallToolAction",
+    "FileRef",
+    "FixtureRef",
     "ListToolsAction",
     "ListToolsObservation",
+    "NodeRef",
     "SeahavenClient",
     "SeahavenEnv",
     "SeahavenObservation",
     "SeahavenState",
+    "WorldRef",
     "app",
 ]
 

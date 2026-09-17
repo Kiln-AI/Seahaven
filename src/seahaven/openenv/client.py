@@ -48,8 +48,17 @@ class SeahavenClient(
         tools = env.list_tools()
         obs = env.call("ping", message="hello")
         obs.result, obs.error
-        env.state().now
+        state = env.state()
+        state.state["db"]["log"]  # the format's output; here, the change log
+        final_state = state.model_dump(exclude={"step_count"})  # the document
     ```
+
+    `state()` answers the whole state document (`functional_spec.md` §3.1) plus
+    OpenEnv's `step_count`: `.state` is the formatter's output, everything else
+    but `step_count` is the framework's envelope, and
+    `.model_dump(exclude={"step_count"})` is the document a harness saves as
+    `final_state` -- byte for byte what `inst.state()` answers in process.
+    `reset(state_format=...)` chooses the format for the episode.
 
     A tool error arrives on the observation and never raises: `obs.error` is the
     `{"code", "message", "details"}` the world produced, and exactly one of
