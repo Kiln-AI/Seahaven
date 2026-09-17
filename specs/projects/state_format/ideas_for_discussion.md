@@ -207,6 +207,11 @@ approved yet; the example in Appendix B is the agreed shape for `db.log`):
   with `None`. Custom pins resolve at first instance creation. No new lint rule (STRICT already
   refuses NULL keys). Startup keywords are refused at `reset` if not JSON-able.
 
+- `inst.changes()`, the `Change` class and `controller_changes` are removed (locked 2026-09-17).
+  One API, `state()`, and one recording mechanism, a session per call. The fold's oracle moves
+  into the tests as a long-lived session the test opens itself. `controller_run_sql` stays,
+  deprecated.
+
 - **A judge helper is out of scope for this project.** Recorded as the follow-up: load a document,
   fold the log into the net diff, materialise into SQLite tables, and given the fixture file overlay
   the log to produce full before and after rows or the whole final database. The fold test above is

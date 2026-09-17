@@ -38,8 +38,9 @@ Three consequences drive everything below:
   (§6). A format, once published in a Seahaven release, never changes in a way a reader could
   observe (§10).
 - **Change log.** The ordered record of every row the instance changed after startup, one record
-  per row per call. It is the only database content in the document. The net diff, what
-  `inst.changes()` returns today, is a fold of it (§3.6) and is not in the document.
+  per row per call. It is the only database content in the document, and the only record the
+  framework keeps: the net diff is a fold of it (§3.6), defined by this spec and computed by
+  nobody in production. `inst.changes()`, today's cumulative net diff, is removed.
 - **Call ordinal `i`.** The position of a call among every call dispatched to the instance, from 0
   (§7). Log records carry it; it is the join key to the harness's trace.
 
@@ -175,11 +176,11 @@ reader, in any language, computes the same one:
    the inserted row, reduced to the differing non-key columns), else untouched.
 3. Drop groups that folded to untouched. Sort by `(subworld, table, key)` as §3.3.
 
-This is SQLite's changeset semantics over the whole episode. `inst.changes()` (unchanged in this
-project) is the reference implementation: a test asserts
-`fold(inst.state()["state"]["db"]["log"]) == inst.changes()` on every episode shape the suite
-exercises (§13). The fold function that test uses
-is test code, not public API, in this release.
+This is SQLite's changeset semantics over the whole episode, and SQLite is the oracle: a test
+opens a long-lived session of its own on the instance connection for the whole episode, renders
+its changeset, and asserts that the fold of the log equals it, on every episode shape the suite
+exercises (§13). Both the fold and the oracle are test code, not public API, in this release; the
+fold is the seed of the helper recorded as the follow-up.
 
 ## 4. The format `seahaven.state+last_step/1`
 
@@ -268,7 +269,6 @@ inst.state()                       # the document (envelope + state), in the ins
 inst.state(format="seahaven.state+last_step/1")
 inst.change_log()                  # list[LogRecord], the §3.2 records, in §3.3 order
 inst.call_count                    # int
-inst.changes()                     # unchanged: the cumulative net diff, list[Change]
 world.instance("agency", seed=7, state_format="seahaven.state/1", user_id="u_12")
 ```
 
@@ -276,8 +276,11 @@ world.instance("agency", seed=7, state_format="seahaven.state/1", user_id="u_12"
   saves it with `json.dump` and nothing else. It costs serialisation only: the log is kept in
   memory and appended to as each call commits, and `state()` does no database work.
 - `inst.change_log()` returns the records as frozen dataclasses with a `to_dict()` of the §3.2
-  shape, the way `Change` does today.
-- `inst.changes()` keeps its contract. It remains the reference for the fold (§3.6).
+  shape.
+- **`inst.changes()` and the `Change` class are removed** (decided 2026-09-17). They were a second
+  API and a second recording mechanism for data the log already carries. A caller that wants the
+  net diff folds the log (§3.6); for a single-call test the log is the net diff. Accepted as a
+  breaking change on the same grounds as §5's.
 - **`seed` is `int | None` everywhere.** `world.instance(seed=)`, the pytest marker and the seed
   derivation drop `bytes`, which nothing needed: the caller's value is hashed with the fixture id
   into the derived instance seed either way, and OpenEnv's `reset(seed=)` is already `int | None`.
@@ -328,17 +331,19 @@ For every format Seahaven publishes:
 
 ## 11. Control tools
 
-`controller_run_sql` and `controller_changes` are unchanged in behaviour and remain behind
-`--include-control-tools` over the wire and always reachable in-process. Both are marked
-deprecated: a `DeprecationWarning` on each call, and docstrings that name `state()` as the
-replacement. They leave the docs entirely (§12). Removal is not scheduled in this project.
+`controller_changes` is **removed** with `changes()` (decided 2026-09-17), and its name leaves
+the reserved control-tool names. `controller_run_sql` is unchanged in behaviour, remains behind
+`--include-control-tools` over the wire and always reachable in-process, and is marked deprecated:
+a `DeprecationWarning` on each call, and a docstring that names `state()` as the replacement. It
+leaves the docs entirely (§12). Its removal is not scheduled in this project.
 
 ## 12. Documentation and lint
 
 - **`state()` is the primary surface in every doc that grades or inspects an episode.**
   `serving.md` (the control-tools section is replaced by a state section), `testing.md` (the
   changeset example becomes a state example reading `inst.state()["state"]["db"]["log"]`),
-  `concepts.md` (the changeset concept gains "the change log" and the document), the README's `grade(world_instance.changes())` example, and
+  `concepts.md` (the changeset concept becomes "the change log" and the document), the README's
+  `grade(world_instance.changes())` example (now `grade(world_instance.state())`), and
   `reference/api.md`. `reference/cli.md` keeps `--include-control-tools` with one line saying it
   is deprecated.
 - **A new `state.md`** in the bundled docs: the document (the envelope and `state`), both
@@ -371,8 +376,9 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
   episodes give byte-identical `json.dumps` output.
 - **`i` and `call_count`.** A refused unknown tool and a `ToolError` each consume an ordinal. Tool
   listing and control tools do not. `bulk()` writes carry `i: null`. `call_count` matches.
-- **The fold.** `fold(log) == inst.changes()` on every case above, plus a primary-key rewrite
-  (delete plus insert in the log, delete plus insert in `changes()`).
+- **The fold.** The test's own long-lived session over the whole episode is the oracle:
+  `fold(log)` equals its rendered changeset on every case above, plus a primary-key rewrite
+  (delete plus insert in both).
 - **Provenance.** Every envelope field against a fixture instance and a blank one; `startup`
   carries the keywords given and is `{}` otherwise; `fixture` is `null` for blank; the envelope is
   identical under a custom format.
@@ -395,8 +401,9 @@ replacement. They leave the docs entirely (§12). Removal is not scheduled in th
 - **Performance.** `state()` on an instance with 1,000 log records does no database work
   (asserted through the authorizer or a statement counter) and completes within a stated bound;
   a call's cost with logging on is within a stated fraction of today's.
-- **Deprecation.** Each control tool warns once per call, observed in process (the server's
-  warning is raised in its own process and is not visible to a client).
+- **Deprecation and removal.** `controller_run_sql` warns once per call, observed in process (the
+  server's warning is raised in its own process and is not visible to a client);
+  `controller_changes` is `UnknownTool`, and a world may now register a tool of that name.
 - **Docs.** Every new example executes; no doc mentions `controller_` except `cli.md`'s one line.
 
 ## 14. Open questions
@@ -419,5 +426,5 @@ Numbered so they can be answered by number.
 A net diff, a summary or counts in the document; an ignore list; an `indirect` flag; tool calls or
 results in the document; a whole-database or whole-row format; a schema block or fingerprint;
 filtering options on `state()` or a cap on the log; a judge language, a DSL, or a
-loader/helper shipped by Seahaven; removing the control tools; composition itself (`subworld` is
-reserved, always `null`); changing `inst.changes()`.
+loader/helper shipped by Seahaven; removing `controller_run_sql`; composition itself (`subworld`
+is reserved, always `null`).

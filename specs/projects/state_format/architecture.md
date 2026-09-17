@@ -13,7 +13,7 @@ Section numbers in `functional_spec.md` are cited as "FS §n".
 
 | Module | Change |
 |---|---|
-| `seahaven/changes.py` | Gains `LogRecord`, `render_log()`, a per-instance column cache, the JSON value mapping (`_jsonable` handles infinities), and `tracked_tables()`. `Change`, `render()` and `start_session()` keep their behaviour. |
+| `seahaven/changes.py` | `LogRecord` and `render_log()` replace `Change` and `render()`; a per-instance column cache; the JSON value mapping (`_jsonable` handles infinities); `start_session()` becomes `open_session(conn, tracked)` over a precomputed table list plus `tracked_tables(conn, world)`. |
 | `seahaven/state.py` | **New.** The formatter protocol, the two built-in formatters (each handling the no-instance case), format-name validation, and `SEAHAVEN_STATE_V1` / `SEAHAVEN_STATE_LAST_STEP_V1` name constants. |
 | `seahaven/instances.py` | `Instance` gains the log store, the call counter, `state()`, `change_log()`, `call_count`, `episode_id`, `caller_seed`, `fixture_sha256`, `startup`, `state_format`; per-call and per-bulk sessions; the formatting guard. `InstanceManager.create` gains `state_format` and `episode_id`, resolves the formatter first, serialises the startup keywords. |
 | `seahaven/world.py` | `World(..., state_format: str)` required; `RESET_ARGUMENTS` gains `state_format`; `world.state_format()` registration; `world.resolve_state_format()`; `__copy__` carries the registry. |
@@ -21,9 +21,9 @@ Section numbers in `functional_spec.md` are cited as "FS §n".
 | `seahaven/pytest_plugin.py` | The marker's `seed` narrows to `int | None`; `state_format` is passed through if given. |
 | `seahaven/openenv/env.py` | `reset(state_format=...)`; `state` answers the document; `SeahavenState` is an open model over the document. |
 | `seahaven/openenv/client.py` | Docstring example only; `_parse_state` is unchanged. |
-| `seahaven/control.py` | `DeprecationWarning` in `dispatch`; docstrings name `state()`. |
+| `seahaven/control.py` | `controller_changes` removed; `DeprecationWarning` in `dispatch` for `controller_run_sql`; docstring names `state()`. `CONTROL_TOOL_NAMES` in `world.py` shrinks to one. |
 | `seahaven/cli/templates/base/src/PACKAGE/world.py.tmpl` | `state_format="seahaven.state/1"`. |
-| `seahaven/__init__.py` | Exports `LogRecord`. |
+| `seahaven/__init__.py` | Exports `LogRecord`; `Change` is gone. |
 | Every `World(...)` in the repo | Gains `state_format=`. 38 files; the sweep is one phase. |
 | Docs | FS §12. |
 
@@ -45,8 +45,8 @@ class LogRecord:
     def to_dict(self) -> dict[str, Any]   # FS §3.2 field order: i, subworld, table, op, key, before, after
 ```
 
-`Change` is unchanged (its update `before` keeps the key columns; `LogRecord`'s does not). The two
-are rendered by two functions over the same changeset iterator so neither depends on the other.
+`Change` and `render()` are deleted with `Instance.changes()` (decided 2026-09-17); `render_log`
+is the one renderer, and `_row`, `_columns` and `_jsonable` move under it.
 
 ### 2.2 The log store (`Instance`)
 
@@ -55,9 +55,9 @@ are rendered by two functions over the same changeset iterator so neither depend
 - `self._columns: dict[str, tuple[list[str], list[int]]]`, the per-table column names and key
   positions, filled lazily by `render_log` and `render`; a world's schema does not change for the
   life of an instance, so it is never invalidated.
-- `self._tracked: tuple[str, ...]`, the tables the sessions attach, computed once at creation by
-  `changes.tracked_tables(conn, world)` (the loop `start_session` runs today, factored out so the
-  cumulative session and every per-call session attach the same list).
+- `self._tracked: tuple[str, ...]`, the tables every per-call session attaches, computed once at
+  creation by `changes.tracked_tables(conn, world)` (today's `start_session` loop, factored out),
+  including the refusal of a table with no explicit primary key.
 
 ### 2.3 The state document
 
@@ -68,9 +68,9 @@ A `dict[str, Any]`: the envelope, written by `state.envelope(world, instance, fo
 
 ### 3.1 One SQLite session per call
 
-The cumulative session (`self._session`, attached at creation after the startup hooks) stays
-exactly as it is: it is what `changes()` renders, and `changes()` is the fold's reference (FS
-§3.6). Beside it, **every call gets a session of its own**:
+There is no long-lived session any more: `Instance.changes()` is removed (decided 2026-09-17),
+and with it the cumulative session that fed it. **Every call gets a session of its own**, and that
+is the only recording in production:
 
 ```python
 def _call(self, name, arguments):
@@ -103,18 +103,14 @@ def _recording(self, i: int | None) -> Iterator[None]:
             self._log.extend(render_log(changeset, self.db.conn, self._columns, i=i))
 ```
 
-Why not the alternatives:
+Why not one long session with per-call deltas computed from it: diffing consecutive cumulative
+changesets (`Changeset.concat(Changeset.invert(prev), cur)`) is O(total changes) per call,
+quadratic inside Seahaven, which is the cost FS §4 exists to avoid on the harness side. A session
+per call is O(changes in the call). Opening one costs a `Session` allocation and one `attach` per
+tracked table, in C; §16 measures a call with and without it.
 
-- Diffing consecutive cumulative changesets (`Changeset.concat(Changeset.invert(prev), cur)`) is
-  O(total changes) per call: quadratic inside Seahaven, which is the cost FS §4 exists to avoid on
-  the harness side.
-- Dropping the cumulative session and folding per-call changesets with `ChangesetBuilder` would
-  make `changes()` depend on SQLite's changegroup combination rules, which are not documented to
-  discard an update that returns a row to its original values; `changes()` must stay the long
-  session's exact answer.
-
-APSW permits several sessions on one connection. The cost is a second preupdate-hook recording
-per written row; §16 measures it and states the bound.
+The `tracked` list computed at creation also performs the refusal `start_session` performs
+today: a table with no explicit primary key is a `WorldBug` at instance creation, as before.
 
 The `finally` runs on a `ToolError` too, and on any exception: a refused or failed call still
 consumed its ordinal and still gets its (empty) recording. If `session.changeset()` itself
@@ -251,8 +247,8 @@ checked beyond its being a dict.
 
 `_refuse_if_formatting()` at the top of `_call` and `_bulk` raises `WorldBug("a state formatter
 reads an instance and never writes to it")`: a formatter that calls `inst.call` or `inst.bulk` is
-caught by the RLock re-entry landing on the guard. Reads through `inspect()`, `change_log()`,
-`changes()` and the attributes are what a formatter is for.
+caught by the RLock re-entry landing on the guard. Reads through `inspect()`, `change_log()` and
+the attributes are what a formatter is for.
 
 ## 6. Instance creation (`InstanceManager.create`)
 
@@ -280,9 +276,11 @@ the pytest marker follow. `ctx.instance.seed` (the derived bytes) is unchanged.
 
 ## 8. Control tools (`control.py`)
 
-`dispatch` issues `warnings.warn(f"{call.name} is deprecated: read inst.state() instead",
-DeprecationWarning, stacklevel=2)` before running the function. Docstrings of both tools open with
-the same sentence. Nothing else changes.
+`controller_changes` is deleted: its function, its `Tool`, its entry in `control.TOOLS`, its name
+in `world.CONTROL_TOOL_NAMES`, and its tests. `dispatch` issues
+`warnings.warn("controller_run_sql is deprecated: read inst.state() instead", DeprecationWarning,
+stacklevel=2)` before running the remaining tool, whose docstring opens with the same sentence.
+Nothing else changes.
 
 ## 9. OpenEnv (`openenv/env.py`)
 
@@ -359,10 +357,12 @@ Unit tests live beside the module they pin; every FS §13 item maps to one below
   case by case), ordering across calls, `i: null` for `bulk()`, no records for a rolled-back call,
   a read-only call, and startup rows; byte-identical `json.dumps` of two identical episodes; the
   formatting guard; `state()` after `destroy()`.
-- `tests/test_fold.py` (new) with `tests/support/fold.py`: the FS §3.6 fold as test code;
-  `fold(log) == [c.to_dict() for c in inst.changes()]` on every `test_change_log.py` episode plus a
-  primary-key rewrite. The support module is the seed of a later helper and is deliberately not
-  importable from `seahaven`.
+- `tests/test_fold.py` (new) with `tests/support/fold.py` and `tests/support/oracle.py`: the FS
+  §3.6 fold as test code, and an oracle that opens its own `apsw.Session` on `inst.db.conn` for the
+  whole episode (attached to `inst._tracked`, after creation) and renders it to the net-diff shape.
+  `fold(log) == oracle()` on every `test_change_log.py` episode plus a primary-key rewrite. Both
+  support modules are deliberately not importable from `seahaven`; the fold is the seed of the
+  helper recorded as the follow-up.
 - `tests/test_state.py` (new): `state_v1` field by field against a fixture instance and a blank
   one; `startup` given and empty; `state_last_step_v1` per step, concatenation equals the full
   log, empty before any call; a custom formatter registered, selected by `instance(state_format=)`,
@@ -384,8 +384,10 @@ Unit tests live beside the module they pin; every FS §13 item maps to one below
   field with the values the in-process document has (this is FS §9's confirmation step);
   `reset(state_format="seahaven.state+last_step/1")` selects it; the stock `GenericEnvClient`
   sees the same keys.
-- `tests/test_control.py`: each control tool warns (`pytest.warns(DeprecationWarning)`), in
-  process, which is where the server's warning is raised too.
+- `tests/test_control.py`: `controller_run_sql` warns (`pytest.warns(DeprecationWarning)`), in
+  process, which is where the server's warning is raised too; `controller_changes` is
+  `UnknownTool`, in process and over the wire with the flag on; a world may register a tool named
+  `controller_changes`. `tests/test_changes.py`'s `Change` cases are replaced by `LogRecord` ones.
 - `tests/test_new_cli.py` (existing scaffold tests): the generated `world.py` carries the pin and
   `seahaven check` passes on it.
 - `bench/`: a probe for §16.
@@ -404,11 +406,10 @@ compares documents with `episode_id` masked; over OpenEnv a caller who passes `e
 - `state()` does no database work: the log is in memory; `render_log` runs at call time. Pinned by
   a test that installs an authorizer counter on the instance connection during `state()` and
   asserts zero statements.
-- The second session's cost per written row is measured by a `bench/` probe (the existing
-  harness) on ProjectTracker's write-heavy workload, with and without per-call recording (a
-  private toggle the probe flips). Bound stated after measurement in the phase plan; the
-  expectation is a few percent, since the session extension's per-row work is a C hash-table
-  insert.
+- A call's cost with the per-call session against today's long-lived one is measured by a
+  `bench/` probe (the existing harness) on ProjectTracker's write-heavy workload. The per-row
+  recording work is the same as today's; what is new is one `Session` open and `attach` per
+  tracked table per call, in C. Expectation: within noise; the number goes in the phase plan.
 - `_columns` is filled once per table per instance; `tracked_tables` once per instance.
 
 ## 17. Open items
@@ -426,8 +427,5 @@ compares documents with `episode_id` masked; over OpenEnv a caller who passes `e
    notes it.
 6. *Decided 2026-09-17:* the deprecation warning is tested in process; the functional spec is
    updated.
-7. **Two sessions per write.** §3.1's design doubles the session extension's per-row work. If the
-   §16 measurement shows more than a few percent on the write-heavy workload, the fallback is to
-   attach the cumulative session lazily, on the first `changes()` call, from a fold of the
-   per-call changesets with `ChangesetBuilder`, accepting the changegroup-semantics risk in that
-   path only. Proposal: measure first; decide in the phase.
+7. *Resolved 2026-09-17 by removing `changes()`:* there is one session per call and no long-lived
+   one, so nothing is recorded twice. `controller_changes` goes with it (§8).
