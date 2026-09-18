@@ -5,8 +5,8 @@ way to prove a session is a session. This one does not: what `serve` adds over
 `app` is three decisions -- the gate is sized before the app is built, the app
 gets the operator's numbers, and uvicorn is given one worker and an app object
 rather than an import string -- and a server that runs until the process is
-stopped is not the way to read any of them. `uvicorn.run` is replaced, and the
-call it would have made is the assertion.
+stopped is not the way to read any of them. The server class is replaced, and
+the arguments `serve` handed `uvicorn.Config` are the assertion.
 
 The one-worker rule is the reason this file exists at all. A second worker
 process answers a session's second frame with an environment that has never seen
@@ -39,28 +39,48 @@ from seahaven.openenv.serve import DEFAULT_HOST, DEFAULT_PORT, serve
 def served(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Record what `serve` does instead of letting it serve for ever.
 
-    `uvicorn.run` is replaced outright. `app` is wrapped rather than replaced:
-    the real one is still built from the real arguments -- so a call `app` would
-    refuse still fails here -- and the arguments it was handed are recorded on
-    the way past, which is the claim `serve` is making.
+    `app` and `uvicorn.Config` are wrapped rather than replaced: both are still
+    built for real -- so a call either of them would refuse still fails here --
+    and the arguments they were handed are recorded on the way past, which is
+    the claim `serve` is making. Only the `run` that never returns is replaced.
+
+    The arguments are read as `serve` passed them, never off the built
+    `Config`. `Config.__init__` fills in a default for every one of them, so a
+    `Config` answers `workers == 1` whether or not anything asked for one
+    worker, and the one-worker assertion below would hold with the line that
+    makes it true deleted.
     """
     call: dict[str, Any] = {}
     build = serve_module.app
+    configure = serve_module.uvicorn.Config
 
     def app(world: World, **options: Any) -> Any:
         call["options"] = options
         return build(world, **options)
 
-    def run(app: Any, **kwargs: Any) -> None:
+    def config(app: Any, **kwargs: Any) -> Any:
         call["app"] = app
         call["kwargs"] = kwargs
-        # The gate's size as it stands when uvicorn would start: the ordering
-        # claim. `instances.concurrency()` rather than `_gate._initial_value`,
-        # which reached into two libraries' privates to read one number.
-        call["concurrency"] = instances.concurrency()
+        return configure(app, **kwargs)
+
+    class Recorder:
+        """Stands in for the server, so that `run` returns."""
+
+        announce = ""
+
+        def __init__(self, config: Any) -> None:
+            call["config"] = config
+
+        def run(self) -> None:
+            # The gate's size as it stands when uvicorn would start: the ordering
+            # claim. `instances.concurrency()` rather than `_gate._initial_value`,
+            # which reached into two libraries' privates to read one number.
+            call["concurrency"] = instances.concurrency()
+            call["announce"] = self.announce
 
     monkeypatch.setattr(serve_module, "app", app)
-    monkeypatch.setattr(serve_module.uvicorn, "run", run)
+    monkeypatch.setattr(serve_module.uvicorn, "Config", config)
+    monkeypatch.setattr(serve_module, "_AnnouncingServer", Recorder)
     return call
 
 
@@ -126,6 +146,7 @@ def test_serve_passes_the_module_defaults_when_it_is_told_nothing(
         "include_control_tools": False,
         "max_concurrent_envs": 500,
         "session_timeout": 3600.0,
+        "console": True,
     }
     assert (DEFAULT_MAX_CONCURRENT_ENVS, DEFAULT_SESSION_TIMEOUT) == (500, 3600.0)
 
@@ -134,3 +155,96 @@ def test_serve_can_expose_the_control_tools(world: World, served: dict[str, Any]
     """The flag is the operator's, and `serve` is the only thing that carries it."""
     serve(world, include_control_tools=True)
     assert served["options"]["include_control_tools"] is True
+
+
+def test_serve_announces_the_console_at_an_address_a_browser_can_open(
+    world: World, served: dict[str, Any]
+) -> None:
+    """The line an operator reads after `seahaven serve`.
+
+    The default bind is `0.0.0.0`, which is not an address, so the message names
+    loopback. `console_url` owns that translation and is tested against every
+    spelling in `test_server.py`.
+    """
+    serve(world)
+    assert served["announce"] == "Web console available at http://127.0.0.1:8000/console"
+    serve(world, host="127.0.0.1", port=8001)
+    assert served["announce"] == "Web console available at http://127.0.0.1:8001/console"
+
+
+def test_serve_without_a_console_neither_serves_nor_announces_one(
+    world: World, served: dict[str, Any]
+) -> None:
+    """`--no-console`: the route is not registered and nothing is printed."""
+    serve(world, console=False)
+    assert served["options"]["console"] is False
+    assert served["announce"] == ""
+
+
+def test_the_announcement_is_made_after_uvicorn_has_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under uvicorn's own line, and only for a server that came up.
+
+    `_AnnouncingServer.startup` is the whole mechanism, and a uvicorn release
+    that renamed or resignatured `startup` would leave `serve` silent with
+    nothing else failing. The socket is not bound: the base `startup` is
+    replaced, and what is asserted is that it is awaited before the line.
+
+    A handler on uvicorn's own logger rather than `caplog`, because building a
+    `uvicorn.Config` configures logging and takes `uvicorn.error` off the root
+    logger, which is where `caplog` listens.
+    """
+    import asyncio
+    import logging
+
+    started: list[str] = []
+    said: list[str] = []
+
+    async def startup(self: Any, sockets: Any = None) -> None:
+        started.append("uvicorn")
+
+    class Listener(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            said.append(record.getMessage())
+
+    monkeypatch.setattr(serve_module.uvicorn.Server, "startup", startup)
+    server = serve_module._AnnouncingServer(serve_module.uvicorn.Config(lambda: None))
+    server.announce = "Web console available at http://127.0.0.1:8000/console"
+
+    listener = Listener()
+    logging.getLogger("uvicorn.error").addHandler(listener)
+    try:
+        asyncio.run(server.startup())
+    finally:
+        logging.getLogger("uvicorn.error").removeHandler(listener)
+
+    assert started == ["uvicorn"]
+    assert said == ["Web console available at http://127.0.0.1:8000/console"]
+
+
+def test_nothing_is_announced_when_there_is_no_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty `announce` is silence, not an empty line in the operator's log."""
+    import asyncio
+    import logging
+
+    said: list[str] = []
+
+    async def startup(self: Any, sockets: Any = None) -> None:
+        return None
+
+    class Listener(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            said.append(record.getMessage())
+
+    monkeypatch.setattr(serve_module.uvicorn.Server, "startup", startup)
+    server = serve_module._AnnouncingServer(serve_module.uvicorn.Config(lambda: None))
+
+    listener = Listener()
+    logging.getLogger("uvicorn.error").addHandler(listener)
+    try:
+        asyncio.run(server.startup())
+    finally:
+        logging.getLogger("uvicorn.error").removeHandler(listener)
+
+    assert said == []
