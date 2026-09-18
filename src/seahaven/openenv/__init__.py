@@ -16,7 +16,6 @@ That file, `openenv_app.py`, is the whole of a world's server. One world per
 app, mounted at `/`, which is the shape a hub expects.
 """
 
-import functools
 import json
 import logging
 from typing import Any, NoReturn
@@ -474,11 +473,29 @@ def app(
     `session_timeout` is seconds of inactivity before OpenEnv reaps a session,
     or `None` for no reaper. It is passed as part of a `ConcurrencyConfig`
     because OpenEnv refuses both that and `max_concurrent_envs` together, and
-    `env_name` is passed explicitly because the factory is a `functools.partial`
-    and OpenEnv cannot read a name off one.
+    `env_name` is passed explicitly because the name OpenEnv reads off a factory
+    is the factory's own `__name__`, which here is `_factory` and not the world.
     """
+
+    # A plain `def` and never a `functools.partial`.
+    # `WebInterfaceManager.__init__` builds the environment only when
+    # `inspect.isclass` or `inspect.isfunction` says the factory is one
+    # (`web_interface.py` lines 249-254 in openenv 0.4.2), and both answer
+    # `False` for a partial, which is then stored unbuilt -- `/web/reset`,
+    # `/web/step` and `/web/state` then read an environment attribute off the
+    # factory object itself. `load_environment_metadata` has the same gate.
+    # `ENABLE_WEB_INTERFACE=true` -- what `openenv push` writes into a Space's
+    # Dockerfile -- is where it shows.
+    # A plain function costs one environment at app-creation time:
+    # `_validate_concurrency_safety` (`http_server.py` lines 276-305) reads
+    # `SUPPORTS_CONCURRENT_SESSIONS` off the class when it can unwrap one from
+    # the factory and builds and closes an environment when it cannot, so
+    # `SeahavenEnv.__init__` has to stay free of side effects.
+    def _factory() -> SeahavenEnv:
+        return SeahavenEnv(world, include_control_tools=include_control_tools)
+
     served = create_app(
-        functools.partial(SeahavenEnv, world, include_control_tools=include_control_tools),
+        _factory,
         CallToolAction,
         SeahavenObservation,
         env_name=world.name,

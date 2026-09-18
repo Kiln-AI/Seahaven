@@ -738,6 +738,58 @@ async def _mcp_frame_over_a_session(url: str) -> dict[str, Any]:
         return json.loads(await sock.recv())
 
 
+# --- the Gradio web interface a pushed Space serves ------------------------
+
+
+def test_the_web_interface_holds_an_episode_and_names_the_world(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`ENABLE_WEB_INTERFACE=true`: reset, step and metadata off one environment.
+
+    This is the mode every pushed world runs in. `openenv push` writes
+    `ENV ENABLE_WEB_INTERFACE=true` into the Dockerfile it generates and
+    `base_path: /web` into the Space README, and `GET /` there redirects to the
+    page these routes serve.
+
+    `WebInterfaceManager.__init__` builds the environment only when
+    `inspect.isclass` or `inspect.isfunction` says the factory is one
+    (`web_interface.py` lines 249-254 in openenv 0.4.2), and neither is true of
+    a `functools.partial`. A factory it does not recognise is kept unbuilt, and
+    every `/web` handler then reads an environment attribute off the factory
+    object itself.
+    """
+    world = build_world(tmp_path, description="Notes, and the tools that touch them.")
+    monkeypatch.setenv("ENABLE_WEB_INTERFACE", "true")
+    step = json.dumps(
+        {"action": {"tool_name": "execute", "arguments": {"sql": insert("n0")}}}
+    ).encode()
+    with serving(world) as url:
+        reset = _request(url + "/web/reset", method="POST")
+        stepped = _request(url + "/web/step", method="POST", data=step)
+        metadata = _request(url + "/web/metadata")
+        published = _request(url + "/metadata")
+    assert reset[0] == 200, reset
+    assert reset[1]["observation"]["result"]["fixture"] is None
+    # The step runs against the instance the reset made: a second environment,
+    # or none, answers `reset first` instead of a rowcount.
+    assert stepped[0] == 200, stepped
+    assert stepped[1]["observation"]["result"] == {"rowcount": 1}
+    assert stepped[1]["observation"]["error"] is None
+    assert metadata[0] == 200, metadata
+    assert metadata[1]["name"] == world.name
+    # Upstream's card, not the world's: `load_environment_metadata` calls
+    # `get_metadata()` only on an environment *instance*, and a factory of any
+    # kind -- class, function or partial -- gets `f"{name} environment"`
+    # instead. `env_name` is what reaches it, so the card names the world and
+    # carries no description of it. With a partial the name is unreadable too
+    # and this line reads `partial environment`. Plain `GET /metadata` builds an
+    # environment and answers `world.description`; the two routes disagree, and
+    # that half is upstream's to fix.
+    assert metadata[1]["description"] == f"{world.name} environment"
+    assert published[0] == 200, published
+    assert published[1]["description"] == world.description
+
+
 # --- the published schema --------------------------------------------------
 
 
