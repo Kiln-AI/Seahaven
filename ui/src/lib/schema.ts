@@ -118,7 +118,7 @@ export function fieldsOf(schema: JsonSchema | undefined, skip: string[] = []): F
       const hasDefault = resolved.default !== undefined
       return {
         name,
-        label: resolved.title && resolved.title !== humanize(name) ? resolved.title : humanize(name),
+        label: resolved.title || humanize(name),
         kind: kindOf(resolved),
         description: resolved.description ?? "",
         required: required.has(name),
