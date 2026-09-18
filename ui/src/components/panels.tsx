@@ -174,8 +174,13 @@ export function ToolsPanel({ env, actions }: { env: LiveEnv; actions: EnvActions
     if (!selected && tools.length > 0) setSelected(tools[0].name)
   }, [tools, selected])
 
+  // Everything that belongs to the tool in the picker goes with it: the errors
+  // from the last attempt, and the raw JSON box, which would otherwise offer
+  // one tool's arguments to the next one. The form is where a new tool starts.
   useEffect(() => {
     setErrors({})
+    setRaw(false)
+    setRawText("{}")
   }, [selected])
 
   const tool: Tool | undefined = tools.find((entry) => entry.name === selected)

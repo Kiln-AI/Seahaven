@@ -108,7 +108,15 @@ await shot(page, "tool-result")
 check(await page.getByText("result").first().isVisible(), "the result card did not render")
 check(await page.getByText("DESIGN-").first().isVisible(), "the new issue key is not in the result")
 
-// --- changing tool empties the result panel ---------------------------------
+// --- changing tool empties the result panel and the raw JSON box ------------
+
+// Raw mode holds the arguments of the tool it was opened for, so it cannot
+// survive into the next tool's form.
+await page.getByRole("switch", { name: "Edit arguments as raw JSON" }).click()
+check(
+  (await page.locator("textarea").first().inputValue()).includes("Stack trace"),
+  "raw mode did not open on the current tool's arguments",
+)
 
 await page.getByRole("button", { name: /create_issue/ }).first().click()
 await page.getByPlaceholder("Filter tools…").fill("get_issue")
@@ -117,6 +125,12 @@ await page.waitForTimeout(200)
 check(
   await page.getByText("Nothing called yet.").isVisible(),
   "the previous tool's result was still shown after changing tool",
+)
+check(
+  (await page.getByRole("switch", { name: "Edit arguments as raw JSON" }).getAttribute(
+    "aria-checked",
+  )) === "false",
+  "the raw JSON box survived a tool change",
 )
 
 // --- a tool that refuses ----------------------------------------------------
