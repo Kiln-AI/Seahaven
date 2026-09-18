@@ -963,6 +963,11 @@ def test_the_world_is_whole_with_the_web_interface_on(
         # built it, and the published state class has to survive the same trip.
         assert _request(url + "/state")[0] == 501
         assert _request(url + "/schema")[1]["state"]["title"] == "SeahavenState"
+        # `_serve_console` decorates whichever app `app()` built, so the mode a
+        # pushed world runs in has to answer the console route too -- and it is
+        # the mode where a browser is most likely to be the thing asking.
+        with urllib.request.urlopen(url + "/console") as console:
+            assert console.status == 200
         env.reset()
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
