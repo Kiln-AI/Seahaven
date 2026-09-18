@@ -53,30 +53,43 @@ export default function App() {
 
   // --- persistence ---------------------------------------------------------
 
-  const patch = useCallback((id: string, change: Partial<LiveEnv>, persist = false) => {
+  // Nothing below writes to IndexedDB from inside a `setEnvs` updater. React
+  // requires an updater to be pure and calls it twice under StrictMode, which
+  // turned one tool call into two rows in the transcript. The updaters compute
+  // state; the effect further down saves whatever the render settled on.
+  const patch = useCallback((id: string, change: Partial<LiveEnv>) => {
     setEnvs((current) =>
-      current.map((env) => {
-        if (env.record.id !== id) return env
-        const next = { ...env, ...change }
-        if (persist) void envStore.put(next.record)
-        return next
-      }),
+      current.map((env) => (env.record.id === id ? { ...env, ...change } : env)),
     )
   }, [])
 
-  const patchRecord = useCallback(
-    (id: string, change: Partial<EnvRecord>) => {
-      setEnvs((current) =>
-        current.map((env) => {
-          if (env.record.id !== id) return env
-          const record = { ...env.record, ...change }
-          void envStore.put(record)
-          return { ...env, record }
-        }),
-      )
-    },
-    [],
-  )
+  const patchRecord = useCallback((id: string, change: Partial<EnvRecord>) => {
+    setEnvs((current) =>
+      current.map((env) =>
+        env.record.id === id ? { ...env, record: { ...env.record, ...change } } : env,
+      ),
+    )
+  }, [])
+
+  // What has already been written, by identity for a record and by key for a
+  // call. Records are replaced rather than mutated, so a reference that has not
+  // changed is a row that does not need writing again.
+  const savedRecords = useRef(new Map<string, EnvRecord>())
+  const savedCalls = useRef(new Set<string>())
+
+  useEffect(() => {
+    for (const env of envs) {
+      if (savedRecords.current.get(env.record.id) !== env.record) {
+        savedRecords.current.set(env.record.id, env.record)
+        void envStore.put(env.record)
+      }
+      for (const call of env.calls) {
+        if (savedCalls.current.has(call.id)) continue
+        savedCalls.current.add(call.id)
+        void callStore.put(call)
+      }
+    }
+  }, [envs])
 
   useEffect(() => {
     void (async () => {
@@ -100,7 +113,11 @@ export default function App() {
                 note: "the page was reloaded, which drops the socket and destroys the instance",
               }
             : saved
-        if (record !== saved) void envStore.put(record)
+        const restoredCalls = await callStore.forEnv(record.id)
+        // A record this loop rewrote is left unmarked, so the effect above
+        // saves it; one it did not touch is already what is on disk.
+        if (record === saved) savedRecords.current.set(record.id, record)
+        for (const call of restoredCalls) savedCalls.current.add(call.id)
         restored.push({
           record,
           tools: null,
@@ -108,7 +125,7 @@ export default function App() {
           schema: null,
           schemaNote: null,
           metadata: null,
-          calls: await callStore.forEnv(record.id),
+          calls: restoredCalls,
           state: null,
           busy: false,
         })
@@ -131,14 +148,12 @@ export default function App() {
   // --- recording -----------------------------------------------------------
 
   const record = useCallback(
-    async (envId: string, entry: Omit<CallRecord, "envId" | "seq">) => {
-      let seq = 1
+    async (envId: string, entry: Omit<CallRecord, "id" | "envId" | "seq">) => {
       setEnvs((current) =>
         current.map((env) => {
           if (env.record.id !== envId) return env
-          seq = env.calls.length + 1
-          const call: CallRecord = { ...entry, envId, seq }
-          void callStore.add(call)
+          const seq = env.calls.length + 1
+          const call: CallRecord = { ...entry, id: `${envId}:${seq}`, envId, seq }
           return { ...env, calls: [...env.calls, call] }
         }),
       )

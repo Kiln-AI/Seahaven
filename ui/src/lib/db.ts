@@ -34,7 +34,8 @@ export type EnvRecord = {
 export type CallKind = "reset" | "tool" | "step" | "state"
 
 export type CallRecord = {
-  id?: number
+  /** `envId:seq`, so that writing the same call twice replaces it rather than doubling it. */
+  id: string
   envId: string
   seq: number
   ts: number
@@ -63,6 +64,9 @@ function open(): Promise<IDBDatabase> {
         db.createObjectStore("envs", { keyPath: "id" })
       }
       if (!db.objectStoreNames.contains("calls")) {
+        // The key is the record's own `id`, which every caller supplies.
+        // `autoIncrement` is kept so that a row written by an older build,
+        // which supplied none, still reads back.
         const calls = db.createObjectStore("calls", { keyPath: "id", autoIncrement: true })
         calls.createIndex("envId", "envId", { unique: false })
       }
@@ -106,8 +110,9 @@ export const envs = {
 }
 
 export const calls = {
-  add: (record: CallRecord): Promise<unknown> =>
-    run("calls", "readwrite", (store) => store.add(record)),
+  // `put` and not `add`: writing a call twice is a replace, not a second row.
+  put: (record: CallRecord): Promise<unknown> =>
+    run("calls", "readwrite", (store) => store.put(record)),
   forEnv: (envId: string): Promise<CallRecord[]> =>
     open().then(
       (db) =>
