@@ -351,8 +351,10 @@ with world.instance() as inst:
 ```
 
 The codes and the message text are the world's own. In process, `inst.call(...)` raises. Over a
-server, the same error arrives on the observation as `{"error": {"code", "message", "details"}}`
-with no `result`. It is never a protocol error and never closes the session.
+server, the same error arrives on the observation with no `result`: `error` carries OpenEnv's
+`{error_type, message}` and `metadata["seahaven_error"]` carries the triple above. It is never a
+protocol error and never closes the session.
+[serving_and_openenv.md](serving_and_openenv.md#calls-results-and-errors) has the wire shape.
 
 ### The framework's own errors
 

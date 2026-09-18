@@ -10,8 +10,9 @@ long -- a session is an instance -- and everything below is what that costs:
 - `step` is `Instance.call`, with the errors rendered rather than raised. A
   `ToolError` is data the agent reads; anything else is either the author's bug
   (a `WorldBug`, which propagates and fails the frame loudly) or an accident
-  (logged with its traceback and answered with a fixed generic error, so engine
-  text never reaches an agent).
+  (answered with a fixed generic error). Both of those are logged here with
+  their traceback and a correlation id, and what goes out says only "internal
+  error" and that id, so no message written for an author reaches the wire.
 - `state` is `Instance.state()`: the whole state document, typed by
   `SeahavenState` and carrying OpenEnv's `step_count` beside it. Before the
   first `reset` there is no instance and the world's pinned formatter answers
@@ -36,11 +37,20 @@ from openenv.core.env_server.mcp_types import (
     ListToolsAction,
     ListToolsObservation,
 )
+from openenv.core.env_server.mcp_types import ToolError as WireToolError
+from openenv.core.env_server.mcp_types import ToolErrorType as WireToolErrorType
 from openenv.core.env_server.types import Action, EnvironmentMetadata, Observation, State
 from pydantic import BaseModel, Field
 
 from seahaven.call import serialise
-from seahaven.errors import SeahavenError, ToolError, UnknownTool, WorldBug
+from seahaven.errors import (
+    INTERNAL_ERROR_CODE,
+    INTERNAL_ERROR_MESSAGE,
+    SeahavenError,
+    ToolError,
+    UnknownTool,
+    WorldBug,
+)
 from seahaven.instances import Instance
 from seahaven.state import document
 from seahaven.world import CONTROL_TOOL_NAMES, World
@@ -59,12 +69,17 @@ _log = logging.getLogger(__name__)
 
 README_NAME = "README.md"
 
-# What an agent is told when a tool failed in a way nobody wrote down. The code
-# and the message are fixed and say nothing: the real failure is in the server's
-# log, with its traceback, and an eval that grades on error text must not be able
-# to read a stack frame out of one.
-INTERNAL_ERROR_CODE = "internal"
-INTERNAL_ERROR_MESSAGE = "internal error"
+# Where the Seahaven triple travels. `error` itself carries OpenEnv's two-key
+# shape, which forbids extra keys, and `Observation` forbids a sibling field, so
+# `metadata` is the only declared free-form space on the frame. The key is
+# namespaced because `metadata` is shared: `reset` already writes `fixture`,
+# `now` and `tools` at its top level, and upstream may add keys of its own.
+SEAHAVEN_ERROR_KEY = "seahaven_error"
+
+# How much of a UUID a correlation id keeps. Long enough that two ids in one
+# server log never collide, short enough to read out of a client-side "internal
+# error" and paste into a grep.
+CORRELATION_ID_LENGTH = 12
 
 
 class SeahavenObservation(CallToolObservation):
@@ -82,15 +97,25 @@ class SeahavenObservation(CallToolObservation):
     check is on the step path only; `reset` has its own handler and no check.
 
     `error` is a tool's own error: data the agent reads, which never closes the
-    session, in one shape across every world -- `{"code", "message", "details"}`,
-    the same dict `ToolError.to_dict` gives in-process. OpenEnv's docstrings say
-    the field is only for transport failures, but its own `MCPEnvironment`
-    answers a failed tool call with `ToolErrorType.EXECUTION_ERROR` ("tool ran
-    but failed"), so this follows the convention their code establishes rather
-    than the one their docstrings describe. The shape differs: their `ToolError`
-    is `{error_type, message}` and forbids extra keys, so a strict parse of
-    `error` against it rejects a tool error -- `SeahavenClient` types the field
-    as this dict, and any lenient client reads it fine.
+    session. OpenEnv's docstrings say the field is only for transport failures,
+    but its own `MCPEnvironment` answers a failed tool call with
+    `ToolErrorType.EXECUTION_ERROR` ("tool ran but failed"), so this follows the
+    convention their code establishes rather than the one their docstrings
+    describe.
+
+    The field is upstream's `ToolError` itself -- `{error_type, message}`, and
+    nothing else, because that model forbids extra keys. Every Seahaven error is
+    therefore a frame upstream's own client parses: `CallToolObservation(**...)`
+    validates, and `MCPToolClient.call_tool` raises a legible `RuntimeError`
+    naming the message and the type rather than a pydantic `ValidationError`.
+
+    The world's own `{"code", "message", "details"}` -- the same triple
+    `ToolError.to_dict` gives in process -- travels in
+    `metadata["seahaven_error"]`, and `seahaven_error` below reads it. It cannot
+    travel as a field of its own: `Observation` forbids extra keys too, so a
+    sibling field would break a strict parse exactly as the old shape did.
+    `metadata` is a declared `Dict[str, Any]` and is the only free-form space on
+    the frame.
     """
 
     # All three carry descriptions of their own rather than the inherited ones,
@@ -108,15 +133,32 @@ class SeahavenObservation(CallToolObservation):
     result: Any | None = Field(
         default=None, description="The tool's result. A tool error travels in `error`, never here."
     )
-    error: dict[str, Any] | None = Field(
+    error: WireToolError | None = Field(
         default=None,
         description=(
-            "The tool's own error, as `{code, message, details}`, or null when the call "
-            "succeeded. A tool error is data the agent reads: it never ends the session."
+            "The tool's own error, as OpenEnv's `{error_type, message}`, or null when the "
+            "call succeeded. The world's own code and details travel in "
+            '`metadata["seahaven_error"]`. A tool error is data the agent reads: it never '
+            "ends the session."
         ),
     )
     # Inherited from `Observation`: `done` (always `False` here), `reward`
     # (always `None`) and `metadata`.
+
+    @property
+    def seahaven_error(self) -> dict[str, Any] | None:
+        """The world's `{"code", "message", "details"}`, or `None` on a call that worked.
+
+        Read from this observation's own `metadata`, which is the copy that
+        travels inside the observation. OpenEnv's serializer copies a non-empty
+        `metadata` to the top level of the wire envelope as well
+        (`serialization.py` lines 183-184 in openenv 0.5.0, deliberately, for a
+        client that reads the generic format), so the triple is on an error frame
+        twice and a client should pick one. This is the one Seahaven's own client
+        reads.
+        """
+        error = self.metadata.get(SEAHAVEN_ERROR_KEY)
+        return error if isinstance(error, dict) else None
 
 
 class WorldRef(BaseModel):
@@ -464,14 +506,33 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         observation. Any other `SeahavenError`, a `WorldBug` above all, is the
         author's and propagates: an eval that graded against "internal error"
         observations while the world was broken is the failure this class exists
-        to prevent (`functional_spec.md` §5.3). Anything else is an accident: it
-        is logged with its traceback and answered with the fixed generic error, so
-        that a world with no error handler still cannot leak engine text.
+        to prevent (`functional_spec.md` §5.3). The catch is `SeahavenError` and
+        not `WorldBug` on purpose, and the rule is that a framework error nobody
+        classified is a framework bug: a new error class that reaches an agent as
+        data because it was never sorted is the worse of the two failures.
+        Anything else is an accident: it is logged with its traceback and answered
+        with the fixed generic error, so that a world with no error handler still
+        cannot leak engine text.
+
+        The second and third outcomes are scrubbed here, because this is the wire
+        boundary and nothing deeper is one. A propagating `SeahavenError` is
+        re-raised with a message that says nothing: OpenEnv renders a failed frame
+        as `WSErrorResponse(data={"message": str(e)})` (`http_server.py` lines
+        1720-1726 in openenv 0.5.0), so whatever the author wrote for themselves
+        would otherwise go out verbatim. It still hard-fails the frame, which is
+        the point -- turning it into an observation would let an eval quietly
+        score a broken world. In process, `Instance.call` still raises the real
+        error, which is what a world's own tests read.
         """
         instance = self._instance
         if instance is None:
             raise WorldBug("reset first")
         name = action.tool_name
+        # Read before the call so the log can say which entry of the state
+        # document's call log this failure is: the instance takes an ordinal as it
+        # dispatches, so a count that moved means this call has a record and a
+        # count that did not means it failed before it reached the world.
+        dispatched_before = instance.call_count
         try:
             if name in CONTROL_TOOL_NAMES and not self.include_control_tools:
                 # Before dispatch, and in the same words as a name the world does
@@ -490,17 +551,44 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
             result = serialise(instance.call(name, **action.arguments))
             return SeahavenObservation(tool_name=name, result=result)
         except ToolError as error:
-            return SeahavenObservation(tool_name=name, error=error.to_dict())
-        except SeahavenError:
-            raise
-        except Exception:
-            _log.exception(
-                "tool %s on instance %s of world %s failed with an unhandled exception",
-                name,
-                instance.id,
-                self.world.name,
+            return _error_observation(name, error)
+        except SeahavenError as error:
+            # Logged here and nowhere else: before this, a framework error
+            # propagated unlogged and the only copy of its text was the one on the
+            # wire. Scrubbing that copy takes the last one away with it.
+            correlation = self._log_failure(
+                name, instance, dispatched_before, "raised a framework error"
             )
-            return SeahavenObservation(tool_name=name, error=_internal_error())
+            raise WorldBug(f"{INTERNAL_ERROR_MESSAGE} ({correlation})") from error
+        except Exception:
+            correlation = self._log_failure(
+                name, instance, dispatched_before, "failed with an unhandled exception"
+            )
+            return _error_observation(name, _internal_error(correlation))
+
+    def _log_failure(self, name: str, instance: Instance, dispatched_before: int, what: str) -> str:
+        """Log a failure with its traceback, and answer the correlation id.
+
+        The id is what makes a client-side "internal error" greppable: it is on
+        the observation or the error frame and on this line, and nowhere else. The
+        rest of the line is the join back to the state document -- the world, the
+        instance, the episode the harness named, and which entry of the call log
+        this was.
+        """
+        correlation = uuid.uuid4().hex[:CORRELATION_ID_LENGTH]
+        _log.exception(
+            "[%s] tool %s %s on instance %s of world %s (episode %s, call %s)",
+            correlation,
+            name,
+            what,
+            instance.id,
+            self.world.name,
+            instance.episode_id,
+            instance.call_count - 1
+            if instance.call_count > dispatched_before
+            else "not dispatched",
+        )
+        return correlation
 
     def _listing(self) -> list[dict[str, Any]]:
         """The tool list: the instance's when there is one, the world's when there is not.
@@ -556,12 +644,31 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
             instance.destroy()
 
 
-def _internal_error() -> dict[str, Any]:
+def _error_observation(name: str, error: ToolError) -> SeahavenObservation:
+    """One error as the two things a frame carries: upstream's shape, and the triple.
+
+    `error_type` is the class's and never the world's, and `message` is the
+    world's own text unchanged. The world's code is not folded into that message:
+    it reaches the agent whole in `metadata["seahaven_error"]`, which upstream's
+    own client preserves, and the framework's errors already say in prose what
+    their code says -- "unknown_tool: unknown tool: rows" is what folding them
+    together reads like.
+    """
+    return SeahavenObservation(
+        tool_name=name,
+        error=WireToolError(
+            error_type=WireToolErrorType(type(error).error_type.value), message=error.message
+        ),
+        metadata={SEAHAVEN_ERROR_KEY: error.to_dict()},
+    )
+
+
+def _internal_error(correlation: str) -> ToolError:
     """The generic error, built fresh each time so no caller can edit the next one's.
 
-    Built through `ToolError.to_dict` rather than written out, so the generic
-    error carries exactly the keys every other error on the wire carries --
-    `architecture.md` §6's `{"code", "message", "details"}` -- and cannot drift
-    from them.
+    The code and the message are fixed, so an eval that matches on error text is
+    not perturbed by an id that changes every call; the id rides in `details`,
+    where it is the one thing that leads from this observation to the traceback in
+    the server's log.
     """
-    return ToolError(INTERNAL_ERROR_CODE, INTERNAL_ERROR_MESSAGE).to_dict()
+    return ToolError(INTERNAL_ERROR_CODE, INTERNAL_ERROR_MESSAGE, {"id": correlation})

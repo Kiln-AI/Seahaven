@@ -152,7 +152,7 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     if observation.error is None:
         print(observation.result["title"])
     else:
-        print(observation.error["code"], observation.error["message"])
+        print(observation.seahaven_error["code"], observation.seahaven_error["message"])
 
     # Writes are writes: the next read sees them.
     env.call("transition_issue", issue_id=observation.result["id"], status="done")
@@ -190,16 +190,42 @@ a different protocol.
 
 ## Calls, results and errors
 
-A tool call answers an observation with `done=False`, `reward=None`, and exactly one of:
+A tool call answers an observation with `done=False`, `reward=None`, and exactly one of a result
+and an error:
 
 ```json
 {"result": {"key": "ENG-12", "title": "The session cookie leaks a stack trace"}}
-{"error": {"code": "NOT_FOUND", "message": "issue ENG-99 not found", "details": {"kind": "issue"}}}
+
+{"error": {"error_type": "execution_error", "message": "issue ENG-99 not found"},
+ "metadata": {"seahaven_error": {"code": "NOT_FOUND", "message": "issue ENG-99 not found",
+                                 "details": {"kind": "issue"}}}}
 ```
 
-**A tool error travels on `error`, as data.** The agent reads it and acts on it. It never closes the
-session, and it has one shape across every world: the same dict `ToolError.to_dict()` gives in
-process. Read `observation.error` and expect `{"code", "message", "details"}`.
+**A tool error travels on `error`, as data.** The agent reads it and acts on it, and it never closes
+the session.
+
+An error is written in two places on the same frame, because the two readers want different things.
+`error` is OpenEnv's own `ToolError` model — `{error_type, message}`, and nothing else, because
+that model forbids extra keys. Any OpenEnv client parses it. `metadata["seahaven_error"]` is the
+world's own error: `{code, message, details}`, the same dict `ToolError.to_dict()` gives in process,
+which is where a world's vocabulary and anything the agent can act on arrive whole. `SeahavenClient`
+reads it as `observation.seahaven_error`.
+
+`error_type` is the framework's, and a world never sets it. It is one of three values:
+
+| `error_type` | What raised it |
+|---|---|
+| `tool_not_found` | the call named a tool the world does not have |
+| `invalid_args` | the arguments did not validate against the tool's schema |
+| `execution_error` | everything else, including every error a world defines |
+
+The first two describe *the call*, not the domain. A world's own `not_found` for a missing issue is
+an `execution_error`: the tool exists and the arguments were good. Read `code` for what the world
+means. Seahaven never publishes OpenEnv's `timeout` or `transport_error`, because Seahaven does not
+bound a call and the transport is OpenEnv's.
+
+OpenEnv's serializer also copies a non-empty `metadata` to the top level of the envelope, beside
+`observation`, so the triple is on an error frame twice. Read one of the two and stay with it.
 
 Only a framework or protocol failure raises in the client, as `RuntimeError`.
 
@@ -207,10 +233,12 @@ Two other outcomes are worth knowing about:
 
 - A **`WorldBug`** is not turned into an observation. It propagates and fails the frame loudly,
   because an eval that scored a run while the world was broken is the failure this design exists to
-  prevent. The author sees the bug instead.
-- An **unexpected Python exception** inside a tool is logged with its traceback and answered with a
-  fixed `{"code": "internal", "message": "internal error"}`, so engine text cannot reach an agent
-  even from a world with no error handler.
+  prevent. The author sees the bug in the server's log, with its traceback; the client is told
+  `internal error (<id>)` and nothing more, where `<id>` is the correlation id that finds that log
+  line.
+- An **unexpected Python exception** inside a tool is logged the same way and answered with a fixed
+  `{"code": "internal", "message": "internal error", "details": {"id": "<id>"}}`, so engine text
+  cannot reach an agent even from a world with no error handler.
 
 The `state` message answers the state document, which [Grading a run](#grading-a-run) covers. The
 one field on it that belongs to the session rather than to the document is `step_count`: every step
@@ -360,13 +388,14 @@ A tool call and its two possible answers, in full:
 
 {"type": "observation", "data": {"observation": {"tool_name": "get_issue", "result": {"key": "ENG-12", "title": "The session cookie leaks a stack trace"}, "error": null}, "reward": null, "done": false}}
 
-{"type": "observation", "data": {"observation": {"tool_name": "get_issue", "result": null, "error": {"code": "NOT_FOUND", "message": "issue ENG-99 not found", "details": {"kind": "issue"}}}, "reward": null, "done": false}}
+{"type": "observation", "data": {"observation": {"tool_name": "get_issue", "result": null, "error": {"error_type": "execution_error", "message": "issue ENG-99 not found"}, "metadata": {"seahaven_error": {"code": "NOT_FOUND", "message": "issue ENG-99 not found", "details": {"kind": "issue"}}}}, "reward": null, "done": false, "metadata": {"seahaven_error": {"code": "NOT_FOUND", "message": "issue ENG-99 not found", "details": {"kind": "issue"}}}}}
 ```
 
 The `error` *frame* is OpenEnv's own, and its `code` is one of `INVALID_JSON`, `UNKNOWN_TYPE`,
 `VALIDATION_ERROR`, `EXECUTION_ERROR`, `CAPACITY_REACHED`, `FACTORY_ERROR` or `SESSION_ERROR`. It
 means the frame or the session failed: a malformed action, a server at capacity, a world that raised
-a `WorldBug`. It is never how a tool reports that an issue does not exist.
+a `WorldBug`. It is never how a tool reports that an issue does not exist. Its `message` for a
+`WorldBug` is `internal error (<id>)`: the author's own wording stays in the server's log.
 
 The action type for a tool call is OpenEnv's `CallToolAction`, and the server also answers
 `ListToolsAction`, which returns every registered tool as `{name, description, input_schema}` —
@@ -387,18 +416,24 @@ Every field Seahaven declares carries the description this page gives it, so a g
 carries the descriptions too. The `state` document is the world's own model rather than OpenEnv's
 base `State`. Publishing the world's own model needs openenv 0.5 or newer on the server.
 
-### One thing to plan for if you write your own client
+### Reading an error from your own client
 
-OpenEnv's docstrings say `error` is only for transport failures, but its own implementation uses it
-for tool errors too: `MCPEnvironment` answers a failed tool call with
-`ToolErrorType.EXECUTION_ERROR`, "tool ran but failed". Seahaven follows the convention their code
-establishes rather than the one their docstrings describe.
+Every frame a Seahaven world sends validates against OpenEnv's own
+`CallToolObservation`, a tool error included, so a strict parse is safe. OpenEnv's docstrings say
+`error` is only for transport failures, but its own implementation uses it for tool errors too:
+`MCPEnvironment` answers a failed tool call with `ToolErrorType.EXECUTION_ERROR`, "tool ran but
+failed". Seahaven follows the convention their code establishes rather than the one their docstrings
+describe.
 
-The shape does differ. OpenEnv types the field as its own `ToolError`, which is `{error_type,
-message}` with extra keys forbidden, so a `code` and a `details` do not fit in it. A client that
-validates a frame into that model will reject a tool error. Successful results are interoperable
-everywhere. For errors, parse `error` leniently, or use `SeahavenClient`, whose observation model is
-this shape.
+What a client written against upstream's models alone does not get is the world's vocabulary, which
+`{error_type, message}` has no room for. Read `metadata["seahaven_error"]` for the `{code, message,
+details}` triple. It is an ordinary key of `metadata`, so a client that parses into upstream's model
+still has it: OpenEnv passes `metadata` through untouched.
+
+One behaviour to expect rather than debug: upstream's `MCPToolClient.call_tool` raises a
+`RuntimeError` on any non-null `error`, because that client treats the field as its docstrings do.
+Its `step(CallToolAction(...))` answers the observation as data. `SeahavenClient.call` answers the
+observation too, and raises only on a framework or protocol failure.
 
 ## The concurrency gate
 

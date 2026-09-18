@@ -78,12 +78,29 @@ def test_parse_result_answers_a_typed_observation(client: SeahavenClient) -> Non
 
 
 def test_parse_result_carries_an_error_through(client: SeahavenClient) -> None:
-    error = {"code": "not_found", "message": "no note n9", "details": {"key": "n9"}}
-    result = client._parse_result({"observation": {"tool_name": "fetch", "error": error}})
+    triple = {"code": "not_found", "message": "no note n9", "details": {"key": "n9"}}
+    result = client._parse_result(
+        {
+            "observation": {
+                "tool_name": "fetch",
+                "error": {"error_type": "execution_error", "message": "no note n9"},
+                "metadata": {"seahaven_error": triple},
+            }
+        }
+    )
     assert isinstance(result.observation, SeahavenObservation)
-    assert result.observation.error == error
+    assert result.observation.error is not None
+    assert result.observation.error.message == "no note n9"
+    assert result.observation.seahaven_error == triple
     assert result.observation.result is None
     assert result.done is False
+
+
+def test_an_observation_with_no_seahaven_error_answers_none(client: SeahavenClient) -> None:
+    """`seahaven_error` reads `metadata`, which any frame may fill with anything."""
+    result = client._parse_result({"observation": {"tool_name": "ping", "result": 1}})
+    assert isinstance(result.observation, SeahavenObservation)
+    assert result.observation.seahaven_error is None
 
 
 # One whole document as a frame, so the parser is driven against the shape the
@@ -300,11 +317,13 @@ def test_call_answers_the_observation_and_never_raises_on_a_tool_error(world: Wo
         env.reset()
         observation = env.call("no_such_tool")
         assert observation.result is None
-        assert observation.error == {
+        assert observation.seahaven_error == {
             "code": "unknown_tool",
             "message": "unknown tool: no_such_tool",
             "details": {"name": "no_such_tool"},
         }
+        assert observation.error is not None
+        assert observation.error.error_type.value == "tool_not_found"
         # And the session is still good: a tool error is data, not a failure.
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 

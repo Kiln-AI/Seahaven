@@ -58,6 +58,11 @@ class XmlRpcFault(seahaven.ToolError):
     is readable even on the path where it is never rendered -- a world that
     registered the tool without `render_faults`, or a caller reading the
     exception in-process.
+
+    Over OpenEnv, `details` is part of the Seahaven triple and travels in the
+    observation's `metadata["seahaven_error"]`, beside an `error` field carrying
+    OpenEnv's own two-key shape. A harness that reads a `faultCode` off an
+    observation reads it there.
     """
 
     def __init__(self, fault_code: int, fault_string: str) -> None:

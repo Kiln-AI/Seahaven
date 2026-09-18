@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 import apsw
 
 from seahaven.db import world_tables
-from seahaven.errors import WorldBug
+from seahaven.errors import INTERNAL_ERROR_MESSAGE, WorldBug
 
 if TYPE_CHECKING:  # `world.py` imports this module's callers; the annotation is all that is needed
     from seahaven.world import World
@@ -101,15 +101,30 @@ class CallRecord:
     root surface's name, prefix included. `arguments` is what the call carried,
     copied at capture and never re-serialised: over OpenEnv the JSON that
     arrived, in process the values the caller passed. `error` is the message of
-    whatever the call raised, or `None`.
+    whatever the call raised, or `None`, and `tool_error` says whether that was a
+    `ToolError` -- an error the world wrote for the agent -- or anything else.
+
+    The record keeps the real message whatever it was, because an author
+    debugging their own world reads it in process. `to_dict` is the boundary that
+    decides what a consumer of the state document sees instead.
     """
 
     tool: str
     arguments: dict[str, Any]
     error: str | None
+    tool_error: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """The published shape, in the field order `functional_spec.md` §4.2 gives.
+
+        The state document is a wire boundary: OpenEnv's `StepEnvSessionAdapter`
+        embeds the whole document in every trace entry, so a harness that renders
+        a trace back into a model's context would put whatever a call raised in
+        front of the agent. A `ToolError` is published as it was written, because
+        the world wrote it for the agent and the agent has already read it on the
+        observation; anything else -- a `WorldBug`, or a Python exception the
+        world did not plan for -- is published as the generic error, in the same
+        words the observation carries.
 
         `arguments` is copied the same way the capture copied it: deeply where a
         deep copy of the whole mapping is possible, and shallowly where it is
@@ -119,10 +134,11 @@ class CallRecord:
         not JSON-able either way, which is what `functional_spec.md` §4.2 says
         of it.
         """
+        written_for_the_agent = self.error is None or self.tool_error
         return {
             "tool": self.tool,
             "arguments": _copied_arguments(self.arguments),
-            "error": self.error,
+            "error": self.error if written_for_the_agent else INTERNAL_ERROR_MESSAGE,
         }
 
 
