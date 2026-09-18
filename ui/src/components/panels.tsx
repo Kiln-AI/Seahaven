@@ -449,27 +449,48 @@ export function StatePanel({
 
 // --- transcript ------------------------------------------------------------
 
+/**
+ * A value as Python source.
+ *
+ * `JSON.stringify` is not a Python literal writer: it spells booleans `true`
+ * and `false` and null `null`, none of which parse, and both turn up in ordinary
+ * tool arguments. Strings are the one case JSON and Python agree on, escapes
+ * included.
+ */
+function python(value: unknown): string {
+  if (value === null || value === undefined) return "None"
+  if (typeof value === "boolean") return value ? "True" : "False"
+  if (typeof value === "number") return String(value)
+  if (typeof value === "string") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(python).join(", ")}]`
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}: ${python(item)}`).join(", ")}}`
+  }
+  return JSON.stringify(value)
+}
+
 function pythonFor(env: LiveEnv): string {
   const lines = [
     "from openenv import EnvClient",
     "from openenv.core.env_server.mcp_types import CallToolAction",
     "",
-    `with EnvClient(base_url="${env.record.root}") as env:`,
+    `with EnvClient(base_url=${python(env.record.root)}) as env:`,
   ]
   const resetArgs = Object.entries(env.record.resetArgs)
-    .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
+    .map(([name, value]) => `${name}=${python(value)}`)
     .join(", ")
   lines.push(`    env.reset(${resetArgs})`)
   for (const call of env.calls) {
     if (call.kind === "tool") {
       lines.push(
-        `    env.step(CallToolAction(tool_name=${JSON.stringify(call.name)}, arguments=${JSON.stringify(call.args)}))`,
+        `    env.step(CallToolAction(tool_name=${python(call.name)}, arguments=${python(call.args)}))`,
       )
     } else if (call.kind === "step") {
-      lines.push(`    env.step(${JSON.stringify(call.args)})`)
+      lines.push(`    env.step(${python(call.args)})`)
     }
   }
-  return lines.join("\n").replace(/"/g, '"')
+  return lines.join("\n")
 }
 
 export function TranscriptPanel({ env, actions }: { env: LiveEnv; actions: EnvActions }) {
