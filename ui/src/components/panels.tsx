@@ -477,10 +477,10 @@ function python(value: unknown): string {
 
 function pythonFor(env: LiveEnv): string {
   const lines = [
-    "from openenv import EnvClient",
+    "from openenv import GenericEnvClient",
     "from openenv.core.env_server.mcp_types import CallToolAction",
     "",
-    `with EnvClient(base_url=${python(env.record.root)}) as env:`,
+    `with GenericEnvClient(base_url=${python(env.record.root)}) as env:`,
   ]
   const resetArgs = Object.entries(env.record.resetArgs)
     .map(([name, value]) => `${name}=${python(value)}`)
