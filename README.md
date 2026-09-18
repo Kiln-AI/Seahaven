@@ -43,10 +43,9 @@ copy that ships with your install.
 
 **Install:** `uv add seahaven` or `pip install seahaven`. Python 3.14+.
 
-**Scaffold a world:** `uv run seahaven new crm`
+**Scaffold a world:** `uv run seahaven new crm` (replace "crm" with your world's name)
 
-**Build your world:** a schema and a set of tools. Here is a CRM with one table, a search index and two
-tools:
+**Build your world:** a schema and a set of tools. Here is an example CRM with one table, a search index and two tools:
 
 ```python
 import seahaven
@@ -89,7 +88,7 @@ def search_stale_leads(ctx: seahaven.Ctx, query: str) -> list[dict[str, str]]:
 
 Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
 
-**Run your agent against it:** Every rollout gets a private copy of a fixture, the same seed replays the
+**Run your agent against it:** Every rollout gets it's own database seeded with a copy of a fixture, the same seed replays the
 same run, and what the agent changed is a document you grade:
 
 ```py
@@ -142,18 +141,17 @@ def refund_order(ctx: seahaven.Ctx, charge_id: str, channel: str) -> dict[str, o
 
 ## Serving (OpenEnv)
 
-Seahaven's remote lifecycle and transport are OpenEnv, an open standard for connecting to RL
+Seahaven's remote lifecycle and transport are [OpenEnv](https://github.com/huggingface/OpenEnv), an open standard for connecting to RL
 environments. `seahaven serve` runs one world, creating a unique instance and episode for each
 connection. Serve over 100 instances per process. Connect with any OpenEnv client or tool, in any
 language, like [Kiln](https://kiln.tech).
 
-See [Serving a world](src/seahaven/docs/serving_and_openenv.md) for more details: the client, the
+See [serving and openenv docs](src/seahaven/docs/serving_and_openenv.md) for more details: the client, the
 wire protocol, what a session is, and why a Seahaven observation carries no reward.
 
-## Agents
+## Agentic World Creation
 
-Building a world with an agent? Point it at `uv run seahaven docs`. The docs ship inside the package and
-always match the installed version.
+Building a world with an agent? Point it at `uv run seahaven docs` which returns a path to docs it needs. The docs ship inside the package and always match the installed version.
 
 ## License
 
