@@ -126,8 +126,10 @@ function useFormValues(fields: Field[], key: string) {
     const next: Record<string, string | boolean> = {}
     for (const field of fields) next[field.name] = initialValue(field)
     setValues(next)
-    // `key` changes when the selected tool changes: a new tool starts a new form.
-  }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
+    // `key` and not `fields`: a new tool starts a new form, and `fields` is a
+    // fresh array on every render, which would reset the form as it is typed
+    // into. There is no linter here to tell about that.
+  }, [key])
   return [values, setValues] as const
 }
 
@@ -331,7 +333,9 @@ export function ToolsPanel({ env, actions }: { env: LiveEnv; actions: EnvActions
 function GenericStepPanel({ env, actions }: { env: LiveEnv; actions: EnvActions }) {
   const action = env.schema?.action
   const skip = isToolCallAction(action) ? [] : ["metadata"]
-  const fields = useMemo(() => fieldsOf(action as JsonSchema | undefined, skip), [action]) // eslint-disable-line react-hooks/exhaustive-deps
+  // `skip` is derived from `action` and rebuilt on every render, so `action`
+  // alone is what the result depends on.
+  const fields = useMemo(() => fieldsOf(action as JsonSchema | undefined, skip), [action])
   const [values, setValues] = useFormValues(fields, action?.title ?? "generic")
   const [errors, setErrors] = useState<Record<string, string>>({})
   const lastCall = [...env.calls].reverse().find((call) => call.kind === "step")
