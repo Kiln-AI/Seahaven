@@ -6,7 +6,7 @@ way to prove a session is a session. This one does not: what `serve` adds over
 gets the operator's numbers, and uvicorn is given one worker and an app object
 rather than an import string -- and a server that runs until the process is
 stopped is not the way to read any of them. The server class is replaced, and
-the `uvicorn.Config` it would have been built from is the assertion.
+the arguments `serve` handed `uvicorn.Config` are the assertion.
 
 The one-worker rule is the reason this file exists at all. A second worker
 process answers a session's second frame with an environment that has never seen
@@ -39,35 +39,37 @@ from seahaven.openenv.serve import DEFAULT_HOST, DEFAULT_PORT, serve
 def served(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Record what `serve` does instead of letting it serve for ever.
 
-    `uvicorn.run` is replaced outright. `app` is wrapped rather than replaced:
-    the real one is still built from the real arguments -- so a call `app` would
-    refuse still fails here -- and the arguments it was handed are recorded on
-    the way past, which is the claim `serve` is making.
+    `app` and `uvicorn.Config` are wrapped rather than replaced: both are still
+    built for real -- so a call either of them would refuse still fails here --
+    and the arguments they were handed are recorded on the way past, which is
+    the claim `serve` is making. Only the `run` that never returns is replaced.
+
+    The arguments are read as `serve` passed them, never off the built
+    `Config`. `Config.__init__` fills in a default for every one of them, so a
+    `Config` answers `workers == 1` whether or not anything asked for one
+    worker, and the one-worker assertion below would hold with the line that
+    makes it true deleted.
     """
     call: dict[str, Any] = {}
     build = serve_module.app
+    configure = serve_module.uvicorn.Config
 
     def app(world: World, **options: Any) -> Any:
         call["options"] = options
         return build(world, **options)
 
-    class Recorder:
-        """Stands in for the server, holding the real `uvicorn.Config` it was given.
+    def config(app: Any, **kwargs: Any) -> Any:
+        call["app"] = app
+        call["kwargs"] = kwargs
+        return configure(app, **kwargs)
 
-        The config is built for real, so an argument uvicorn would refuse still
-        fails here; only the `run` that never returns is replaced.
-        """
+    class Recorder:
+        """Stands in for the server, so that `run` returns."""
 
         announce = ""
 
         def __init__(self, config: Any) -> None:
-            call["app"] = config.app
-            call["kwargs"] = {
-                "host": config.host,
-                "port": config.port,
-                "workers": config.workers,
-                "log_level": config.log_level,
-            }
+            call["config"] = config
 
         def run(self) -> None:
             # The gate's size as it stands when uvicorn would start: the ordering
@@ -77,6 +79,7 @@ def served(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             call["announce"] = self.announce
 
     monkeypatch.setattr(serve_module, "app", app)
+    monkeypatch.setattr(serve_module.uvicorn, "Config", config)
     monkeypatch.setattr(serve_module, "_AnnouncingServer", Recorder)
     return call
 

@@ -104,8 +104,14 @@ def serve(
             ),
             host=host,
             port=port,
-            # An ASGI app object rather than an import string, so `workers` is
-            # the only spelling of "one process" uvicorn will take.
+            # One process, said twice. `Server.run()` has no supervisor and
+            # cannot fork, so this is already true; `workers=1` is what the
+            # number means to anything that reads the config, including a
+            # `uvicorn.run` that reaches this file again. The app is an object
+            # rather than an import string for the same reason from the other
+            # side: uvicorn refuses to fork workers for an app it cannot
+            # re-import, and a session's instance would not survive that import
+            # anyway.
             workers=1,
             log_level=LOG_LEVEL,
         )
