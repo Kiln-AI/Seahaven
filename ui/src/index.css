@@ -78,9 +78,3 @@
     background-clip: content-box;
   }
 }
-
-@layer utilities {
-  .no-scrollbar::-webkit-scrollbar {
-    display: none;
-  }
-}
