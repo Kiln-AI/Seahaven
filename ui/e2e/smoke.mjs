@@ -52,7 +52,7 @@ page.on("pageerror", (error) => problems.push(`page error: ${error.message}`))
 
 // --- open the page, served by the environment itself ------------------------
 
-await page.goto("http://127.0.0.1:8000/ui", { waitUntil: "networkidle" })
+await page.goto("http://127.0.0.1:8000/console", { waitUntil: "networkidle" })
 await shot(page, "empty")
 check(await page.getByText("No environment open").isVisible(), "the empty state did not render")
 
@@ -93,9 +93,20 @@ await shot(page, "tool-result")
 check(await page.getByText("result").first().isVisible(), "the result card did not render")
 check(await page.getByText("DESIGN-").first().isVisible(), "the new issue key is not in the result")
 
-// --- a tool that refuses ----------------------------------------------------
+// --- changing tool empties the result panel ---------------------------------
 
 await page.getByRole("button", { name: /create_issue/ }).first().click()
+await page.getByPlaceholder("Filter tools…").fill("get_issue")
+await page.getByRole("button", { name: /get_issue/ }).first().click()
+await page.waitForTimeout(200)
+check(
+  await page.getByText("Nothing called yet.").isVisible(),
+  "the previous tool's result was still shown after changing tool",
+)
+
+// --- a tool that refuses ----------------------------------------------------
+
+await page.getByRole("button", { name: /get_issue/ }).first().click()
 await page.getByPlaceholder("Filter tools…").fill("transition")
 await page.getByRole("button", { name: /transition_issue/ }).click()
 await page.getByLabel("Issue id").fill("i_8f21")
@@ -166,7 +177,7 @@ check((await page.getByText(/live$/).count()) >= 1, "no environment is shown as 
 
 const plain = await context.newPage()
 plain.on("pageerror", (error) => problems.push(`page error: ${error.message}`))
-await plain.goto("http://127.0.0.1:8001/ui", { waitUntil: "networkidle" })
+await plain.goto("http://127.0.0.1:8001/console", { waitUntil: "networkidle" })
 await plain.getByRole("button", { name: "New environment" }).first().click()
 await plain.waitForTimeout(700)
 await plain.getByRole("button", { name: "Open environment" }).click()

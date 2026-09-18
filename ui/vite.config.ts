@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite"
 import { viteSingleFile } from "vite-plugin-singlefile"
 
 // The build is one self-contained `dist/index.html`: no sibling assets, no CDN,
-// no fetch on load. An environment server mounts that single file at `/ui`,
+// no fetch on load. An environment server mounts that single file at `/console`,
 // which puts the page on the same origin as `/ws` and `/schema`.
 //
 // `vite dev` proxies the same three paths to a local environment so development

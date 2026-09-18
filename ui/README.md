@@ -1,8 +1,11 @@
-# OpenEnv UI
+# Seahaven Console
 
-A general-purpose web interface for [OpenEnv](https://github.com/huggingface/OpenEnv)
+A general-purpose web console for [OpenEnv](https://github.com/huggingface/OpenEnv)
 environments. It builds to one self-contained `index.html` that an environment server mounts and
 serves itself.
+
+The name is the only Seahaven-shaped thing about it, and it is in one file: `src/brand.ts` holds
+`PRODUCT_NAME` and `PRODUCT_TAG`, and `index.html` holds the `<title>`.
 
 Nothing in here is specific to any one environment. It speaks the standard protocol: the
 `/ws` socket for episodes, `step` on a `list_tools` action for the tool list, and `GET /schema`
@@ -10,7 +13,7 @@ for the action, observation and state models. An environment that answers those 
 interface without writing any UI code.
 
 > **Status: prototype.** It drives a real environment, is covered by a browser test, and is served
-> by `seahaven serve` at `/ui`.
+> by `seahaven serve` at `/console`.
 
 ## What it does
 
@@ -35,8 +38,8 @@ interface without writing any UI code.
 npm install
 npm run build          # writes dist/index.html, one file, no sibling assets
 
-npm run mock           # a fake environment on :8000 that also serves dist/index.html at /ui
-open http://127.0.0.1:8000/ui
+npm run mock           # a fake environment on :8000 that also serves dist/index.html at /console
+open http://127.0.0.1:8000/console
 ```
 
 For development against a real environment on `:8000`:
@@ -55,11 +58,11 @@ npm run build && npm run e2e
 
 ## Serving it from an environment
 
-Seahaven serves the built page at `/ui`, from a copy in its own package
-(`src/seahaven/openenv/ui/index.html`). Rebuild and replace that copy after a change here:
+Seahaven serves the built page at `/console`, from a copy in its own package
+(`src/seahaven/openenv/console/index.html`). Rebuild and replace that copy after a change here:
 
 ```sh
-npm run build && cp dist/index.html ../src/seahaven/openenv/ui/index.html
+npm run build && cp dist/index.html ../src/seahaven/openenv/console/index.html
 ```
 
 The build is one file with no external requests, so any other OpenEnv app can serve it the same
@@ -71,15 +74,15 @@ from fastapi.responses import FileResponse
 app = ...  # whatever your environment's create_app returned
 
 
-@app.get("/ui", include_in_schema=False)
-def ui() -> FileResponse:
+@app.get("/console", include_in_schema=False)
+def console() -> FileResponse:
     return FileResponse("path/to/index.html")
 ```
 
 Same-origin matters. The socket works from anywhere, but `GET /schema` and `GET /metadata` are
 plain HTTP and **an OpenEnv server registers no CORS middleware**, so a page on another origin
-cannot read them. The UI treats both as optional and says so in the Environment panel when they
-are missing, but serving it from the environment is what makes the schema available.
+cannot read them. The console treats both as optional and says so in the Environment panel when
+they are missing, but serving it from the environment is what makes the schema available.
 
 ## What it uses, and what it avoids
 
@@ -103,7 +106,10 @@ overlapping calls on one socket would pair the wrong answer with the wrong quest
   Advanced. Worse, the server filters the payload against the signature of `reset()` and drops
   anything that does not match without an error, so a misspelled argument is silent. A schema for
   reset arguments is the one addition to the standard that would close this.
-- **A socket does not survive a reload.** The connections live in the page. Reopening the UI shows
+- **The leave warning cannot say why.** Every browser ignores a custom `beforeunload` message and
+  shows its own generic text, so the reason lives in the page instead: the sidebar names how many
+  sockets are open and what closing the tab destroys.
+- **A socket does not survive a reload.** The connections live in the page. Reopening it shows
   every past environment with its transcript and its saved final state, marked expired. Replay
   reruns a transcript into a fresh instance, which for a deterministic environment reproduces the
   run exactly.
@@ -113,6 +119,7 @@ overlapping calls on one socket would pair the wrong answer with the wrong quest
 ## Layout
 
 ```
+src/brand.ts          the product name, for renaming in one place
 src/lib/openenv.ts    the protocol: frames, ordering, errors, the two HTTP reads
 src/lib/schema.ts     JSON Schema to form fields, and form values back to a payload
 src/lib/db.ts         IndexedDB: settings, environments, transcripts

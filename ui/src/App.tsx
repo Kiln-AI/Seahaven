@@ -8,6 +8,7 @@ import {
   TranscriptPanel,
 } from "./components/panels"
 import { Badge, Button, Dot, cx } from "./components/ui"
+import { PRODUCT_NAME, PRODUCT_TAG } from "./brand"
 import { calls as callStore, envs as envStore, newId, settings, type CallRecord, type EnvRecord } from "./lib/db"
 import {
   ConnectionClosed,
@@ -399,7 +400,7 @@ export default function App() {
   // --- render --------------------------------------------------------------
 
   return (
-    <div className="grid h-full grid-cols-[264px_minmax(0,1fr)]">
+    <div className="grid h-full grid-cols-[288px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col border-r border-border bg-surface">
         <header className="flex items-center gap-2 px-4 py-3.5">
           <svg viewBox="0 0 16 16" className="size-4 text-accent" aria-hidden>
@@ -408,16 +409,25 @@ export default function App() {
             <rect x="1" y="9" width="6" height="6" rx="1.5" fill="currentColor" opacity="0.5" />
             <rect x="9" y="9" width="6" height="6" rx="1.5" fill="currentColor" opacity="0.25" />
           </svg>
-          <h1 className="text-[13px] font-semibold tracking-tight text-fg">OpenEnv</h1>
-          <span className="ml-auto text-[12px] text-faint">
-            {liveCount} live
-          </span>
+          <h1 className="truncate text-[13px] font-semibold tracking-tight text-fg">
+            {PRODUCT_NAME}
+          </h1>
+          <Badge tone="accent">{PRODUCT_TAG}</Badge>
         </header>
 
         <div className="px-3 pb-3">
           <Button variant="primary" className="w-full" onClick={() => setDialog({})}>
             New environment
           </Button>
+        </div>
+
+        <div className="flex items-baseline gap-2 px-4 pb-1.5">
+          <span className="text-[11px] font-medium tracking-wide text-faint uppercase">
+            Environments
+          </span>
+          <span className="ml-auto text-[11.5px] text-faint">
+            {liveCount} of {envs.length} live
+          </span>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">

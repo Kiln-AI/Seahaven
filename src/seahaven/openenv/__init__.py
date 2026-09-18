@@ -420,32 +420,33 @@ def _refuse_mcp_transport(served: FastAPI) -> None:
             served.router.routes[index] = _refusing_mcp_websocket(route)
 
 
-# The built web interface: one self-contained HTML file with no sibling assets
+# The built web console: one self-contained HTML file with no sibling assets
 # and no request on load, which is why serving it is a route and not a static
 # directory. It is built from `ui/` in the repository (`npm run build`) and
 # copied here, so it travels in the wheel like `docs/` and `cli/templates/` do.
-UI_FILE = Path(__file__).parent / "ui" / "index.html"
+CONSOLE_PATH = "/console"
+CONSOLE_FILE = Path(__file__).parent / "console" / "index.html"
 
-UI_MISSING = """<!doctype html>
-<title>No web interface in this install</title>
+CONSOLE_MISSING = """<!doctype html>
+<title>No web console in this install</title>
 <body style="font: 15px system-ui; max-width: 40rem; margin: 4rem auto">
-<h1>No web interface in this install</h1>
+<h1>No web console in this install</h1>
 <p>Seahaven serves a built file that is not in this install. Build it from a
 checkout of the Seahaven repository:</p>
 <pre>cd ui &amp;&amp; npm install &amp;&amp; npm run build
-cp dist/index.html ../src/seahaven/openenv/ui/index.html</pre>
+cp dist/index.html ../src/seahaven/openenv/console/index.html</pre>
 <p>Everything else on this server is unaffected: drive the world over
 <code>/ws</code>.</p>
 </body>"""
 
 
-def _serve_ui(served: FastAPI) -> None:
-    """Add `GET /ui`, the web interface, on the same origin as `/ws`.
+def _serve_console(served: FastAPI) -> None:
+    """Add `GET /console`, the web console, on the same origin as `/ws`.
 
     Same origin is the point. The socket works from anywhere, but `/schema` and
     `/metadata` are plain HTTP and OpenEnv registers no CORS middleware, so a
     page served from somewhere else cannot read them. Served from here, the
-    interface gets the world's schema and metadata as well as its tools.
+    console gets the world's schema and metadata as well as its tools.
 
     The route is kept out of the OpenAPI schema. `openenv push` decides what
     kind of environment an app is by reading path names, and a path it does not
@@ -455,12 +456,12 @@ def _serve_ui(served: FastAPI) -> None:
     # Annotated `Response` and not the union of the two returned: FastAPI builds
     # a response model from a return annotation, and a union of two response
     # classes is not a type it can build one from.
-    @served.get("/ui", include_in_schema=False)
-    @served.get("/ui/", include_in_schema=False)
-    def ui() -> Response:
-        if not UI_FILE.is_file():
-            return HTMLResponse(UI_MISSING, status_code=501)
-        return FileResponse(UI_FILE, media_type="text/html")
+    @served.get(CONSOLE_PATH, include_in_schema=False)
+    @served.get(f"{CONSOLE_PATH}/", include_in_schema=False)
+    def console() -> Response:
+        if not CONSOLE_FILE.is_file():
+            return HTMLResponse(CONSOLE_MISSING, status_code=501)
+        return FileResponse(CONSOLE_FILE, media_type="text/html")
 
 
 def app(
@@ -469,8 +470,13 @@ def app(
     include_control_tools: bool = False,
     max_concurrent_envs: int = DEFAULT_MAX_CONCURRENT_ENVS,
     session_timeout: float | None = DEFAULT_SESSION_TIMEOUT,
+    console: bool = True,
 ) -> FastAPI:
     """The ASGI app serving one world: one session per instance, many sessions.
+
+    `console` serves the web console at `/console`. It is on by default and
+    `seahaven serve --no-console` turns it off, for a server that should answer
+    the protocol and nothing else.
 
     `include_control_tools` makes `controller_run_sql` callable over the wire. It
     is never listed either way; the flag is for a harness that drives the world
@@ -527,5 +533,6 @@ def app(
     )
     _refuse_http_episode_control(served)
     _refuse_mcp_transport(served)
-    _serve_ui(served)
+    if console:
+        _serve_console(served)
     return served

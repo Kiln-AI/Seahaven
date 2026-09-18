@@ -3,7 +3,7 @@
  * called against it, and what the environment says about itself.
  */
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { CallRecord } from "../lib/db"
 import { isToolCallAction, type JsonSchema, type Tool } from "../lib/openenv"
 import { coerce, fieldsOf, initialValue, type Field } from "../lib/schema"
@@ -174,12 +174,29 @@ export function ToolsPanel({ env, actions }: { env: LiveEnv; actions: EnvActions
     if (!selected && tools.length > 0) setSelected(tools[0].name)
   }, [tools, selected])
 
+  useEffect(() => {
+    setErrors({})
+  }, [selected])
+
   const tool: Tool | undefined = tools.find((entry) => entry.name === selected)
   const fields = useMemo(() => fieldsOf(tool?.input_schema), [tool])
   const [values, setValues] = useFormValues(fields, tool?.name ?? "")
   const [errors, setErrors] = useState<Record<string, string>>({})
 
-  const lastCall = [...env.calls].reverse().find((call) => call.kind === "tool" || call.kind === "step")
+  // The result panel belongs to the tool in the picker, so choosing another
+  // tool empties it: a result card under a different tool's form reads as that
+  // tool's answer. The transcript is where every call stays.
+  const callCount = useRef(env.calls.length)
+  callCount.current = env.calls.length
+  const [since, setSince] = useState(env.calls.length)
+  useEffect(() => {
+    setSince(callCount.current)
+  }, [tool?.name])
+
+  const lastCall = env.calls
+    .slice(since)
+    .reverse()
+    .find((call) => call.kind === "tool" || call.kind === "step")
 
   if (env.tools === null) {
     return <GenericStepPanel env={env} actions={actions} />

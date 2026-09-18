@@ -12,6 +12,7 @@
  *   - `GET /schema` and `GET /metadata` answer, and **no CORS headers are set**,
  *     because the real server sets none either.
  *   - `/reset`, `/step` and `/state` over HTTP answer 501, as Seahaven's do.
+ *   - the built console is served at `/console`, on this same origin.
  *
  * Usage: node mock/server.mjs [--port 8000] [--reap 30] [--plain]
  */
@@ -445,8 +446,8 @@ const server = createServer((request, response) => {
     case "/state":
       return json(response, 501, REFUSAL)
     case "/":
-    case "/ui":
-    case "/ui/":
+    case "/console":
+    case "/console/":
       return servePage(response)
     default:
       return json(response, 404, { detail: "not found" })
