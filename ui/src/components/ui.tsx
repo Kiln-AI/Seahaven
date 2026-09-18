@@ -518,11 +518,12 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text)
+          setDone(true)
+          window.setTimeout(() => setDone(false), 1200)
         } catch {
-          // A denied clipboard is not worth an error state in a dev tool.
+          // A denied clipboard is not worth an error state in a dev tool, but
+          // it is not worth saying "Copied" over either.
         }
-        setDone(true)
-        window.setTimeout(() => setDone(false), 1200)
       }}
     >
       {done ? "Copied" : label}
