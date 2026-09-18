@@ -770,6 +770,122 @@ async def _mcp_frame_over_a_session(url: str) -> dict[str, Any]:
         return json.loads(await sock.recv())
 
 
+# --- the Gradio web interface a pushed Space serves ------------------------
+
+
+def test_the_web_interface_holds_an_episode_and_names_the_world(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`ENABLE_WEB_INTERFACE=true`: reset, step and metadata off one environment.
+
+    This is the mode every pushed world runs in. `openenv push` writes
+    `ENV ENABLE_WEB_INTERFACE=true` into the Dockerfile it generates and
+    `base_path: /web` into the Space README, and `GET /` there redirects to the
+    page these routes serve.
+
+    `WebInterfaceManager.__init__` builds the environment only when
+    `inspect.isclass` or `inspect.isfunction` says the factory is one
+    (`web_interface.py` lines 249-254 in openenv 0.4.2), and neither is true of
+    a `functools.partial`. A factory it does not recognise is kept unbuilt, and
+    every `/web` handler then reads an environment attribute off the factory
+    object itself.
+    """
+    world = build_world(tmp_path, description="Notes, and the tools that touch them.")
+    monkeypatch.setenv("ENABLE_WEB_INTERFACE", "true")
+    step = json.dumps(
+        {"action": {"tool_name": "execute", "arguments": {"sql": insert("n0")}}}
+    ).encode()
+    with serving(world) as url:
+        reset = _request(url + "/web/reset", method="POST")
+        stepped = _request(url + "/web/step", method="POST", data=step)
+        metadata = _request(url + "/web/metadata")
+        published = _request(url + "/metadata")
+    assert reset[0] == 200, reset
+    # A reset answers a plain `Observation` carrying its facts in `metadata`,
+    # and OpenEnv's serializer (`core/env_server/serialization.py:137-175` in
+    # openenv 0.4.2) hoists a non-empty `metadata` to the top level of
+    # the envelope beside `observation`, which is why the same three facts stand
+    # twice. `result` belongs to a tool call and a reset calls no tool.
+    facts = reset[1]["metadata"]
+    assert reset[1] == {
+        "observation": {"metadata": facts},
+        "reward": None,
+        "done": False,
+        "metadata": facts,
+    }
+    assert sorted(facts) == ["fixture", "now", "tools"]
+    assert facts["fixture"] is None
+    assert facts["tools"] == 6
+    # The step runs against the instance the reset made: a second environment,
+    # or none, answers `reset first` instead of a rowcount.
+    assert stepped[0] == 200, stepped
+    assert stepped[1]["observation"]["result"] == {"rowcount": 1}
+    assert stepped[1]["observation"]["error"] is None
+    assert metadata[0] == 200, metadata
+    assert metadata[1]["name"] == world.name
+    # Upstream's card, not the world's: `load_environment_metadata` calls
+    # `get_metadata()` only on an environment *instance*, and a factory of any
+    # kind -- class, function or partial -- gets `f"{name} environment"`
+    # instead. `env_name` is what reaches it, so the card names the world and
+    # carries no description of it. With a partial the name is unreadable too
+    # and this line reads `partial environment`. Plain `GET /metadata` builds an
+    # environment and answers `world.description`; the two routes disagree, and
+    # that half is upstream's to fix.
+    assert metadata[1]["description"] == f"{world.name} environment"
+    assert published[0] == 200, published
+    assert published[1]["description"] == world.description
+
+
+def test_the_refusals_survive_the_web_interfaces_extra_routes_and_mount(
+    monkeypatch: pytest.MonkeyPatch, world: World
+) -> None:
+    """The HTTP refusals again, in the one configuration every pushed world runs in.
+
+    `_refuse_http_episode_control` and `_refuse_mcp_transport` swap handlers by
+    walking `served.router.routes` after `create_app` has returned and replacing
+    entries in place, matched on the route's class and its path. With
+    `ENABLE_WEB_INTERFACE=true` that app is a different app: seven more routes
+    and a Gradio sub-app mounted at `/web`. The swaps still find the three HTTP
+    episode-control routes and the `POST /mcp` route -- a mount is a `Mount` and
+    not an `APIRoute` -- but a swap that stopped matching would not raise.
+    `/reset`, `/step` and `/state` would go back to answering 200 from a
+    throwaway environment, and `POST /mcp` to advertising a tool list whose every
+    entry fails when called, which are the silent wrong answers the refusals
+    exist to prevent.
+
+    The websocket `/mcp` refusal is covered by
+    `test_the_mcp_websocket_refuses_the_same_way_and_then_closes`, with the web
+    interface off, and is not asserted here.
+    """
+    monkeypatch.setenv("ENABLE_WEB_INTERFACE", "true")
+    with serving(world) as url:
+        refused = [
+            (verb, path, _request(url + path, method=verb)) for verb, path in HTTP_EPISODE_CONTROL
+        ]
+        listing = json.dumps(_mcp_request("tools/list")).encode()
+        mcp = _request(url + "/mcp", method="POST", data=listing)
+        health = _request(url + "/health")
+        web = _request(url + "/web/metadata")
+    # The premise, asserted rather than assumed: `/web/metadata` is served only
+    # by the web-interface app, so this fails if `ENABLE_WEB_INTERFACE` ever
+    # stops reaching `create_app` -- a renamed variable, a narrowed set of
+    # accepted values (`http_server.py:1755` takes only `true`, `1` and `yes`),
+    # a `serving()` that no longer builds the app eagerly -- and the rest of
+    # this test quietly becomes a duplicate of the refusal tests above.
+    assert web[0] == 200, web
+    for verb, path, (status, body) in refused:
+        assert status == 501, (verb, path, body)
+        refusal = body["detail"]
+        assert refusal["code"] == "http_episode_control_unsupported"
+        assert refusal["details"]["route"] == f"{verb} {path}"
+        assert refusal["details"]["use_instead"] == "/ws"
+    assert mcp[0] == 200, mcp
+    _assert_refused(mcp[1], method="tools/list", request_id=1)
+    # The neighbour that is deliberately not refused, so a swap that widened to
+    # everything it walked past fails here rather than passing quietly.
+    assert health == (200, {"status": "healthy"})
+
+
 # --- the published schema --------------------------------------------------
 
 
