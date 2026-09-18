@@ -20,7 +20,7 @@ A world is driven either in process through `world.instance(...)`, or over the W
 | [Sessions and instances](#sessions-and-instances) | What a connection holds, and what `reset` does |
 | [Driving a world from Python](#driving-a-world-from-python) | `SeahavenClient`, synchronous and asynchronous |
 | [Calls, results and errors](#calls-results-and-errors) | What comes back from a tool call |
-| [Grading a run](#grading-a-run) | Changesets over the wire, and the control tools |
+| [Grading a run](#grading-a-run) | The state document over the wire, and the control tool |
 | [Why there are no rewards](#why-there-are-no-rewards) | The design decision behind an empty `reward` |
 | [The wire protocol](#the-wire-protocol) | Every frame, for a client in any language |
 | [The concurrency gate](#the-concurrency-gate) | What bounds tool calls, and a known defect in it |
@@ -74,7 +74,7 @@ seahaven serve --host 127.0.0.1 --port 9000
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
 | `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the control tools callable over the wire |
+| `--include-control-tools` | off | make the control tool callable over the wire |
 | `--world module:attr` | the convention | which world to serve |
 
 `--max_concurrent_envs` is spelled with underscores because that is OpenEnv's own option name, and a
@@ -232,40 +232,14 @@ world = seahaven.World(
 
 ## Grading a run
 
-An eval grades the state the run left behind, and that state is a **changeset**: the net difference
-between the fixture and the database as the agent left it. Each record is `{world, table, op, key,
-before, after}`, where `op` is `insert`, `update` or `delete` and `world` is the node the row
-belongs to (`main` for a world that adds none). [concepts.md](concepts.md) has the full semantics.
+An eval grades the state the run left behind, and that state is the **state document**: the change
+log the episode wrote, and the provenance a judge needs to read it. Each log record is `{i, world,
+table, op, key, before, after}`, where `op` is `insert`, `update` or `delete` and `world` is the node
+the row belongs to (`main` for a world that adds none). [concepts.md](concepts.md) has the full
+semantics.
 
-In process, `inst.changes()` is that changeset and needs nothing else. Over a server, an eval reads
-it through a **control tool**: a tool the eval calls on its own session, rather than a second API.
-
-Tools are the right shape for this because of what a session is. An instance is reached through the
-connection that made it, so a read has to travel on that connection to be a read of that instance. A
-separate control plane would need its own listener, its own token and a way to name an instance from
-outside the session that owns it, and none of those exist here. Seahaven registers two control tools
-on every world:
-
-| Tool | What it does |
-|---|---|
-| `controller_run_sql(sql, params=None)` | one statement on a read-only connection of the instance's own: every table, the instance clock, no caps, SQLite's own error text. Same result shape as the `run_sql` helper |
-| `controller_changes()` | the changeset, as JSON |
-
-They are thin wrappers over the instance and own no SQL and no rendering of their own.
-`controller_changes` is `inst.changes()`. `controller_run_sql` reads through the instance's own
-read-only control connection rather than through the `inspect()` handle: same file, same read-only
-opener, a second connection, because a control read borrows connection-level state for the length of
-a statement while `inspect()` is the handle you read through on any thread you like.
-
-Their arguments are validated like any tool's, so a bad `sql` argument is an `ArgumentError`.
-Nothing else about a normal call applies: no middleware, no error handler, no transaction and no
-concurrency gate, because an eval wants the real message.
-
-**Over a server they exist only with `--include-control-tools`.**
-
-```sh
-seahaven serve --include-control-tools
-```
+In process, `inst.state()` is that document and needs nothing else. Over a server, the `state`
+message answers the same document:
 
 ```py
 from seahaven.openenv import SeahavenClient
@@ -274,14 +248,39 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     env.reset(fixture="small_startup", seed=7)
     run_agent(env)  # your agent, your harness
 
-    changes = env.call("controller_changes").result
-    reward = grade(changes)  # your scenario's goal, your grader
+    reward = grade(env.state())  # your scenario's goal, your grader
 ```
 
-Without the flag, calling one is `UnknownTool` in exactly the words an unregistered name earns, so
-an agent cannot tell the two apart and a hub deployment does not expose them. They never appear in
-the tool list, flag or not. In process, `inst.call("controller_changes")` always reaches them, and
-`inst.tools()` never lists them.
+### The control tool
+
+`controller_run_sql(sql, params=None)` runs one statement on a read-only connection of the
+instance's own: every table, the instance clock, no caps, SQLite's own error text, and the same
+result shape as the `run_sql` helper. It is a tool the eval calls on its own session rather than a
+second API, because an instance is reached through the connection that made it and a read has to
+travel on that connection to be a read of that instance.
+
+It reads through the instance's own read-only control connection rather than through the `inspect()`
+handle: same file, same read-only opener, a second connection, because a control read borrows
+connection-level state for the length of a statement while `inspect()` is the handle you read
+through on any thread you like.
+
+Its arguments are validated like any tool's, so a bad `sql` argument is an `ArgumentError`. Nothing
+else about a normal call applies: no middleware, no error handler, no transaction and no concurrency
+gate, because an eval wants the real message.
+
+**The tool is deprecated**: `state()` is what an eval reads now. Every call of it raises a
+`DeprecationWarning` against the caller's own line, and its removal is not scheduled.
+
+**Over a server it exists only with `--include-control-tools`.**
+
+```sh
+seahaven serve --include-control-tools
+```
+
+Without the flag, calling it is `UnknownTool` in exactly the words an unregistered name earns, so an
+agent cannot tell the two apart and a hub deployment does not expose it. It never appears in the
+tool list, flag or not. In process, `inst.call("controller_run_sql", ...)` always reaches it, and
+`inst.tools()` never lists it.
 
 ## Why there are no rewards
 
@@ -366,7 +365,7 @@ this shape.
 
 The gate bounds how many tool calls run at once. It never bounds admission: calls queue, and nothing
 is rejected. A call takes the gate before the instance lock, so a queued call cannot block a
-`destroy` or a `freeze`. Instance creation, tool listing and the control tools bypass it entirely.
+`destroy` or a `freeze`. Instance creation, tool listing and the control tool bypass it entirely.
 
 Its default follows the process's CPU affinity, so it respects a container's limit rather than the
 host's core count.

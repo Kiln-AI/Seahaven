@@ -472,7 +472,7 @@ def test_nothing_works_on_a_destroyed_instance(world: World) -> None:
 
     for attempt in (
         lambda: instance.call("now"),
-        instance.changes,
+        instance.change_log,
         instance.inspect,
         lambda: instance.freeze("start", "Empty."),
         lambda: instance.bulk().__enter__(),

@@ -479,10 +479,9 @@ def test_the_environment_verbs_are_not_tool_names(world: World, name: str) -> No
         world.tool(echo, name=name)
 
 
-@pytest.mark.parametrize("name", ["controller_run_sql", "controller_changes"])
-def test_a_control_tool_name_is_not_a_tool_name(world: World, name: str) -> None:
+def test_a_control_tool_name_is_not_a_tool_name(world: World) -> None:
     with pytest.raises(WorldBug, match="control tool"):
-        world.tool(echo, name=name)
+        world.tool(echo, name="controller_run_sql")
 
 
 def test_a_tool_from_a_factory_is_registered_as_it_is(world: World) -> None:
@@ -681,18 +680,15 @@ def test_a_startup_hook_takes_the_context_and_nothing_else_positionally(world: W
             world.instance_startup(hook)
 
 
-def test_every_world_carries_the_two_control_tools(world: World) -> None:
+def test_every_world_carries_the_one_control_tool(world: World) -> None:
     """Registered at construction, flagged, and none of the world's own doing."""
-    assert [name for name, tool in world.tools.items() if tool.control] == [
-        "controller_run_sql",
-        "controller_changes",
-    ]
+    assert [name for name, tool in world.tools.items() if tool.control] == ["controller_run_sql"]
     assert registered(world) == []
 
 
 def test_a_control_tools_name_is_taken_even_by_another_control_tool(world: World) -> None:
     """The framework registered it, so even a second control tool is a duplicate."""
-    second = replace(Tool.from_function(echo, name="controller_changes"), control=True)
+    second = replace(Tool.from_function(echo, name="controller_run_sql"), control=True)
 
     with pytest.raises(WorldBug, match="registered twice"):
         world.tool(second)

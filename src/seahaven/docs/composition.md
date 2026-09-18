@@ -8,8 +8,8 @@ An eval inspects every store through one SQL connection.
 This page is for the author of a world that adds others. Nothing here changes a world that adds
 none. A world with no added worlds is a composition of exactly one **node**, meaning one store, and
 every mechanism below runs for it unchanged: one middleware chain, a `format_version: 1` fixture,
-and every `Change` saying `main`. There is no second code path, which is why every rule on every
-other page still holds.
+and every change-log record saying `main`. There is no second code path, which is why every rule on
+every other page still holds.
 
 | Section | What it covers |
 |---|---|
@@ -21,7 +21,7 @@ other page still holds.
 | [Startup hooks](#startup-hooks) | Broadcasting and binding keyword arguments |
 | [One instance, many stores](#one-instance-many-stores) | Files, clocks, seeds and isolation |
 | [Fixtures](#fixtures) | The version-2 sidecar, and what freeze and create check |
-| [What an eval sees](#what-an-eval-sees) | Inspection, changesets and the composition report |
+| [What an eval sees](#what-an-eval-sees) | Inspection, the change log and the composition report |
 | [Typed access](#typed-access) | Calling a tool by its function |
 | [What `seahaven check` adds](#what-seahaven-check-adds) | Eight codes |
 | [Limits](#limits) | The hard cap, the costs, and what is deliberately absent |
@@ -80,15 +80,15 @@ with company.instance(now="2026-06-01T09:00:00.000Z") as inst:
     )
     assert joined is not None and joined["amount"] == 500
 
-    # One changeset, and every record says which store it came from.
-    assert {(change.world, change.table) for change in inst.changes()} == {
+    # One change log, and every record says which store it came from.
+    assert {(record.world, record.table) for record in inst.change_log()} == {
         ("main", "invoices"),
         ("payments", "charges"),
     }
 ```
 
 That example is the whole feature. There is one new registration verb, one new handle on `ctx`, and
-everything else — the tool list, the changeset, the inspection connection, the fixture — gains a
+everything else — the tool list, the change log, the inspection connection, the fixture — gains a
 node dimension it did not have before.
 
 ## Declaring
@@ -172,7 +172,7 @@ observes**, so a host that cares orders its `add_world` calls to match the clien
 Three rules fall out of that:
 
 - After filtering and prefixing, every name must be unique across the whole tree, and must not be
-  one of the reserved names (`reset`, `step`, `state`, `close`, and the two control tools). A
+  one of the reserved names (`reset`, `step`, `state`, `close`, and the control tool). A
   collision is a seal error, never resolved silently.
 - A prefixed name must still be a valid tool name (`^[A-Za-z0-9_-]{1,128}$`), so a `tool_prefix` of
   `"payments."` is refused rather than published.
@@ -272,8 +272,8 @@ is `<parent path>/<name>`. Every other route that reaches the node is an **alias
 string like `shop/payments` above. Aliases are not nodes. Nothing is created for them, and sharing
 *reduces* the number of stores.
 
-One node is one file, one connection, one attached schema, one changeset key, one id stream and one
-entry in a fixture's sidecar.
+One node is one file, one connection, one attached schema, one change-log path, one id stream and
+one entry in a fixture's sidecar.
 
 Two things about scopes are worth knowing before they surprise you. **Scoping is coarse**: a
 `store=` scopes a whole subtree, so "the merchant's payments but the company's chat, under one shop"
@@ -588,10 +588,10 @@ Nothing agent-facing says a world is composed. Everything eval-facing does.
   `payments__tax.rates`. "Was the invoice created and was the charge taken" is one statement. The
   same is true of `controller_run_sql` over a server. Writes, `ATTACH` and `DETACH` are denied on
   it, as they always were.
-- **`inst.changes()`** is one list covering every node, in canonical order, root first. Each
-  `Change` carries `world`, the owning node's path, which is `main` for the root. That is what tells
-  two tables of the same name in two stores apart. Per-node exclusions are each world's own
-  `untracked_tables` and FTS5 shadow tables.
+- **`inst.change_log()`** is one list covering every node, in call order. Each record carries
+  `world`, the owning node's path, which is `main` for the root. That is what tells two tables of the
+  same name in two stores apart; the records of one call are sorted by that path, then the table,
+  then the key. Per-node exclusions are each world's own `untracked_tables` and FTS5 shadow tables.
 - **`inst.composition()`** is what this instance is running against: one record per node with
   `path`, `world`, `world_version`, `scope`, `aliases`, `schema_hash`, and `frozen_world_version` —
   the version the fixture recorded, when that is not the version installed, and `None` otherwise. It

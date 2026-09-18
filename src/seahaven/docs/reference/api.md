@@ -12,7 +12,7 @@ change without notice.
 | [`Ctx`](#ctx) | What every tool receives |
 | [`Worlds` and `WorldHandle`](#worlds-and-worldhandle) | Reaching an added world |
 | [`Db`](#db), [`Clock`](#clock), [`Ids`](#ids) | The database, the time and the seeded stream |
-| [`Call`](#call), [`Tool`](#tool), [`Change`](#change) | One call, one tool, one row's difference |
+| [`Call`](#call), [`Tool`](#tool), [`LogRecord`](#logrecord) | One call, one tool, one row a call changed |
 | [The composition report](#the-composition-report) | The stores one instance holds |
 | [`Fixture`](#fixture), [`seahaven.fixtures`](#seahavenfixtures) | Fixtures, and the module that reads them |
 | [Errors](#errors) | The exception hierarchy |
@@ -45,7 +45,7 @@ import seahaven
 
 seahaven.World, seahaven.Instance, seahaven.Ctx, seahaven.Tool, seahaven.Call
 seahaven.Worlds, seahaven.WorldHandle
-seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.Change, seahaven.Fixture
+seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.LogRecord, seahaven.Fixture
 seahaven.SeahavenError, seahaven.WorldBug
 seahaven.ToolError, seahaven.ArgumentError, seahaven.DbError, seahaven.UnknownTool
 seahaven.sql_files, seahaven.helpers, seahaven.sandbox
@@ -120,7 +120,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
-| `world.tools_by_fn` | the registry by the function each tool was built from, multi-valued because one function may be registered as two tools. This world's own tools only, contributed or not. The control tools are not in it |
+| `world.tools_by_fn` | the registry by the function each tool was built from, multi-valued because one function may be registered as two tools. This world's own tools only, contributed or not. The control tool is not in it |
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |
 | `world.accepted_startup_kwargs` | every keyword some hook names |
@@ -170,7 +170,9 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.call(fn, /, *args, **arguments)` | the same call, named by the tool's own function: the arguments are checked by a type checker and the result is the tool's own object. Resolves over the composite surface, so it reaches a tool of any world this one adds |
 | `inst.tools()` | the tool list with JSON schemas, as `{"name", "description", "input_schema"}`. One flat list over every world this one adds. Control tools are never in it |
 | `inst.inspect()` | a read-only `Db` on a second connection: every table, the instance clock, opened once and kept. Every added world's store is attached read-only under its path. Never a tool |
-| `inst.changes()` | the cumulative changeset since creation, as `list[Change]`, covering every store |
+| `inst.change_log()` | every row this instance has changed, one record per row per call, in call order, as `list[LogRecord]`, covering every store |
+| `inst.call_log()` | every call dispatched to this instance, in dispatch order, as `list[CallRecord]`, so `[i]` is call `i` |
+| `inst.call_count` | how many calls have been dispatched: `len(inst.call_log())` |
 | `inst.state(format=None)` | the state document as a plain dict: the envelope, and `state` from this instance's format. `format` answers in another of the world's formats instead. Refused inside `bulk()` or a tool call |
 | `inst.composition()` | what this instance is running against: one `NodeReport` per store, root first |
 | `inst.freeze(id, description)` | mint a fixture from the current state; returns the `Fixture`. Refuses inside `bulk()` |
@@ -313,28 +315,29 @@ class Tool:
 ```
 
 `from_function` is what a tool factory builds its tool with, whether that factory is one of
-Seahaven's helpers or an extension's. `control` is Seahaven's own flag for the control tools and
+Seahaven's helpers or an extension's. `control` is Seahaven's own flag for its control tool and
 cannot be set through it.
 
-## `Change`
+## `LogRecord`
 
 ```py
-change.world  # the store: the node's path, "main" for the root
-change.table  # the table
-change.op  # "insert" | "update" | "delete"
-change.key  # the row's primary key columns, as a dict
-change.before, change.after  # row dicts, or None where not applicable
-change.to_dict()  # the wire shape an eval reads, with "world" first
+record.i  # the ordinal of the call that changed the row, or None for an inst.bulk() write
+record.world  # the store: the node's path, "main" for the root
+record.table  # the table
+record.op  # "insert" | "update" | "delete"
+record.key  # the row's primary key columns, as a dict
+record.before, record.after  # row dicts, or None where not applicable
+record.to_dict()  # the published shape an eval reads, with "i" first
 ```
 
 `world` is `main` on every record of a world that adds none, and the owning node's canonical path
 otherwise. That is what tells two tables of the same name in two stores apart
 ([../composition.md](../composition.md)).
 
-`before` and `after` hold only the columns the change carries. A changeset marks the rest
-`apsw.no_change`, which is not the same as `NULL`, so an update's `before` holds the key columns and
-the old values of what changed. Flattening the two would turn "changed the assignee" into "rewrote
-the row".
+An insert and a delete carry the whole row in `after` and `before`. An update carries exactly the
+non-key columns the call changed, old values in `before` and new in `after`, and never the key,
+which `key` already holds. Flattening the two would turn "changed the assignee" into "rewrote the
+row".
 
 ## The composition report
 

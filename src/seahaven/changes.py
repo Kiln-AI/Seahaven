@@ -1,23 +1,21 @@
 """What an instance changed, as data an eval can grade on.
 
-Two readings of one mechanism. The **change log** is the ordered record of every
-row the instance changed after startup, one record per row per call, across
-every node: a session is opened on each node for each call, and what it recorded
-is rendered and appended when the call's transactions are done. The
-**changeset** is the net difference between the fixture and the current state,
-from one session per node that runs for the life of the instance.
+The **change log** is the ordered record of every row the instance changed after
+startup, one record per row per call, across every node: a session is opened on
+each node for each call, and what it recorded is rendered and appended when the
+call's transactions are done.
 
-Either way the session extension is what speaks, and its rule is the same: a
-write that leaves a value unchanged records nothing, an insert followed by an
-update of the same row is one insert, and a call that rolled back leaves no
-trace. Over one call that makes a log record the net of its call; over the
-instance it makes a changeset the net of the episode.
+The session extension is what speaks, and its rule is the net of what it
+recorded: a write that leaves a value unchanged records nothing, an insert
+followed by an update of the same row is one insert, and a call that rolled back
+leaves no trace. Over one call that makes the records the net of that call. A
+consumer that wants the net of a whole episode folds the log itself
+(`functional_spec.md` §3.6); nothing here computes one.
 
-No session sees the startup hooks. The per-call sessions do not exist yet when
-they run, and the long-lived one is attached after them, so seed rows are
-starting state rather than agent changes. A composite instance records per node,
-each over its own world's tables and its own `untracked_tables`, and every record
-says which node it came from.
+No session sees the startup hooks: the per-call sessions do not exist yet when
+the hooks run, so seed rows are starting state rather than agent changes. A
+composite instance records per node, each over its own world's tables and its own
+`untracked_tables`, and every record says which node it came from.
 """
 
 import base64
@@ -37,10 +35,8 @@ if TYPE_CHECKING:  # `world.py` imports this module's callers; the annotation is
 
 __all__ = [
     "CallRecord",
-    "Change",
     "LogRecord",
     "open_session",
-    "render",
     "render_log",
     "tracked_tables",
 ]
@@ -51,42 +47,6 @@ _OPS: dict[str, Literal["insert", "update", "delete"]] = {
     "UPDATE": "update",
     "DELETE": "delete",
 }
-
-
-@dataclass(frozen=True)
-class Change:
-    """One row the instance changed, with its columns named and its node said.
-
-    `world` is the path of the node the row belongs to -- `main` for the root,
-    and the added node's canonical path otherwise -- which is what tells two
-    tables of the same name in two stores apart. A world that adds nothing has
-    one node, so every change it makes says `main`.
-
-    `before` and `after` hold only the columns the change carries: a changeset
-    marks the rest `apsw.no_change`, which is not the same as `NULL`, and
-    flattening the two would turn "changed the assignee" into "rewrote the row".
-    An update's `before` therefore holds the key columns and the old values of
-    what changed, its `after` the new values of what changed, and `key` the
-    primary key either way.
-    """
-
-    world: str
-    table: str
-    op: Literal["insert", "update", "delete"]
-    key: dict[str, Any]
-    before: dict[str, Any] | None
-    after: dict[str, Any] | None
-
-    def to_dict(self) -> dict[str, Any]:
-        """The wire shape: what `controller_changes` returns and an eval reads."""
-        return {
-            "world": self.world,
-            "table": self.table,
-            "op": self.op,
-            "key": self.key,
-            "before": self.before,
-            "after": self.after,
-        }
 
 
 @dataclass(frozen=True)
@@ -221,41 +181,6 @@ def open_session(conn: apsw.Connection, tracked: Sequence[str]) -> apsw.Session:
     for table in tracked:
         session.attach(table)
     return session
-
-
-def render(changeset: bytes, conn: apsw.Connection, world: str) -> list[Change]:
-    """One node's changeset as `Change` records, in the changeset's own order.
-
-    That order is by table and then by rowid, which is deterministic for a given
-    sequence of writes, so two identical runs render identically.
-
-    `world` is the path of the node `conn` belongs to, stamped on every record.
-    It is a parameter and not a default because every caller is rendering one
-    node of a tree and knows which: a default would be right for the root and
-    quietly wrong for the caller that forgot.
-    """
-    columns: dict[str, tuple[list[str], list[int], list[int]]] = {}
-    changes = []
-    for change in apsw.Changeset.iter(changeset):
-        table = change.name
-        if table not in columns:
-            columns[table] = _columns(conn, table)
-        names, key_positions, _non_key = columns[table]
-        op = _OPS[change.op]
-        # The key is in whichever side of the change has it: an insert has only
-        # `new`, everything else carries the old row's key in `old`.
-        source = change.new if op == "insert" else change.old
-        changes.append(
-            Change(
-                world=world,
-                table=table,
-                op=op,
-                key=_row(names, source, key_positions) or {},
-                before=_row(names, change.old),
-                after=_row(names, change.new),
-            )
-        )
-    return changes
 
 
 def render_log(

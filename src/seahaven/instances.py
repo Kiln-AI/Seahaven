@@ -2,13 +2,13 @@
 
 An instance is a working directory holding one file per node of its world's
 composition, a connection on each, a frozen clock they share, and per node a
-seeded id stream, a state dict and a changeset session -- plus a change log and
-a call log kept in memory, and one lock over the whole of it. A world that adds
-nothing has one node, so its instance is the one file it has always been.
-`world.instance(...)` makes one, `inst.call(...)` runs a tool on whichever node
-owns it, and `inst.destroy()` (or leaving its `with` block) takes the files away
-again. Nothing is shared between two instances: two instances of one fixture are
-two copies of one file.
+seeded id stream and a state dict -- plus a change log and a call log kept in
+memory, and one lock over the whole of it. A world that adds nothing has one
+node, so its instance is the one file it has always been. `world.instance(...)`
+makes one, `inst.call(...)` runs a tool on whichever node owns it, and
+`inst.destroy()` (or leaving its `with` block) takes the files away again.
+Nothing is shared between two instances: two instances of one fixture are two
+copies of one file.
 
 *The activation.* Taking the lock from depth 0 opens a `Frame` (`handles.py`) and
 returning to depth 0 closes it. That is the lifetime of every `ctx.worlds` handle
@@ -17,14 +17,14 @@ moment more.
 
 Three rules hold the concurrency together.
 
-*One lock per instance.* `call`, `changes`, `change_log`, `call_log`, `state`,
-`freeze`, `bulk`, `destroy`, a nested call through a handle and the opens inside
-`inspect()` and `_control_db()` take it, so calls into one instance serialise
-and a destroy waits for the call in flight. Reads through the `inspect()` handle
+*One lock per instance.* `call`, `change_log`, `call_log`, `state`, `freeze`,
+`bulk`, `destroy`, a nested call through a handle and the opens inside
+`inspect()` and `_control_db()` take it, so calls into one instance serialise and
+a destroy waits for the call in flight. Reads through the `inspect()` handle
 afterwards do not take it: that handle is the caller's, to read from whatever
 thread it likes. The lock is an `RLock` because a control tool is called with it
-already held and then asks the instance for something -- its changeset, its
-control handle -- that takes it again on the same thread.
+already held and then asks the instance for something -- its control handle --
+that takes it again on the same thread.
 
 *The gate before the lock.* The concurrency gate bounds how many tool calls run
 at once across the process. It is taken before the instance lock, so a call
@@ -55,17 +55,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Concatenate, Self, overload
 
-import apsw
-
 from seahaven.call import Call, arguments_of, name_of, serialise
 from seahaven.changes import (
     CallRecord,
-    Change,
     LogRecord,
     _copied_arguments,
     _sort_key,
     open_session,
-    render,
     render_log,
     tracked_tables,
 )
@@ -252,9 +248,6 @@ class NodeRuntime:
     ids: Ids
     state: dict[str, Any]
     ctx: Ctx[Any]
-    # Attached after the startup hooks have run, so what they wrote is starting
-    # state rather than a change the agent made.
-    session: apsw.Session | None = None
     # The tables every per-call session on this node attaches, settled once at
     # creation: a node's schema does not change while its instance is alive.
     tracked: tuple[str, ...] = ()
@@ -333,8 +326,8 @@ class Instance:
         self._formatting: int | None = None
         self.closed = False
         # Re-entrant: a control tool holds this lock and then asks the instance
-        # for its changeset or its control handle, which take it again, and a
-        # tool calling into an added world re-enters it from the same thread.
+        # for its control handle, which takes it again, and a tool calling into an
+        # added world re-enters it from the same thread.
         self.lock = threading.RLock()
         # The node set this instance was created with, and the seal it was last
         # compared against. A tool or a middleware registered later reaches this
@@ -496,23 +489,6 @@ class Instance:
             NodeReport.of(runtime.node, self._frozen_versions.get(runtime.node.path))
             for runtime in self._runtime.values()
         )
-
-    def changes(self) -> list[Change]:
-        """Every row this instance has changed since it was created, in every node.
-
-        One list: each node's changeset rendered against its own connection and
-        stamped with its own path, concatenated in the composition's canonical
-        order, root first. A world that adds nothing has one node, so its list is
-        what it always was with `main` on every record.
-        """
-        with self._held():
-            return [
-                change
-                for runtime in self._runtime.values()
-                for change in render(
-                    _session_of(runtime).changeset(), runtime.db.conn, runtime.node.path
-                )
-            ]
 
     def change_log(self) -> list[LogRecord]:
         """Every row this instance has changed, one record per row per call, in call order.
@@ -799,7 +775,7 @@ class Instance:
         return composition
 
     def _control_db(self) -> Db:
-        """A second read-only handle, opened once, for the control tools alone.
+        """A second read-only handle, opened once, for the control tool alone.
 
         Not the `inspect()` handle, though it is opened the same way. A control
         read runs through `sandbox.run_statement`, which sets the connection's
@@ -810,7 +786,7 @@ class Instance:
         and one that takes the interpreter with it, because the thread waiting on
         the connection is holding the GIL.
 
-        Reached only from the control tools, which `Instance.call` runs with the
+        Reached only from the control tool, which `Instance.call` runs with the
         instance lock held, so this connection has one statement on it at a time
         and the state `run_statement` borrows is state nobody else can see.
         """
@@ -910,13 +886,10 @@ class Instance:
     def _close(self) -> None:
         """Release every handle the instance holds.
 
-        The session goes before the connection it records on. APSW tolerates the
-        other order (it finalises a session with its connection), but a session
-        is a growing buffer of every row the instance changed, and releasing it
-        first is what makes a destroyed instance cost nothing.
-
-        Both read-only handles -- the caller's, from `inspect()`, and the control
-        tools' own -- are closed here as well; either may never have been opened.
+        No session outlives a call -- each one is opened and closed inside
+        `_recording` -- so what is left here is a connection per node. Both
+        read-only handles, the caller's from `inspect()` and the control tool's
+        own, may never have been opened.
         """
         for handle in (self._inspection, self._control):
             if handle is not None:
@@ -924,8 +897,6 @@ class Instance:
         self._inspection = None
         self._control = None
         for runtime in self._runtime.values():
-            if runtime.session is not None:
-                runtime.session.close()
             runtime.db.close()
 
     def _log_failure(
@@ -1008,11 +979,11 @@ class InstanceManager:
     ) -> Instance:
         """Materialise an instance from a fixture, or from the world's DDL.
 
-        One SQLite file, one connection, one `Ids` stream and one changeset
-        session per node of the world's composition -- which for a world that
-        adds nothing is one of each, in the directory it has today. A composite
-        fixture carries one frozen file per node and every one of them is copied;
-        a blank instance builds every node from its own world's DDL.
+        One SQLite file, one connection and one `Ids` stream per node of the
+        world's composition -- which for a world that adds nothing is one of each,
+        in the directory it has today. A composite fixture carries one frozen file
+        per node and every one of them is copied; a blank instance builds every
+        node from its own world's DDL.
 
         `state_format` is the format this instance answers `state()` in, in place
         of the root world's pin, and `episode_id` the id every document of the
@@ -1096,13 +1067,8 @@ class InstanceManager:
                     node_runtime.tracked = tracked_tables(
                         node_runtime.db.conn, node_runtime.node.world
                     )
-                    node_runtime.session = open_session(node_runtime.db.conn, node_runtime.tracked)
         except BaseException:
             for node_runtime in runtime.values():
-                # The session before the connection it records on, as `_close`
-                # does and for the same reason.
-                if node_runtime.session is not None:
-                    node_runtime.session.close()
                 node_runtime.db.close()
             shutil.rmtree(directory, ignore_errors=True)
             raise
@@ -1361,17 +1327,6 @@ def _open_node(
         # world rather than addressing whatever call happens to be running.
         ctx=Ctx(db=db, clock=clock, ids=ids, state=state, instance=info, worlds=unbound()),
     )
-
-
-def _session_of(runtime: NodeRuntime) -> apsw.Session:
-    """A node's changeset session, which exists for as long as its instance does.
-
-    The field is optional because the session is attached after the startup hooks
-    have run, and that is inside creation -- before any caller holds the instance.
-    """
-    if runtime.session is None:
-        raise WorldBug(f"the changeset session of node {runtime.node.path!r} is not attached")
-    return runtime.session
 
 
 def _serialised_startup(kwargs: Mapping[str, Any]) -> dict[str, Any]:

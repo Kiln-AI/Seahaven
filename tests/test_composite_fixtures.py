@@ -163,7 +163,7 @@ def test_every_nodes_rows_survive_a_freeze_and_a_load(tmp_path: Path) -> None:
         assert live.call("host_read") == ["in the root"]
         assert live.call("child_read") == ["in the child"]
         # What the fixture holds is starting state, not a change the agent made.
-        assert live.changes() == []
+        assert live.change_log() == []
 
 
 def test_a_fork_chains_its_parent_and_keeps_every_node(tmp_path: Path) -> None:

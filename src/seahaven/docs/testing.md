@@ -154,10 +154,10 @@ def test_closing_an_issue_is_one_update_of_that_row(instance: seahaven.Instance)
     issue = instance.call("get_issue", key="ENG-4")
     instance.call("transition_issue", issue_id=issue["id"], status="canceled")
 
-    issue_changes = [change for change in instance.changes() if change.table == "issues"]
-    assert [change.op for change in issue_changes] == ["update"]
-    assert issue_changes[0].key == {"id": issue["id"]}
-    assert issue_changes[0].after["status"] == "canceled"
+    issue_records = [record for record in instance.change_log() if record.table == "issues"]
+    assert [record.op for record in issue_records] == ["update"]
+    assert issue_records[0].key == {"id": issue["id"]}
+    assert issue_records[0].after["status"] == "canceled"
 ```
 
 **Determinism, once.** One test that the same seed gives the same ids is worth having, because it

@@ -4,9 +4,7 @@
 net diff from a saved document, and SQLite is the oracle it was defined from: a
 session of the test's own on every node records the whole episode, and its
 changeset is the net diff by construction. Every episode shape the suite
-exercises is folded and compared against it, on one node and on `emporium`. On
-one node `Instance.changes()` is a second, independent reading of the same
-cumulative changeset until the phase that removes it.
+exercises is folded and compared against it, on one node and on `emporium`.
 """
 
 from collections.abc import Callable
@@ -17,7 +15,7 @@ import pytest
 from seahaven.instances import Instance
 from seahaven.world import World
 from tests.conftest import build_world
-from tests.fold_oracle import from_changes, recording
+from tests.fold_oracle import recording
 from tests.fold_support import fold
 from tests.test_changes import BLOB_KEY_SCHEMA, add
 
@@ -126,7 +124,6 @@ def test_the_fold_of_the_log_is_the_cumulative_changeset(
         net = fold(instance.change_log())
 
         assert net == sqlite.net_diff()
-        assert net == from_changes(instance.changes())
 
 
 def test_the_oracle_sees_the_rows_the_episode_left_behind(started: World) -> None:

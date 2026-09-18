@@ -2,8 +2,8 @@
 
     uv run python -m bench all --out bench/results/latest.md
 
-Five subcommands -- `baseline`, `sweep`, `isolation`, `composite`, `all` --
-because a sweep takes minutes and someone changing the harness wants one
+Six subcommands -- `baseline`, `sweep`, `isolation`, `composite`, `recording`,
+`all` -- because a sweep takes minutes and someone changing the harness wants one
 measurement back in seconds. `--quick` shrinks every count to something a test
 can afford; it is not a measurement and the report it writes says the counts it
 used.
@@ -14,12 +14,14 @@ import dataclasses
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from bench import report
 from bench.baseline import baseline, share
 from bench.composite import composite
 from bench.environment import capture
 from bench.harness import cold_cache_supported, quiet_logging
+from bench.recording import LEGS, probes, recording
 from bench.runner import CACHES, Cache
 from bench.sweep import DEFAULT_GATES, DEFAULT_WORKERS, isolation, sweep
 from bench.workloads import WORKLOADS
@@ -39,10 +41,15 @@ COMPOSITE_CALLS = 1000
 TREE_REPEATS = 5
 SEED = 11
 
-QUICK = {
+# Typed loosely on purpose: these are argparse defaults of several shapes,
+# written onto the parsed namespace by name.
+QUICK: dict[str, Any] = {
     "baseline_calls": 8,
     "calls": 8,
-    "repeats": 1,
+    # Three and not one: `bench.recording` refuses a `repeats` that is not a
+    # whole rotation of its legs, and a quick run that skipped the rotation would
+    # print the balance the report claims without having done it.
+    "repeats": 3,
     "seconds": 0.2,
     "readers": 2,
     "gates": (1, 0),
@@ -60,6 +67,13 @@ def main(argv: list[str] | None = None) -> int:
         # asked for rather than losing to it.
         for name, value in QUICK.items():
             setattr(args, name, value)
+    if args.command in ("recording", "all") and (args.repeats < 1 or args.repeats % len(LEGS)):
+        print(
+            f"--repeats must be a positive multiple of {len(LEGS)} for the recording probe, so "
+            f"that every leg gets the same mean pass position; got {args.repeats}",
+            file=sys.stderr,
+        )
+        return 2
     if args.out is not None and not _may_write(Path(args.out), force=args.force):
         return 2
     world = _world()
@@ -109,6 +123,14 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command in ("isolation", "all")
                 else None
             ),
+            recording=(
+                tuple(
+                    recording(probe, calls=args.calls, repeats=args.repeats)
+                    for probe in probes(world)
+                )
+                if args.command in ("recording", "all")
+                else ()
+            ),
             # Last, because a seal is timed by invalidating every cached
             # composition in the process: whatever runs after it pays for one
             # reseal of its own world.
@@ -136,12 +158,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m bench",
         description="Seahaven's benchmark: two workloads over ProjectTracker agency, a "
-        "sweep of the concurrency gate, and what a node of a composite world costs. Run by "
-        "hand; never a gate on anything.",
+        "sweep of the concurrency gate, what a node of a composite world costs, and what the "
+        "change log costs a call. Run by hand; never a gate on anything.",
     )
     parser.add_argument(
         "command",
-        choices=("baseline", "sweep", "isolation", "composite", "all"),
+        choices=("baseline", "sweep", "isolation", "composite", "recording", "all"),
         help="which measurements to run",
     )
     parser.add_argument("--out", default=None, help="write the report here instead of stdout")
@@ -150,12 +172,21 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="overwrite a report that carries a hand-written reading",
     )
-    parser.add_argument("--repeats", type=int, default=REPEATS, help="passes per configuration")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=REPEATS,
+        help="passes per configuration; the recording probe needs a whole rotation of its three "
+        "legs, so a run including it takes a multiple of 3",
+    )
     parser.add_argument(
         "--baseline-calls", type=int, default=BASELINE_CALLS, help="calls per baseline pass"
     )
     parser.add_argument(
-        "--calls", type=int, default=SWEEP_CALLS, help="calls per session per sweep pass"
+        "--calls",
+        type=int,
+        default=SWEEP_CALLS,
+        help="calls per session per sweep or recording pass",
     )
     parser.add_argument(
         "--gates",

@@ -5,12 +5,11 @@ checked against. That something is the session extension asked the question the
 fold asks: one session per node, open for the whole episode, whose changeset is
 the net difference between where that node started and where it ended.
 
-The framework records per call and keeps no such session (or will not, once
-`Instance.changes()` goes), so the test opens its own, on every node's own
-connection and attached to the tables that node tracks -- which it reads off
-`instance._runtime`, an internal, because the oracle has to record exactly what
-the log records. Opened after the instance is made, so the startup hooks are
-starting state here as they are in the log.
+The framework records per call and keeps no such session, so the test opens its
+own, on every node's own connection and attached to the tables that node tracks
+-- which it reads off `instance._runtime`, an internal, because the oracle has to
+record exactly what the log records. Opened after the instance is made, so the
+startup hooks are starting state here as they are in the log.
 
 Test code, deliberately not importable from `seahaven`.
 """
@@ -21,11 +20,11 @@ from dataclasses import dataclass
 
 import apsw
 
-from seahaven.changes import Change, open_session, render_log
+from seahaven.changes import open_session, render_log
 from seahaven.instances import Instance, NodeRuntime
 from tests.fold_support import NetChange, in_published_order
 
-__all__ = ["Oracle", "from_changes", "recording"]
+__all__ = ["Oracle", "recording"]
 
 
 @dataclass(frozen=True)
@@ -76,27 +75,3 @@ def recording(instance: Instance) -> Iterator[Oracle]:
             for runtime in instance._runtime.values()
         ]
         yield Oracle(instance=instance, sessions=sessions)
-
-
-def from_changes(changes: list[Change]) -> list[NetChange]:
-    """`Instance.changes()` in the fold's shape: the second, independent cross-check.
-
-    A `Change` is the same cumulative changeset rendered by the older renderer,
-    whose one difference is that an update's `before` carries the key columns
-    too. Removed with `changes()` in the phase that deletes it.
-    """
-    return in_published_order(
-        NetChange(
-            world=change.world,
-            table=change.table,
-            op=change.op,
-            key=change.key,
-            before=(
-                {name: value for name, value in change.before.items() if name not in change.key}
-                if change.op == "update" and change.before is not None
-                else change.before
-            ),
-            after=change.after,
-        )
-        for change in changes
-    )

@@ -258,7 +258,7 @@ _RECEIVER_TYPES = {
     "ids": "ids",
     "call": "call",
     "tool": "tool",
-    "change": "change",
+    "record": "record",
     "fixture": "fixture",
 }
 
@@ -315,7 +315,7 @@ def receivers(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
                 "ids": ctx.ids,
                 "call": seahaven.Call(name=tool.name, arguments={}, tool=tool),
                 "tool": tool,
-                "change": inst.changes()[0],
+                "record": inst.change_log()[0],
                 "fixture": fixture,
             }
 

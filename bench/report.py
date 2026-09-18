@@ -19,6 +19,7 @@ from bench.baseline import BaselinePoint, Share
 from bench.composite import SETTLE, WRITE, Composite, TreeCost
 from bench.environment import Environment
 from bench.harness import Summary, significant
+from bench.recording import Recording
 from bench.runner import Cache
 from bench.sweep import Cell, Isolation, Point, Sweep
 from bench.workloads import WORKLOADS
@@ -46,6 +47,7 @@ class Results:
     sweep: Sweep | None = None
     isolation: Isolation | None = None
     composite: Composite | None = None
+    recording: tuple[Recording, ...] = ()
 
 
 def _wrapped(text: str) -> str:
@@ -75,6 +77,7 @@ def render(results: Results) -> str:
         *_repeatability(results),
         _derived(results),
         *_composite(results),
+        *_recording(results),
     ]
     return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
@@ -154,7 +157,7 @@ def _method(results: Results) -> str:
 **The world.** ProjectTracker `agency`, the framework's largest fixture: twelve people, nine
 projects, six hundred issues with six months of history. Every call goes through
 `Instance.call`, which is the path an eval takes -- argument validation, the middleware chain,
-the per-call transaction, the tool, the changeset session, the serialiser.
+the per-call transaction, the tool, the change log's session, the serialiser.
 
 **The workloads.**
 
@@ -171,7 +174,7 @@ fixed number of calls per session, so two passes of one configuration do identic
 
 **The write mix's warm and cold columns differ by more than a cache.** Its warm-up writes as many
 rows as the measured pass will, so a warm write pass runs on an instance carrying a pass worth of
-extra rows and changeset entries while a cold one runs on a virgin instance. An instance's write
+extra rows and log records while a cold one runs on a virgin instance. An instance's write
 cost climbs with those rows by roughly the size of the gap between the two columns, so the write
 mix's cold/warm axis mixes cache state with accumulated state and should not be read as a cache
 effect. The read workload has no such confound: it writes nothing.
@@ -512,7 +515,14 @@ def _point(point: Point) -> str:
 
 
 def _measured_projecttracker(results: Results) -> bool:
-    """Whether this run drove `agency` at all, which is what `_method` describes."""
+    """Whether this run measured a section `_method` describes.
+
+    Not every run that touches `agency`: the recording probe drives it too, and
+    `_method`'s warm-and-cold paragraphs are about columns only the sections
+    below have. Section 8 names the world it drove inside itself, as section 7
+    does, so that a probe-only report says what it ran without this section's
+    cache axis above it.
+    """
     return bool(results.baseline) or any(
         part is not None for part in (results.share, results.sweep, results.isolation)
     )
@@ -722,10 +732,11 @@ def _composite_limits() -> str:
   every cell of the per-call table, but its hit path is one load and one integer compare under no
   lock and nothing here can resolve that on its own. The leaf-against-composite rows are the only
   evidence this run offers about it.
-- **Memory, and the connection and session counts.** One connection and one changeset session per
-  node is what `instances.NodeRuntime` opens. What this section counts is *files*: the connections
-  and the sessions are read off the code as before, paid for inside the Open column, and neither
-  counted nor weighed here.
+- **Memory, and the connection count.** One connection per node is what `instances.NodeRuntime`
+  opens, and each call opens a session on every one of them for the length of that call. What this
+  section counts is *files*: the connections are read off the code as before, paid for inside the
+  Open column, and neither counted nor weighed here. Section 8 is where a session's cost is
+  measured.
 - **Concurrency, and cold caches.** One thread, warm, no gate sweep. A per-call cost is a
   single-threaded number for the reason section 1 gives, and a composite instance offers the gate no
   question the ProjectTracker sweep does not already ask.
@@ -747,3 +758,135 @@ def _bullet(text: str) -> str:
 def _count(number: int, noun: str) -> str:
     """`3 nodes`, and `one node` where a digit would read as a table cell."""
     return f"one {noun}" if number == 1 else f"{number} {noun}s"
+
+
+def _recording(results: Results) -> list[str]:
+    """What the change log costs a call, split into where the cost is."""
+    if not results.recording:
+        return []
+    rows = "\n".join(_recording_rows(probe) for probe in results.recording)
+    findings = "\n\n".join(_wrapped(_recording_finding(probe)) for probe in results.recording)
+    calls = _recording_calls(results.recording)
+    # The ProjectTracker rows drive `agency` through `Instance.call`, which is
+    # what `## Method` describes -- and that section is absent from a report that
+    # ran this probe alone, so the section says it for itself.
+    composite_note = _wrapped(
+        "The one-node rows are ProjectTracker `agency`, the framework's largest fixture, driven "
+        "through `Instance.call` as every other measurement here drives it. `emporium` is below "
+        "them because a session is opened per *node*: its rows are "
+        + (
+            "the same calls section 7 times"
+            if results.composite is not None
+            else "`bench.composite`'s own legs"
+        )
+        + ", on the same four-node tree, and are read against the one-node rows above them."
+    )
+    # Only when this run produced one: a standalone `recording` report has no
+    # noise floor of its own to point at. The condition is `_repeatability`'s own,
+    # so the pointer and the section it points at appear together.
+    floor = (
+        " Read the totals against section 5's noise floor before calling them a difference, and"
+        if results.sweep is not None and results.sweep.cells
+        else " Read the totals as approximate, and"
+    )
+    return [
+        f"""## 8. What the change log costs a call
+
+{_provenance(results)}
+
+Each probe on one instance, recorded three ways. The first is what Seahaven does: a session opened
+and attached on every node per call, its changeset read when the call's transactions are done, and
+the records rendered into the log. The second opens and attaches the same sessions per call and
+reads nothing out of them, so the gap to the first is `changeset()` and `render_log`. The third is
+the shape before this release, one session per node for the whole pass and read by nobody, so the
+gap to the second is everything a *fresh* session does that a warmed-up one does not: opening it,
+attaching its tables, its first sighting of each table it records, and freeing a populated change
+buffer at `close()`. Neither of the last two is a configuration Seahaven offers.
+
+{composite_note}
+
+| World | Nodes | Probe | Leg | Per call | Against one session |
+|---|---:|---|---|---:|---:|
+{rows}
+
+{findings}
+
+{
+            _wrapped(
+                f"From {calls} calls down each leg, in a leg order that rotates between passes, "
+                "each leg reduced to the mean of its own passes: an instance's write cost climbs "
+                "with its own rows, and together those two put the same average amount of that "
+                "climb on every leg rather than on whichever one runs last."
+                f"{floor} read the *split* more loosely still: the fresh-session leg is the "
+                "noisiest of the three, and what it is made of differs by probe. This probe does "
+                "not separate those pieces -- read the per-probe findings above for which of them "
+                "can be doing the work at all."
+            )
+        }"""
+    ]
+
+
+def _recording_calls(measured: tuple[Recording, ...]) -> str:
+    """How many calls a leg ran, as one figure or as the range the probes span.
+
+    `whole_cycles` rounds each probe's pass to that probe's own cycle, so a run
+    whose probes have different cycles ran different counts and a single number
+    would be true of only some of them.
+    """
+    counts = sorted({probe.calls for probe in measured})
+    return str(counts[0]) if len(counts) == 1 else f"{counts[0]} to {counts[-1]}"
+
+
+def _recording_rows(probe: Recording) -> str:
+    """One probe's three legs.
+
+    The stable share is rounded and the noisy one takes the remainder, so the
+    middle row and the finding below the table cannot disagree by a point. A
+    probe whose split cannot be read gets no middle figure at all, for the
+    reasons `Recording.split_reads` gives: printing one as a percentage would
+    invite it to be read.
+    """
+    total = round(probe.overhead * 100)
+    rendering = round(probe.rendering * 100)
+    middle = f"{total - rendering:+d}%" if probe.split_reads else "noise"
+    head = f"| `{probe.world}` | {probe.nodes} | `{probe.workload}` |"
+    return "\n".join(
+        (
+            f"{head} a session per call | {_ms(probe.per_call_seconds)} | {total:+d}% |",
+            f"{head} a session per call, never read | {_ms(probe.unread_seconds)} | {middle} |",
+            f"{head} one long-lived session | {_ms(probe.long_lived_seconds)} | -- |",
+        )
+    )
+
+
+def _recording_finding(probe: Recording) -> str:
+    where = f"**`{probe.workload}` on `{probe.world}`**"
+    total = round(probe.overhead * 100)
+    rendering = round(probe.rendering * 100)
+    if not probe.wrote_rows:
+        return (
+            f"{where} costs about {total:+d}% against the framework's previous shape. No call of "
+            "the pass gave a session a row, so there was nothing to render and nothing to free: "
+            "what it pays is a session opened and attached per node per call, and an empty "
+            "`changeset()` read back. Its two comparison legs therefore differ by that empty read "
+            "alone, so whatever separates them here is not a measurement of anything and the split "
+            "is left unreported."
+        )
+    if not probe.split_reads:
+        return (
+            f"{where} costs about {total:+d}% against the framework's previous shape. Its split is "
+            "left unreported: this run did not time the three legs in the order their construction "
+            "forces -- each does strictly less than the one above it -- so at least one share of "
+            "the total would come out negative, which is a cost that cannot exist. What separates "
+            "those legs here is the passes' own noise. Re-run it before reading a split into these "
+            "rows."
+        )
+    return (
+        f"{where} costs about {total:+d}% against the framework's previous shape, of which roughly "
+        f"{rendering:+d} points are reading the changeset and rendering the records and the "
+        f"remaining {total - rendering:+d} are what a fresh session per call costs over a "
+        "warmed-up one. The first of those is work that used to happen once an episode, when an "
+        "eval asked "
+        "for the changeset; it happens per call now, because a per-call record is what the change "
+        "log is."
+    )

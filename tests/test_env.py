@@ -50,6 +50,8 @@ from seahaven.openenv.env import (
     WorldRef,
 )
 
+pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+
 CONTROL_SQL = "SELECT count(*) AS n FROM notes"
 
 
@@ -225,7 +227,6 @@ def test_list_tools_never_lists_a_control_tool(world: World) -> None:
         env.reset()
         names = [tool.name for tool in listing(env).tools]
         assert "controller_run_sql" not in names
-        assert "controller_changes" not in names
         assert "rows" in names
 
 
@@ -369,19 +370,24 @@ def test_a_control_tool_is_callable_with_the_flag(world: World) -> None:
         "row_count": 1,
         "truncated": False,
     }
-    changes = call(env, "controller_changes").result
-    assert isinstance(changes, list)
-    assert [change["table"] for change in changes] == ["notes"]
+    logged = env.state.state["db"]["log"]
+    assert [record["table"] for record in logged] == ["notes"]
 
 
-def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World) -> None:
-    """The flag admits the control tools and nothing else."""
+@pytest.mark.parametrize("name", ["controller_nonsense", "controller_changes"])
+def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World, name: str) -> None:
+    """The flag admits the control tool and nothing else.
+
+    `controller_changes` is the case worth naming: it was a control tool until
+    this release, so a harness that still calls it is told the name does not
+    exist rather than reaching something that no longer records what it did.
+    """
     env = SeahavenEnv(world, include_control_tools=True)
     env.reset()
-    assert call(env, "controller_nonsense").error == {
+    assert call(env, name).error == {
         "code": "unknown_tool",
-        "message": "unknown tool: controller_nonsense",
-        "details": {"name": "controller_nonsense"},
+        "message": f"unknown tool: {name}",
+        "details": {"name": name},
     }
 
 

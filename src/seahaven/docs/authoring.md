@@ -244,8 +244,8 @@ All of it happens at import, with a message naming the tool and the parameter. A
 when it:
 
 - duplicates another tool's name;
-- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or `controller_run_sql` or
-  `controller_changes` (Seahaven's control tools);
+- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or `controller_run_sql`
+  (Seahaven's control tool);
 - is an `async def`, a generator, or an async generator;
 - has no first parameter, or one that is not positional and either annotated `seahaven.Ctx` or left
   unannotated;
@@ -438,7 +438,7 @@ with world.instance() as inst:
 - `call.with_arguments(**changes)` merges over the existing arguments and returns a copy. A `Call`
   is frozen.
 - Middleware runs for every tool call, including the helpers' and an extension's. It does **not**
-  run for `UnknownTool`, for a tool listing, for startup hooks, or for the control tools.
+  run for `UnknownTool`, for a tool listing, for startup hooks, or for the control tool.
 - Arguments are raw until validation runs, which happens inside the chain. A layer that wants typed
   arguments first calls `call.tool.validate(call.arguments)` itself. The model is built once at
   registration, so that is cheap.
@@ -492,7 +492,7 @@ nothing, instead of failing before the instance exists.
 A hook may not name a parameter `fixture`, `seed`, `now` or `state_format`; those are `reset`'s
 own. Hooks put what they worked out in `ctx.state`, and tools read it from there. A principal is
 application code: the world stores `user_id`, and its tools read it. Rows a hook writes are *not*
-in the changeset, because the session is attached after the hooks have run.
+in the change log, because no session is open while the hooks run.
 
 If a hook cannot do its job — a `user_id` naming nobody — raise `seahaven.WorldBug`. Instance
 creation then fails, and a run never starts against state that was set up wrong.

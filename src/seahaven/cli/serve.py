@@ -51,7 +51,7 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
     parser.add_argument(
         "--include-control-tools",
         action="store_true",
-        help="make the control tools callable over the wire; they are never listed",
+        help="make the control tool callable over the wire; it is never listed",
     )
     parser.set_defaults(handler=run)
 

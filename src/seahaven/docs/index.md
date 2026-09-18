@@ -59,15 +59,15 @@ def add_note(ctx: seahaven.Ctx, body: str) -> dict[str, str]:
 with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
     note = inst.call("add_note", body="buy milk")
     assert note["created_at"] == "2026-06-01T09:00:00.000Z"
-    assert [change.op for change in inst.changes()] == ["insert"]
+    assert [record["op"] for record in inst.state()["state"]["db"]["log"]] == ["insert"]
 ```
 
 Five things in that example are worth naming, because the rest of these pages use them constantly.
 `World` is the declaration. `@world.tool` publishes a function to the agent; its signature becomes
 the JSON schema the agent sees, and its docstring becomes the description. `inst` is an instance of
-the world. `ctx.clock` is frozen, so the timestamp is the same on every replay. `inst.changes()`
-is the difference between the starting state and the state the run left behind, which is what an
-eval grades.
+the world. `ctx.clock` is frozen, so the timestamp is the same on every replay. `inst.state()` is
+the document an eval grades: what the run left behind in the database, and enough provenance to
+read it.
 
 A real world spreads the same parts over a package instead of one file, and adds fixtures, error
 types and an error handler. `seahaven new <name>` writes that layout for you.
@@ -93,7 +93,7 @@ Read these in order the first time. Each page assumes the ones above it.
 
 | Page | What it covers |
 |---|---|
-| [concepts.md](concepts.md) | The nine words the rest of the docs use: world, tool, schema, fixture, instance, context, clock, reproducibility, changeset |
+| [concepts.md](concepts.md) | The nine words the rest of the docs use: world, tool, schema, fixture, instance, context, clock, reproducibility, change log |
 | [authoring.md](authoring.md) | Writing a world: tools, arguments, transactions, errors, middleware, startup hooks |
 | [db_schema_and_fixtures.md](db_schema_and_fixtures.md) | The database, the schema rules, and how fixtures are built and kept |
 | [testing.md](testing.md) | The pytest plugin, and what is worth testing in a world |

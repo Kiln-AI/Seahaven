@@ -20,6 +20,8 @@ from seahaven.world import World
 from tests.conftest import Boom, build_world
 from tests.test_changes import add
 
+pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+
 
 def names(instance: Instance) -> list[str]:
     return [record.tool for record in instance.call_log()]

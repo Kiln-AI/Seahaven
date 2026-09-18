@@ -74,7 +74,7 @@ declared with one of the types SQLite allows there: `INT`, `INTEGER`, `REAL`, `T
 implicit `rowid` does not count.
 
 **Why.** There are two reasons, and the second is the hard one. A row with no key cannot be
-identified in a `Change`, so **a table without a primary key cannot be tracked in a changeset**.
+identified in a change-log record, so **a table without a primary key cannot be tracked**.
 Seahaven refuses to attach one, and every write to that table is invisible to the eval grading the
 run. The other reason is that a list ordered without a unique tiebreak is not deterministic, which
 is the other thing this framework is for.

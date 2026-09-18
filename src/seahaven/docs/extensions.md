@@ -78,7 +78,7 @@ errors (`WorldBug`, `ToolError`, `ArgumentError`, `DbError`, `UnknownTool`).
 - **Register itself.** The world registers what it wants, by name, in its own `__init__`. An
   extension that registered itself on import would make a world's tool surface depend on its import
   order.
-- **Set `control`.** That flag is Seahaven's own, for its two control tools, and
+- **Set `control`.** That flag is Seahaven's own, for its control tool, and
   `Tool.from_function` cannot set it.
 
 ## The worked example: XML-RPC

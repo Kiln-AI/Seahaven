@@ -56,6 +56,8 @@ from seahaven.openenv import SeahavenClient, _SwallowWebSocketDisconnect
 from seahaven.openenv.env import SeahavenObservation
 from tests.serving import serving
 
+pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+
 # Long enough that two threads genuinely overlap inside SQLite on a warm cache,
 # short enough that the gate tests stay in the same order of magnitude as the
 # rest of the suite. The assertion is about overlap, never about duration.
@@ -407,10 +409,10 @@ def test_a_second_reset_over_the_wire_starts_from_the_fixture_again(world: World
         assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n0"]
 
 
-# --- control tools ---------------------------------------------------------
+# --- the control tool ------------------------------------------------------
 
 
-def test_control_tools_are_callable_with_the_flag_and_never_listed(world: World) -> None:
+def test_the_control_tool_is_callable_with_the_flag_and_never_listed(world: World) -> None:
     with (
         serving(world, include_control_tools=True) as url,
         SeahavenClient(base_url=url) as env,
@@ -424,11 +426,11 @@ def test_control_tools_are_callable_with_the_flag_and_never_listed(world: World)
             "row_count": 1,
             "truncated": False,
         }
-        changes = env.call("controller_changes").result
-        assert [(change["table"], change["op"]) for change in changes] == [("notes", "insert")]
+        logged = env.state().state["db"]["log"]
+        assert [(record["table"], record["op"]) for record in logged] == [("notes", "insert")]
 
 
-def test_control_tools_are_unknown_without_the_flag(world: World) -> None:
+def test_the_control_tool_is_unknown_without_the_flag(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         env.reset()
         assert "controller_run_sql" not in [tool["name"] for tool in env.list_tools()]

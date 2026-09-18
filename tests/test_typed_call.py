@@ -31,7 +31,10 @@ from seahaven.errors import ArgumentError, WorldBug
 from seahaven.world import World
 from tests.conftest import INSTANT_ISO
 
-pytestmark = pytest.mark.usefixtures("isolated_imports")
+pytestmark = [
+    pytest.mark.usefixtures("isolated_imports"),
+    pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated"),
+]
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 

@@ -23,6 +23,8 @@ from seahaven.world import World
 from tests.conftest import INSTANT_ISO, Boom, build_world, composable_world
 from tests.test_changes import add
 
+pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+
 
 def keys(instance: Instance) -> list[tuple[int | None, str]]:
     """Each record as the call it belongs to and the row it changed."""

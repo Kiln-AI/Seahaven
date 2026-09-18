@@ -29,8 +29,8 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   private instance per session, thousands of tool calls per second.
 - **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same fixture, same frozen
   clock, same seeded ids: the same run, every time. The clock is frozen in Python and in SQL.
-- **[Changesets](src/seahaven/docs/concepts.md#changeset).** The net diff between the fixture and
-  what the agent left behind. Grade on state, not on transcripts.
+- **[Change log](src/seahaven/docs/concepts.md#the-change-log).** Every row the agent changed,
+  call by call. Grade on state, not on transcripts.
 - **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
   or Shopify API. Compose, reuse and share worlds.
 - **[OpenEnv](src/seahaven/docs/serving_and_openenv.md).** `seahaven serve` is an OpenEnv
@@ -98,7 +98,7 @@ for rollout in range(100):
         "big_co", seed=rollout
     ) as world_instance:  # a private copy of the fixture, in ms
         run_agent(world_instance)  # your agent, your harness
-        reward = grade(world_instance.changes())  # the net diff the agent left behind
+        reward = grade(world_instance.state())  # what the agent left behind, as a document
 ```
 
 **Serve it:** Host an OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.

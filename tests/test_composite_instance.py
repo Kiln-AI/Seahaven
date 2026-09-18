@@ -389,7 +389,7 @@ def test_a_root_hook_seeds_a_child_before_that_childs_own_hooks_run(tmp_path: Pa
         # Committed with every other node's transaction, and starting state
         # rather than a change the agent made.
         assert live.call("child_read") == ["ana"]
-        assert live.changes() == []
+        assert live.change_log() == []
 
 
 def test_a_hook_that_raises_leaves_no_directory(tmp_path: Path) -> None:

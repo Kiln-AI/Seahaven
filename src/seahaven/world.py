@@ -73,10 +73,10 @@ type StartupHook = Callable[..., None]
 # own verbs, and a tool by one of those names could not be called over the wire.
 RESERVED_TOOL_NAMES = frozenset({"close", "reset", "state", "step"})
 
-# The framework's own tools (`control.py`). They are registered on every world,
-# bypass the chain and are never listed; a world registering either name is
-# refused whether or not they are registered yet.
-CONTROL_TOOL_NAMES = frozenset({"controller_changes", "controller_run_sql"})
+# The framework's own tool (`control.py`). It is registered on every world,
+# bypasses the chain and is never listed; a world registering its name is refused
+# whether or not it is registered yet.
+CONTROL_TOOL_NAMES = frozenset({"controller_run_sql"})
 
 # `reset`'s own arguments, which a startup hook therefore cannot take.
 RESET_ARGUMENTS = frozenset({"fixture", "now", "seed", "state_format"})
@@ -186,13 +186,13 @@ class World:
         # never touches the working directory at all.
         self._manager: InstanceManager | None = None
         self._manager_lock = threading.Lock()
-        # The framework's own two tools, on every world and before anything the
-        # world registers: `Instance.call` reaches them through the registry like
-        # any tool, `Instance.tools()` filters them out of the listing, and a
-        # world that registers either name is refused by `_add`.
+        # The framework's own tool, on every world and before anything the world
+        # registers: `Instance.call` reaches it through the registry like any
+        # tool, `Instance.tools()` filters it out of the listing, and a world
+        # that registers its name is refused by `_add`.
         for tool in control.TOOLS:
             # A world nobody holds yet cannot be in anyone's tree, so registering
-            # the framework's own two tools on it invalidates no sealed
+            # the framework's own tool on it invalidates no sealed
             # composition. Without this every `World(...)` anywhere in a process
             # would reseal every other world on its next use.
             self._add(tool, invalidates_seals=False)
@@ -211,9 +211,9 @@ class World:
         surface or filtered out of it, because the allow and block lists shape
         what an agent sees and host code can call everything.
 
-        The framework's own control tools are not in it. They are no part of a
+        The framework's own control tool is not in it. It is no part of a
         world's surface -- never contributed, and refused by name by both `call`
-        paths -- so there is nothing for a reference to them to reach.
+        paths -- so there is nothing for a reference to it to reach.
         """
         return MappingProxyType(self._tools_by_fn)
 
@@ -613,9 +613,9 @@ class World:
                 f"({', '.join(sorted(RESERVED_TOOL_NAMES))})"
             )
         # Before the duplicate check, which every world would hit instead: the
-        # two control tools are registered here at construction, so a world tool
-        # by one of their names is already taken. What is wrong with it is that
-        # the name is the framework's, and that is what it is told.
+        # control tool is registered here at construction, so a world tool by its
+        # name is already taken. What is wrong with it is that the name is the
+        # framework's, and that is what it is told.
         if tool.name in CONTROL_TOOL_NAMES and not tool.control:
             raise WorldBug(f"tool {tool.name!r} uses the name of a control tool")
         if tool.name in self._tools:

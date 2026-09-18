@@ -32,21 +32,21 @@ def scripted(seed: int) -> tuple[list[Any], list[dict[str, Any]]]:
         instance.call("add_comment", issue_id=issue["id"], body="On it.")
         instance.call("transition_issue", issue_id=issue["id"], status="in_progress")
         answers = [person, issue, instance.call("get_issue", issue_id=issue["id"])]
-        return answers, [change.to_dict() for change in instance.changes()]
+        return answers, [record.to_dict() for record in instance.change_log()]
 
 
-def test_one_seed_replays_the_ids_the_keys_and_the_changeset() -> None:
+def test_one_seed_replays_the_ids_the_keys_and_the_change_log() -> None:
     """Two runs of the same script agree on everything an eval could grade."""
-    first_answers, first_changes = scripted(seed=7)
-    second_answers, second_changes = scripted(seed=7)
+    first_answers, first_log = scripted(seed=7)
+    second_answers, second_log = scripted(seed=7)
     assert first_answers == second_answers
-    assert first_changes == second_changes
+    assert first_log == second_log
     # And it really did write something, so agreeing is not agreeing about nothing.
     assert first_answers[1]["key"] == "ENG-41"
     # `teams` is in there because minting a key bumps the team's counter, which
-    # is a row change like any other and is exactly the kind of thing a changeset
+    # is a row change like any other and is exactly the kind of thing a log
     # comparison would otherwise miss.
-    assert {change["table"] for change in first_changes} == {
+    assert {record["table"] for record in first_log} == {
         "users",
         "teams",
         "issues",
@@ -63,10 +63,10 @@ def test_another_seed_gives_another_run() -> None:
     key is not an identifier -- it is the tracker's own counter -- so it is the
     same under both seeds, and that is the point of splitting the assertion.
     """
-    seven, seven_changes = scripted(seed=7)
-    eight, eight_changes = scripted(seed=8)
+    seven, seven_log = scripted(seed=7)
+    eight, eight_log = scripted(seed=8)
     assert [row["id"] for row in seven] != [row["id"] for row in eight]
-    assert seven_changes != eight_changes
+    assert seven_log != eight_log
     assert seven[1]["key"] == eight[1]["key"] == "ENG-41"
     assert seven[1]["title"] == eight[1]["title"]
 

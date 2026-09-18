@@ -56,7 +56,7 @@ anything on that branch that assumes an instance is one store is wrong here.
   *Reference:* the old branch's phase 3 whole; the transport did not change and its gate tests
   carry over with the new fields added. *Not reference:* its `SeahavenState` field list.
 
-- [ ] **Phase 4: Remove the old surface.** Delete `Instance.changes()`, `Change`, `render()`,
+- [x] **Phase 4: Remove the old surface.** Delete `Instance.changes()`, `Change`, `render()`,
   `start_session`, `NodeRuntime.session` and `controller_changes`; deprecate `controller_run_sql`
   with `skip_file_prefixes` (ARCH §1, §2.1, §8, §13); drop the fold test's `changes()`
   cross-check, leaving the per-node oracle; move every caller `main` has per FS §11's table --

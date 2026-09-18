@@ -70,9 +70,9 @@ class Tool[**P = ..., R = Any]:
     params: type[pydantic.BaseModel]
     schema: dict[str, Any]
     transaction: bool = True
-    # The framework's own flag, for `controller_run_sql` and `controller_changes`:
-    # they bypass the middleware chain, the transaction and the gate, and are
-    # never listed. `from_function` cannot set it.
+    # The framework's own flag, for `controller_run_sql`: a control tool bypasses
+    # the middleware chain, the transaction and the gate, and is never listed.
+    # `from_function` cannot set it.
     control: bool = False
 
     def __hash__(self) -> int:
