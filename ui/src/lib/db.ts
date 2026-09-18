@@ -143,6 +143,18 @@ export const calls = {
     ),
 }
 
+/**
+ * An opaque id for a record.
+ *
+ * `crypto.randomUUID` is a secure-context API, so it is simply absent from a
+ * console served over plain HTTP from anything but loopback -- which is what a
+ * server bound to `0.0.0.0` gives a browser on another machine. Calling it
+ * there throws before anything can catch it. `getRandomValues` carries no such
+ * restriction, and these ids are IndexedDB keys and React keys, never secrets,
+ * so what matters is that two of them differ.
+ */
 export function newId(): string {
-  return crypto.randomUUID()
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID()
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
 }
