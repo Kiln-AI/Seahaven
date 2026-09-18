@@ -139,7 +139,9 @@ def test_the_typed_client_drives_a_session_end_to_end(world: World) -> None:
     fixture_id = _freeze(world)
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(fixture=fixture_id, seed=7)
-        assert reset.observation.result == {
+        assert isinstance(reset.observation, SeahavenObservation)
+        assert reset.observation.result is None
+        assert reset.observation.metadata == {
             "fixture": fixture_id,
             "now": INSTANT_ISO,
             "tools": 6,
@@ -166,7 +168,8 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
     fixture_id = _freeze(world)
     with serving(world) as url, GenericEnvClient(base_url=url) as env:
         reset = env.reset(fixture=fixture_id)
-        assert reset.observation["result"]["fixture"] == fixture_id
+        assert reset.observation["metadata"]["fixture"] == fixture_id
+        assert reset.metadata == reset.observation["metadata"]
         listed = env.step(ListToolsAction().model_dump()).observation
         assert [tool["name"] for tool in listed["tools"]] == [
             "execute",
@@ -188,6 +191,35 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
         state = env.state()
         assert state["world"] == {"name": world.name, "version": world.version}
         assert state["fixture"]["id"] == fixture_id
+
+
+def test_a_reset_frame_carries_its_facts_at_the_top_level_of_the_envelope(world: World) -> None:
+    """The raw wire, with no client at all: `metadata` is a sibling of `observation`.
+
+    OpenEnv's `serialize_observation` copies a non-empty `metadata` to the top
+    level of the envelope so a client that knows nothing of an environment's
+    observation class still finds it, and nothing does that for `result`. That
+    hoist is the reason a reset answers its facts in `metadata`, so it is
+    asserted here off the JSON itself rather than off either client's parse.
+    """
+    fixture_id = _freeze(world)
+    with serving(world) as url:
+        frame = asyncio.run(_raw_reset(url, fixture=fixture_id))
+    assert frame["type"] == "observation"
+    facts = {"fixture": fixture_id, "now": INSTANT_ISO, "tools": 6}
+    assert frame["data"] == {
+        "observation": {"metadata": facts},
+        "reward": None,
+        "done": False,
+        "metadata": facts,
+    }
+
+
+async def _raw_reset(url: str, **arguments: Any) -> dict[str, Any]:
+    """Reset a `/ws` session and answer the reply frame as the JSON it arrived as."""
+    async with ws_connect(convert_to_ws_url(url) + "/ws", proxy=None) as sock:
+        await sock.send(json.dumps({"type": "reset", "data": arguments}))
+        return dict(json.loads(await sock.recv()))
 
 
 def test_a_tool_error_reaches_the_stock_client_as_data(world: World) -> None:
@@ -395,7 +427,7 @@ def test_an_unknown_reset_kwarg_is_an_error_frame_and_the_session_survives(world
         with pytest.raises(RuntimeError, match=r"unknown reset argument\(s\)"):
             env.reset(nonsense=1)
         reset = env.reset(now=INSTANT_ISO)
-        assert reset.observation.result["now"] == INSTANT_ISO
+        assert reset.observation.metadata["now"] == INSTANT_ISO
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
@@ -769,7 +801,21 @@ def test_the_web_interface_holds_an_episode_and_names_the_world(
         metadata = _request(url + "/web/metadata")
         published = _request(url + "/metadata")
     assert reset[0] == 200, reset
-    assert reset[1]["observation"]["result"]["fixture"] is None
+    # A reset answers a plain `Observation` carrying its facts in `metadata`,
+    # and OpenEnv's serializer (`core/env_server/serialization.py:137-175` in
+    # openenv 0.4.2) hoists a non-empty `metadata` to the top level of
+    # the envelope beside `observation`, which is why the same three facts stand
+    # twice. `result` belongs to a tool call and a reset calls no tool.
+    facts = reset[1]["metadata"]
+    assert reset[1] == {
+        "observation": {"metadata": facts},
+        "reward": None,
+        "done": False,
+        "metadata": facts,
+    }
+    assert sorted(facts) == ["fixture", "now", "tools"]
+    assert facts["fixture"] is None
+    assert facts["tools"] == 6
     # The step runs against the instance the reset made: a second environment,
     # or none, answers `reset first` instead of a rowcount.
     assert stepped[0] == 200, stepped
@@ -788,6 +834,56 @@ def test_the_web_interface_holds_an_episode_and_names_the_world(
     assert metadata[1]["description"] == f"{world.name} environment"
     assert published[0] == 200, published
     assert published[1]["description"] == world.description
+
+
+def test_the_refusals_survive_the_web_interfaces_extra_routes_and_mount(
+    monkeypatch: pytest.MonkeyPatch, world: World
+) -> None:
+    """The HTTP refusals again, in the one configuration every pushed world runs in.
+
+    `_refuse_http_episode_control` and `_refuse_mcp_transport` swap handlers by
+    walking `served.router.routes` after `create_app` has returned and replacing
+    entries in place, matched on the route's class and its path. With
+    `ENABLE_WEB_INTERFACE=true` that app is a different app: seven more routes
+    and a Gradio sub-app mounted at `/web`. The swaps still find the three HTTP
+    episode-control routes and the `POST /mcp` route -- a mount is a `Mount` and
+    not an `APIRoute` -- but a swap that stopped matching would not raise.
+    `/reset`, `/step` and `/state` would go back to answering 200 from a
+    throwaway environment, and `POST /mcp` to advertising a tool list whose every
+    entry fails when called, which are the silent wrong answers the refusals
+    exist to prevent.
+
+    The websocket `/mcp` refusal is covered by
+    `test_the_mcp_websocket_refuses_the_same_way_and_then_closes`, with the web
+    interface off, and is not asserted here.
+    """
+    monkeypatch.setenv("ENABLE_WEB_INTERFACE", "true")
+    with serving(world) as url:
+        refused = [
+            (verb, path, _request(url + path, method=verb)) for verb, path in HTTP_EPISODE_CONTROL
+        ]
+        listing = json.dumps(_mcp_request("tools/list")).encode()
+        mcp = _request(url + "/mcp", method="POST", data=listing)
+        health = _request(url + "/health")
+        web = _request(url + "/web/metadata")
+    # The premise, asserted rather than assumed: `/web/metadata` is served only
+    # by the web-interface app, so this fails if `ENABLE_WEB_INTERFACE` ever
+    # stops reaching `create_app` -- a renamed variable, a narrowed set of
+    # accepted values (`http_server.py:1755` takes only `true`, `1` and `yes`),
+    # a `serving()` that no longer builds the app eagerly -- and the rest of
+    # this test quietly becomes a duplicate of the refusal tests above.
+    assert web[0] == 200, web
+    for verb, path, (status, body) in refused:
+        assert status == 501, (verb, path, body)
+        refusal = body["detail"]
+        assert refusal["code"] == "http_episode_control_unsupported"
+        assert refusal["details"]["route"] == f"{verb} {path}"
+        assert refusal["details"]["use_instead"] == "/ws"
+    assert mcp[0] == 200, mcp
+    _assert_refused(mcp[1], method="tools/list", request_id=1)
+    # The neighbour that is deliberately not refused, so a swap that widened to
+    # everything it walked past fails here rather than passing quietly.
+    assert health == (200, {"status": "healthy"})
 
 
 # --- the published schema --------------------------------------------------

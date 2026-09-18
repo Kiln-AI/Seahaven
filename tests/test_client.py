@@ -81,6 +81,7 @@ def test_parse_result_answers_a_typed_observation(client: SeahavenClient) -> Non
 def test_parse_result_carries_an_error_through(client: SeahavenClient) -> None:
     error = {"code": "not_found", "message": "no note n9", "details": {"key": "n9"}}
     result = client._parse_result({"observation": {"tool_name": "fetch", "error": error}})
+    assert isinstance(result.observation, SeahavenObservation)
     assert result.observation.error == error
     assert result.observation.result is None
     assert result.done is False
@@ -214,6 +215,29 @@ def test_state_refuses_a_frame_that_does_not_name_a_world(client: SeahavenClient
         client._parse_state({key: value for key, value in DOCUMENT_FRAME.items() if key != "world"})
 
 
+def test_a_reset_frame_parses_through_the_step_hook_with_only_its_metadata(
+    client: SeahavenClient,
+) -> None:
+    """A reset frame comes through `_parse_result`, because the base client has one hook.
+
+    The server answers a reset with a plain `Observation`, and this is what a
+    typed client makes of that frame: a `SeahavenObservation` carrying the facts
+    in `metadata`, with the three fields of a tool call left at their defaults.
+    `reset(...).observation.result` is `None` at runtime, which is why the
+    client is parameterised on `Observation` so that reading it does not
+    type-check.
+    """
+    facts = {"fixture": "start", "now": INSTANT_ISO, "tools": 6}
+    result = client._parse_result(
+        {"observation": {"metadata": facts}, "reward": None, "done": False, "metadata": facts}
+    )
+    assert isinstance(result.observation, SeahavenObservation)
+    assert result.observation.metadata == facts
+    assert (result.observation.tool_name, result.observation.result) == ("", None)
+    assert result.observation.error is None
+    assert (result.reward, result.done, result.metadata) == (None, False, facts)
+
+
 def test_the_observation_model_refuses_a_frame_it_does_not_know(client: SeahavenClient) -> None:
     """`SeahavenObservation` forbids extras, which is why `list_tools` does not use it."""
     with pytest.raises(ValueError, match="tools"):
@@ -226,7 +250,9 @@ def test_the_observation_model_refuses_a_frame_it_does_not_know(client: Seahaven
 def test_the_client_drives_a_world_synchronously(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(now=INSTANT_ISO)
-        assert reset.observation.result["now"] == INSTANT_ISO
+        assert isinstance(reset.observation, SeahavenObservation)
+        assert reset.observation.metadata["now"] == INSTANT_ISO
+        assert reset.observation.result is None
         names = [tool["name"] for tool in env.list_tools()]
         assert "rows" in names and "controller_run_sql" not in names
         assert env.call("execute", sql="INSERT INTO notes VALUES ('n1', 'b', 0)").result == {
@@ -316,17 +342,17 @@ def test_the_client_is_a_context_manager_that_closes_its_session(world: World) -
 # --- the seam under the polite close ---------------------------------------
 
 
-def test_the_disconnect_hook_this_client_overrides_is_still_there() -> None:
-    """The check that fails loudly if OpenEnv ever moves this seam.
+def test_the_private_hook_this_client_overrides_is_still_there() -> None:
+    """The check that fails loudly if OpenEnv ever moves this method.
 
-    `SeahavenClient._disconnect_async` overrides a *private* method of
-    `EnvClient` so that a close waits for the server, which is what keeps a
-    server's log free of a traceback per session; its docstring has the whole
-    story. An OpenEnv that renamed or dropped the method would leave the override
-    defining something nobody calls, and the only symptom would be the noise
-    coming back in somebody else's log. This says so here instead.
+    `SeahavenClient` overrides one *private* method of `EnvClient`.
+    `_disconnect_async` makes a close wait for the server, which is what keeps a
+    server's log free of a traceback per session; its docstring has the story.
+    An OpenEnv that renamed or dropped the method would leave the override
+    defining something nobody calls, and the only symptom would be noise in
+    somebody else's log. This says so here instead.
     """
     assert hasattr(EnvClient, "_disconnect_async"), (
-        "openenv no longer has the disconnect hook SeahavenClient overrides"
+        "openenv no longer has the _disconnect_async hook SeahavenClient overrides"
     )
     assert SeahavenClient._disconnect_async is not EnvClient._disconnect_async

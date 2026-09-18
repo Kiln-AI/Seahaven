@@ -26,6 +26,7 @@ from typing import Any, Self
 from openenv.core.client_types import StepResult
 from openenv.core.env_client import EnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
+from openenv.core.env_server.types import Observation
 
 from seahaven.openenv.env import SeahavenObservation, SeahavenState
 
@@ -37,14 +38,12 @@ __all__ = ["SeahavenClient"]
 CLOSE_TIMEOUT = 5.0
 
 
-class SeahavenClient(
-    EnvClient[CallToolAction | ListToolsAction, SeahavenObservation, SeahavenState]
-):
+class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, SeahavenState]):
     """A connected session on a `seahaven serve` server.
 
     ```python
     with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
-        env.reset(fixture="empty", seed=7)
+        env.reset(fixture="empty", seed=7).observation.metadata  # fixture, now, tools
         tools = env.list_tools()
         obs = env.call("ping", message="hello")
         obs.result, obs.error
@@ -52,6 +51,14 @@ class SeahavenClient(
         state.state["db"]["log"]  # the format's output; here, the change log
         final_state = state.model_dump(exclude={"step_count"})  # the document
     ```
+
+    The observation parameter is OpenEnv's base `Observation`, because a reset
+    and a tool call are not the same shape. The server answers a reset with a
+    plain `Observation` whose `metadata` carries `fixture`, `now` and `tools`,
+    and typing the parameter this way is what keeps `.result` off a reset:
+    `_parse_result` below says what a typed client makes of that frame. `call`,
+    and `step` on a `CallToolAction`, answer a `SeahavenObservation`, the shape
+    of a tool call.
 
     `state()` answers the whole state document (`functional_spec.md` §3.1) plus
     OpenEnv's `step_count`: `.state` is the formatter's output, everything else
@@ -156,13 +163,23 @@ class SeahavenClient(
     def _step_payload(self, action: CallToolAction | ListToolsAction) -> dict[str, Any]:
         return action.model_dump()
 
-    def _parse_result(self, payload: dict[str, Any]) -> StepResult[SeahavenObservation]:
-        """A step or reset frame as a `StepResult` carrying a typed observation.
+    def _parse_result(self, payload: dict[str, Any]) -> StepResult[Observation]:
+        """A reply frame as a `StepResult` carrying a `SeahavenObservation`.
 
-        Used for `reset` and for `CallToolAction` results, which are the frames
-        that carry a `SeahavenObservation`. A `ListToolsAction` answers a
-        `ListToolsObservation`, which has a `tools` list and no `result`; it does
-        not come through here, and `list_tools` below says why.
+        The base client parses the reply to a `step` and the reply to a `reset`
+        through this one hook, so both arrive as a `SeahavenObservation`. A tool
+        call fills `tool_name` and one of `result` and `error`. A reset fills
+        only the inherited `metadata`, because the server answers a reset with a
+        plain `Observation` and this model's own three fields all have defaults.
+
+        Reading `result` off a reset is therefore `None` at runtime rather than
+        an error, which is why this client is parameterised on `Observation`
+        instead: `reset(...).observation.result` does not type-check, and
+        `metadata` is how a reset is read.
+
+        A `ListToolsAction` answers a `ListToolsObservation`, which has a
+        `tools` list and no `result`; it does not come through here, and
+        `list_tools` below says why.
         """
         return StepResult(
             observation=SeahavenObservation.model_validate(payload.get("observation", {})),
@@ -203,8 +220,15 @@ class SeahavenClient(
         return self._dispatch(self._list_tools_async)
 
     async def _call_async(self, tool: str, /, **arguments: Any) -> SeahavenObservation:
-        result = await self._step_async(CallToolAction(tool_name=tool, arguments=arguments))
-        return result.observation
+        # Read off the frame rather than through `_step_async`, whose result is
+        # typed on the base `Observation` this client is parameterised with; a
+        # tool call's observation is the `SeahavenObservation` and this is the
+        # verb that promises one.
+        action = CallToolAction(tool_name=tool, arguments=arguments)
+        response = await self._send_and_receive(
+            {"type": "step", "data": self._step_payload(action)}
+        )
+        return SeahavenObservation.model_validate(response.get("data", {}).get("observation", {}))
 
     async def _list_tools_async(self) -> list[dict[str, Any]]:
         response = await self._send_and_receive(

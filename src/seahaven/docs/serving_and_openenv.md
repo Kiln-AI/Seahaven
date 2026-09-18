@@ -120,6 +120,13 @@ A WebSocket connection is one session, and one session holds one instance.
 `reset` is therefore where a run is customised. One served world covers every scenario a fixture and
 a startup hook can express.
 
+`reset` answers a plain OpenEnv `Observation`, not the shape of a tool call, because no tool was
+called. Its `metadata` carries `fixture`, `now` and `tools` (the fixture the instance was made from,
+the instance's clock, and how many tools the instance lists), and the server also copies that
+`metadata` to the top level of the envelope, so a client that knows nothing of Seahaven's
+observation classes still finds it. `done` is `false` and `reward` is `null`, as on every
+observation.
+
 Listing the tools does not need a `reset`. The tool list belongs to the world rather than to the
 episode, so a client may ask for it before it starts.
 
@@ -333,9 +340,18 @@ only these frames on `ws://host:port/ws`.
 
 | Frame | Meaning |
 |---|---|
-| `{"type": "observation", "data": {"observation": {...}, "reward": null, "done": false}}` | the answer to a `reset` or a `step` |
+| `{"type": "observation", "data": {"observation": {...}, "reward": null, "done": false}}` | the answer to a `reset` or a `step`; a `reset` also carries a top-level `metadata` |
 | `{"type": "state", "data": {...}}` | the answer to a `state` |
 | `{"type": "error", "data": {"code": "...", "message": "..."}}` | a *protocol* failure, not a tool error |
+
+A `reset` and its answer, in full. The `metadata` inside the observation and the `metadata` beside
+it are the same dict, copied to the top level by OpenEnv's serializer:
+
+```json
+{"type": "reset", "data": {"fixture": "small_startup", "seed": 7}}
+
+{"type": "observation", "data": {"observation": {"metadata": {"fixture": "small_startup", "now": "2026-06-01T09:00:00.000Z", "tools": 27}}, "reward": null, "done": false, "metadata": {"fixture": "small_startup", "now": "2026-06-01T09:00:00.000Z", "tools": 27}}}
+```
 
 A tool call and its two possible answers, in full:
 

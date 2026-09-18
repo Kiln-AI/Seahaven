@@ -36,7 +36,7 @@ from openenv.core.env_server.mcp_types import (
     ListToolsAction,
     ListToolsObservation,
 )
-from openenv.core.env_server.types import Action, EnvironmentMetadata, State
+from openenv.core.env_server.types import Action, EnvironmentMetadata, Observation, State
 from pydantic import BaseModel, Field
 
 from seahaven.call import serialise
@@ -70,11 +70,16 @@ INTERNAL_ERROR_MESSAGE = "internal error"
 class SeahavenObservation(CallToolObservation):
     """What a tool call answers with: exactly one of `result` and `error`.
 
+    This is the shape of a `step` on a `CallToolAction`, and of nothing else.
+    `reset` answers a plain `Observation` with `fixture`, `now` and `tools` in
+    its `metadata`: no tool was called, so nothing there is a tool's result.
+
     It subclasses OpenEnv's `CallToolObservation` rather than `Observation` so
     that upstream's MCP `tools/call` path, which checks for that type, keeps
     working. `/mcp` itself is refused, but a `{"type": "mcp"}` frame on a `/ws`
     connection reaches the same check (`http_server.py` line 985 in openenv
-    0.4.2), which answers an internal error to anything that is not one.
+    0.4.2), which answers an internal error to anything that is not one. That
+    check is on the step path only; `reset` has its own handler and no check.
 
     `error` is a tool's own error: data the agent reads, which never closes the
     session, in one shape across every world -- `{"code", "message", "details"}`,
@@ -261,12 +266,19 @@ class SeahavenState(State):
     )
 
 
-class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation, SeahavenState]):
+class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
     """One world, one session, one instance.
 
     The instance lives on the environment object and OpenEnv makes one
     environment object per session, so instance-per-session is true by
     construction rather than by bookkeeping.
+
+    The observation parameter is the base `Observation` because the class
+    answers three shapes: a plain `Observation` from `reset`, and a
+    `SeahavenObservation` or a `ListToolsObservation` from `step`, each of which
+    subclasses it. `GET /schema` does not read this parameter: `app()` in
+    `seahaven.openenv` passes `SeahavenObservation` to `create_app` as the
+    published observation class, which is the shape of a tool call.
     """
 
     # Every instance has its own directory, its own connection and its own lock,
@@ -295,8 +307,17 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
         now: str | None = None,
         state_format: str | None = None,
         **startup_kwargs: Any,
-    ) -> SeahavenObservation:
+    ) -> Observation:
         """Start an episode: a fresh instance, and the session's previous one gone.
+
+        Answers a plain `Observation` whose `metadata` carries `fixture` (the
+        fixture the instance was made from, or `None` for a blank one), `now`
+        (the instance's clock as an ISO-8601 instant) and `tools` (how many the
+        instance lists). It is `metadata` and not a tool result because no tool
+        was called, and because OpenEnv's serializer copies a non-empty
+        `metadata` to the top level of the wire envelope, where a client that
+        knows nothing of Seahaven's observation classes still finds it.
+        `done` is `False` and `reward` is `None`, as on every observation here.
 
         `fixture=None` is a blank instance built from the world's DDL, whose clock
         is the wall time unless `now=` says otherwise; a fixture carries its own
@@ -335,8 +356,8 @@ class SeahavenEnv(Environment[Action, SeahavenObservation | ListToolsObservation
             startup_kwargs=startup_kwargs,
         )
         self._instance = instance
-        return SeahavenObservation(
-            result={
+        return Observation(
+            metadata={
                 "fixture": instance.fixture,
                 "now": instance.clock.iso(),
                 "tools": len(instance.tools()),
