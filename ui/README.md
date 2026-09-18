@@ -9,8 +9,8 @@ Nothing in here is specific to any one environment. It speaks the standard proto
 for the action, observation and state models. An environment that answers those gets a full
 interface without writing any UI code.
 
-> **Status: prototype.** It is complete enough to drive a real environment and is covered by a
-> browser test, but it has not yet been mounted inside a Python environment server.
+> **Status: prototype.** It drives a real environment, is covered by a browser test, and is served
+> by `seahaven serve` at `/ui`.
 
 ## What it does
 
@@ -55,13 +55,21 @@ npm run build && npm run e2e
 
 ## Serving it from an environment
 
-The build is one file with no external requests, so any OpenEnv app can serve it on its own
-origin:
+Seahaven serves the built page at `/ui`, from a copy in its own package
+(`src/seahaven/openenv/ui/index.html`). Rebuild and replace that copy after a change here:
+
+```sh
+npm run build && cp dist/index.html ../src/seahaven/openenv/ui/index.html
+```
+
+The build is one file with no external requests, so any other OpenEnv app can serve it the same
+way:
 
 ```py
 from fastapi.responses import FileResponse
 
 app = ...  # whatever your environment's create_app returned
+
 
 @app.get("/ui", include_in_schema=False)
 def ui() -> FileResponse:

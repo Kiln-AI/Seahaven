@@ -967,6 +967,62 @@ def test_the_world_is_whole_with_the_web_interface_on(
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
+# --- Seahaven's own web interface at /ui -----------------------------------
+
+
+def test_the_ui_is_served_from_the_same_origin_as_the_socket(world: World) -> None:
+    """`GET /ui` answers the built page, and is not in the published schema.
+
+    Same origin is the whole reason this route exists rather than a separate
+    static host: `/schema` and `/metadata` are plain HTTP and OpenEnv registers
+    no CORS middleware, so a page served from anywhere else can open the socket
+    but cannot read either of them. A build that stopped being copied into the
+    package would answer the 501 below instead, which is a different test.
+
+    The route is kept out of the OpenAPI schema because `openenv push` decides
+    what kind of environment an app is by reading path names.
+    """
+    with serving(world) as url:
+        with urllib.request.urlopen(url + "/ui") as response:
+            status = response.status
+            content_type = response.headers.get_content_type()
+            page = response.read()
+        schema = _request(url + "/openapi.json")
+    assert status == 200
+    assert content_type == "text/html"
+    # The built page is one file: the script and the stylesheet are inlined, so
+    # a browser that can reach this route needs nothing else to render it.
+    assert page.lstrip().startswith(b"<!doctype html>")
+    assert b'<div id="root">' in page
+    assert b"<script" in page and b"src=" not in page.split(b"<script")[1].split(b">")[0]
+    assert schema[0] == 200, schema
+    assert "/ui" not in schema[1]["paths"]
+
+
+def test_an_install_without_the_built_page_says_how_to_build_it(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source checkout that never ran the build still serves everything else.
+
+    The page is a build artefact copied into the package, so it can be missing.
+    The answer is a 501 that names the two commands, rather than a stack trace
+    or an empty 200, and the rest of the server is untouched.
+    """
+    monkeypatch.setattr("seahaven.openenv.UI_FILE", tmp_path / "not-built" / "index.html")
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        refused = urllib.request.Request(url + "/ui")
+        try:
+            with urllib.request.urlopen(refused) as response:
+                status, page = response.status, response.read()
+        except urllib.error.HTTPError as error:
+            status, page = error.code, error.read()
+        env.reset()
+        rows = env.call("rows", sql="SELECT 1 AS n").result
+    assert status == 501
+    assert b"npm run build" in page
+    assert rows == [{"n": 1}]
+
+
 # --- the idle reaper -------------------------------------------------------
 
 

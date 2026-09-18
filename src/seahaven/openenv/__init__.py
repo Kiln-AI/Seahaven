@@ -18,9 +18,11 @@ app, mounted at `/`, which is the shape a hub expects.
 
 import json
 from contextlib import suppress
+from pathlib import Path
 from typing import Any, NoReturn
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from openenv.core.env_server.http_server import create_app
 from openenv.core.env_server.mcp_types import (
@@ -418,6 +420,49 @@ def _refuse_mcp_transport(served: FastAPI) -> None:
             served.router.routes[index] = _refusing_mcp_websocket(route)
 
 
+# The built web interface: one self-contained HTML file with no sibling assets
+# and no request on load, which is why serving it is a route and not a static
+# directory. It is built from `ui/` in the repository (`npm run build`) and
+# copied here, so it travels in the wheel like `docs/` and `cli/templates/` do.
+UI_FILE = Path(__file__).parent / "ui" / "index.html"
+
+UI_MISSING = """<!doctype html>
+<title>No web interface in this install</title>
+<body style="font: 15px system-ui; max-width: 40rem; margin: 4rem auto">
+<h1>No web interface in this install</h1>
+<p>Seahaven serves a built file that is not in this install. Build it from a
+checkout of the Seahaven repository:</p>
+<pre>cd ui &amp;&amp; npm install &amp;&amp; npm run build
+cp dist/index.html ../src/seahaven/openenv/ui/index.html</pre>
+<p>Everything else on this server is unaffected: drive the world over
+<code>/ws</code>.</p>
+</body>"""
+
+
+def _serve_ui(served: FastAPI) -> None:
+    """Add `GET /ui`, the web interface, on the same origin as `/ws`.
+
+    Same origin is the point. The socket works from anywhere, but `/schema` and
+    `/metadata` are plain HTTP and OpenEnv registers no CORS middleware, so a
+    page served from somewhere else cannot read them. Served from here, the
+    interface gets the world's schema and metadata as well as its tools.
+
+    The route is kept out of the OpenAPI schema. `openenv push` decides what
+    kind of environment an app is by reading path names, and a path it does not
+    know is one more thing for that check to have an opinion about.
+    """
+
+    # Annotated `Response` and not the union of the two returned: FastAPI builds
+    # a response model from a return annotation, and a union of two response
+    # classes is not a type it can build one from.
+    @served.get("/ui", include_in_schema=False)
+    @served.get("/ui/", include_in_schema=False)
+    def ui() -> Response:
+        if not UI_FILE.is_file():
+            return HTMLResponse(UI_MISSING, status_code=501)
+        return FileResponse(UI_FILE, media_type="text/html")
+
+
 def app(
     world: World,
     *,
@@ -482,4 +527,5 @@ def app(
     )
     _refuse_http_episode_control(served)
     _refuse_mcp_transport(served)
+    _serve_ui(served)
     return served

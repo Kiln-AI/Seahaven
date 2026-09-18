@@ -420,14 +420,16 @@ function Node({
   name,
   value,
   depth,
+  openDepth,
   descriptions,
 }: {
   name: string | null
   value: unknown
   depth: number
+  openDepth: number
   descriptions?: Record<string, string>
 }) {
-  const [open, setOpen] = useState(depth < 2)
+  const [open, setOpen] = useState(depth < openDepth)
   const description = name ? descriptions?.[name] : undefined
 
   if (!isCollection(value)) {
@@ -469,7 +471,14 @@ function Node({
             <div className="py-px pl-4 text-faint">empty</div>
           ) : (
             entries.map(([key, item]) => (
-              <Node key={key} name={key} value={item} depth={depth + 1} descriptions={descriptions} />
+              <Node
+                key={key}
+                name={key}
+                value={item}
+                depth={depth + 1}
+                openDepth={openDepth}
+                descriptions={descriptions}
+              />
             ))
           )}
         </div>
@@ -486,13 +495,16 @@ function Node({
 export function JsonView({
   value,
   descriptions,
+  openDepth = 2,
 }: {
   value: unknown
   descriptions?: Record<string, string>
+  /** How many levels start expanded. A state document is worth opening deeper. */
+  openDepth?: number
 }) {
   return (
     <div className="overflow-x-auto font-mono text-[12.5px] leading-[1.7]">
-      <Node name={null} value={value} depth={0} descriptions={descriptions} />
+      <Node name={null} value={value} depth={0} openDepth={openDepth} descriptions={descriptions} />
     </div>
   )
 }

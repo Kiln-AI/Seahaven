@@ -413,7 +413,7 @@ export function StatePanel({
       </div>
       {shown ? (
         <div className="rounded-lg border border-border bg-surface p-3">
-          <JsonView value={shown} descriptions={descriptions} />
+          <JsonView value={shown} descriptions={descriptions} openDepth={4} />
         </div>
       ) : (
         <p className="text-[13px] text-muted">
