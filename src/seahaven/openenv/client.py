@@ -34,7 +34,7 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         env.reset(fixture="empty", seed=7).observation.metadata  # fixture, now, tools
         tools = env.list_tools()
         obs = env.call("ping", message="hello")
-        obs.result, obs.error
+        obs.result, obs.error, obs.seahaven_error
         state = env.state()
         state.state["db"]["log"]  # the format's output; here, the change log
         final_state = state.model_dump(exclude={"step_count"})  # the document
@@ -55,12 +55,15 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
     `final_state` -- byte for byte what `inst.state()` answers in process.
     `reset(state_format=...)` chooses the format for the episode.
 
-    A tool error arrives on the observation and never raises: `obs.error` is the
-    `{"code", "message", "details"}` the world produced, and exactly one of
-    `obs.result` and `obs.error` is set. Only a framework or protocol failure --
-    a `WorldBug` out of a world's own code, a malformed frame, a closed
-    connection -- raises, as `RuntimeError`, which is the stock client's
-    behaviour too.
+    A tool error arrives on the observation and never raises, and exactly one of
+    `obs.result` and `obs.error` is set. `obs.error` is OpenEnv's own
+    `{error_type, message}`, and `obs.seahaven_error` is the
+    `{"code", "message", "details"}` the world produced. Only a framework or
+    protocol failure -- a `WorldBug` out of a world's own code, a malformed
+    frame, a closed connection -- raises, as `RuntimeError`, which is the stock
+    client's behaviour too. A `WorldBug` raises with the fixed message the server
+    sends for one, `internal error (<id>)`; the author's own wording and its
+    traceback are in the server's log under that id.
     """
 
     def __init__(
@@ -117,9 +120,11 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
 
         The base client parses the reply to a `step` and the reply to a `reset`
         through this one hook, so both arrive as a `SeahavenObservation`. A tool
-        call fills `tool_name` and one of `result` and `error`. A reset fills
-        only the inherited `metadata`, because the server answers a reset with a
-        plain `Observation` and this model's own three fields all have defaults.
+        call fills `tool_name` and one of `result` and `error`, and an error also
+        fills `metadata["seahaven_error"]`, which `obs.seahaven_error` reads. A
+        reset fills only the inherited `metadata`, because the server answers a
+        reset with a plain `Observation` and this model's own three fields all
+        have defaults.
 
         Reading `result` off a reset is therefore `None` at runtime rather than
         an error, which is why this client is parameterised on `Observation`
@@ -145,7 +150,7 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
 
         The observation, not the `StepResult` around it: a Seahaven step is never
         done and never rewarded, so the wrapper carries nothing a caller of this
-        client wants. Read `.result` or `.error`.
+        client wants. Read `.result`, or `.error` and `.seahaven_error`.
 
         The tool name is positional-only, as `Instance.call`'s is, and for the
         same reason: a world is free to declare a tool argument called `tool` --

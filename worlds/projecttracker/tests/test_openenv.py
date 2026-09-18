@@ -158,8 +158,15 @@ def test_this_worlds_error_words_survive_the_wire() -> None:
             ).model_dump()
         )
         assert result.observation["result"] is None
-        assert result.observation["error"]["code"] == "INVALID_INPUT"
-        assert result.observation["error"]["details"] == {"field": "email"}
+        # Upstream's two-key shape carries the text; this world's own vocabulary
+        # -- the code it chose and the field it names -- rides beside it.
+        assert result.observation["error"] == {
+            "error_type": "execution_error",
+            "message": "email: 'nope' is not an email address",
+        }
+        seahaven_error = result.observation["metadata"]["seahaven_error"]
+        assert seahaven_error["code"] == "INVALID_INPUT"
+        assert seahaven_error["details"] == {"field": "email"}
 
 
 def test_control_tools_are_not_served_by_this_worlds_app() -> None:
@@ -167,7 +174,7 @@ def test_control_tools_are_not_served_by_this_worlds_app() -> None:
     with serving() as url, SeahavenClient(base_url=url) as env:
         env.reset(fixture="empty")
         assert "controller_run_sql" not in {tool["name"] for tool in env.list_tools()}
-        assert env.call("controller_run_sql", sql="SELECT 1").error == {
+        assert env.call("controller_run_sql", sql="SELECT 1").seahaven_error == {
             "code": "unknown_tool",
             "message": "unknown tool: controller_run_sql",
             "details": {"name": "controller_run_sql"},

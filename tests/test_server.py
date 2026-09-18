@@ -15,6 +15,7 @@ import asyncio
 import copy
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -47,7 +48,13 @@ pytest.importorskip(
 from fastapi import WebSocket
 from fastapi.routing import APIWebSocketRoute
 from openenv import GenericEnvClient
-from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
+from openenv.core.env_server.mcp_types import (
+    CallToolAction,
+    CallToolObservation,
+    ListToolsAction,
+    ToolErrorType,
+)
+from openenv.core.mcp_client import MCPToolClient
 from openenv.core.utils import convert_to_ws_url
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosedOK
@@ -231,13 +238,148 @@ def test_a_tool_error_reaches_the_stock_client_as_data(world: World) -> None:
     with serving(world) as url, GenericEnvClient(base_url=url) as env:
         env.reset()
         result = env.step(CallToolAction(tool_name="no_such_tool").model_dump())
-        assert result.observation["error"]["code"] == "unknown_tool"
+        assert result.observation["error"] == {
+            "error_type": "tool_not_found",
+            "message": "unknown tool: no_such_tool",
+        }
+        assert result.observation["metadata"]["seahaven_error"]["code"] == "unknown_tool"
         assert result.done is False
         assert result.reward is None
 
 
-def test_a_world_bug_reaches_the_client_as_an_error_frame(tmp_path: Path) -> None:
-    """The author's bug is loud on the wire, and the session survives it."""
+# --- the shape of an error, against upstream's own models -------------------
+
+# One call of each kind this server can answer, in one session: a result, a name
+# the world does not have, arguments that do not validate, a world's own error,
+# and a Python exception nobody planned for. Every assertion below is driven
+# through this list, so a class that is added here is a class every one of them
+# covers.
+ERROR_CLASSES: list[CallToolAction] = [
+    CallToolAction(tool_name="rows", arguments={"sql": "SELECT 1 AS n"}),
+    CallToolAction(tool_name="no_such_tool"),
+    CallToolAction(tool_name="rows", arguments={"sql": 7}),
+    CallToolAction(tool_name="write_then_fail", arguments={"sql": "SELECT 1"}),
+    CallToolAction(tool_name="crash"),
+]
+
+EXPECTED_TYPES = [None, "tool_not_found", "invalid_args", "execution_error", "execution_error"]
+
+
+async def _raw_steps(url: str, actions: list[CallToolAction]) -> list[dict[str, Any]]:
+    """One session: reset, then every action, answering each reply as it arrived."""
+    async with ws_connect(convert_to_ws_url(url) + "/ws", proxy=None) as sock:
+        await sock.send(json.dumps({"type": "reset", "data": {}}))
+        await sock.recv()
+        frames = []
+        for action in actions:
+            await sock.send(json.dumps({"type": "step", "data": action.model_dump()}))
+            frames.append(dict(json.loads(await sock.recv())))
+        return frames
+
+
+def test_upstreams_own_observation_model_parses_every_frame(world: World) -> None:
+    """`CallToolObservation` forbids extra keys, so this is the conformance gate.
+
+    It is asserted off the raw JSON rather than off a client's parse, because the
+    frame is what upstream's model is handed.
+    """
+    with serving(world) as url:
+        frames = asyncio.run(_raw_steps(url, ERROR_CLASSES))
+
+    assert "a bug in world code" not in json.dumps(frames, ensure_ascii=False)
+    parsed = [CallToolObservation.model_validate(frame["data"]["observation"]) for frame in frames]
+    assert [None if o.error is None else o.error.error_type.value for o in parsed] == EXPECTED_TYPES
+    # The triple is on the frame all the same, in the one place `Observation`
+    # leaves free, and OpenEnv's serializer hoists it beside the observation too.
+    codes = [frame["data"]["observation"]["metadata"].get("seahaven_error") for frame in frames]
+    assert [None if code is None else code["code"] for code in codes] == [
+        None,
+        "unknown_tool",
+        "invalid_arguments",
+        "boom",
+        "internal",
+    ]
+    assert [frame["data"].get("metadata") for frame in frames[1:]] == [
+        frame["data"]["observation"]["metadata"] for frame in frames[1:]
+    ]
+
+
+def test_upstreams_tool_client_reads_an_error_as_data_and_raises_legibly(world: World) -> None:
+    """The client Seahaven used to break: `step` parses, `call_tool` raises in words.
+
+    `MCPToolClient.call_tool` raises on any non-null `error`, conformant or not
+    (`mcp_client.py` lines 538-542 in openenv 0.5.0). What the shape fixes is
+    which failure: a `RuntimeError` naming the message and the type, rather than
+    a pydantic `ValidationError` three fields deep in the parse. That parse is
+    `MCPClientBase._parse_result`, whose `ToolError(**obs_data["error"])` is the
+    line the old shape broke on.
+
+    `use_production_mode` is turned off because this client otherwise opens its
+    session over `/mcp`, which Seahaven refuses on purpose (see
+    `seahaven/openenv/__init__.py`). Off, it drives `/ws` like every other
+    client here and parses replies through the same MCP code path.
+    """
+
+    async def drive(url: str) -> None:
+        client = MCPToolClient(base_url=url)
+        client.use_production_mode = False
+        # `client`, not what `async with` answers: the base client's `__aenter__`
+        # is typed on `EnvClient`, which has neither of the two verbs under test.
+        async with client:
+            await client.reset()
+            result = await client.step(CallToolAction(tool_name="no_such_tool"))
+            observation = result.observation
+            assert isinstance(observation, CallToolObservation)
+            assert observation.error is not None
+            assert observation.error.error_type is ToolErrorType.TOOL_NOT_FOUND
+            assert observation.metadata["seahaven_error"]["details"] == {"name": "no_such_tool"}
+            with pytest.raises(RuntimeError) as raised:
+                await client.call_tool("no_such_tool")
+            assert "unknown tool: no_such_tool" in str(raised.value)
+            assert "tool_not_found" in str(raised.value)
+            # And the session is still good: a tool error is data, not a failure.
+            assert await client.call_tool("rows", sql="SELECT 1 AS n") == [{"n": 1}]
+
+    with serving(world) as url:
+        asyncio.run(drive(url))
+
+
+def test_a_world_bug_reaches_the_client_as_an_error_frame_saying_nothing(tmp_path: Path) -> None:
+    """The author's bug is loud on the wire, and says nothing on it.
+
+    OpenEnv renders a raised exception as `WSErrorResponse(data={"message":
+    str(e)})`, so the frame is the boundary: the call still hard-fails, and what
+    the client is told is "internal error" and a correlation id. The session
+    survives, as it did before.
+    """
+    world = build_world(tmp_path)
+
+    @world.tool
+    def misuse(ctx: Ctx) -> None:
+        """Fail the way a broken world fails."""
+        raise WorldBug("the world is wrong")
+
+    with serving(world) as url:
+        frames = asyncio.run(_raw_steps(url, [CallToolAction(tool_name="misuse")]))
+        with SeahavenClient(base_url=url) as env:
+            env.reset()
+            with pytest.raises(RuntimeError) as raised:
+                env.call("misuse")
+            assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+
+    assert "the world is wrong" not in json.dumps(frames, ensure_ascii=False)
+    assert frames[0]["type"] == "error"
+    assert re.fullmatch(r"internal error \([0-9a-f]+\)", frames[0]["data"]["message"])
+    assert "the world is wrong" not in str(raised.value)
+
+
+def test_the_state_document_over_the_wire_carries_no_internals(tmp_path: Path) -> None:
+    """The third boundary, driven end to end with one call of each class in one episode.
+
+    `seahaven.state+calls/1` is the format that publishes the call log, and a
+    harness reading a trace reads this document. What a world wrote for the agent
+    is in it; a `WorldBug`'s wording and a Python exception's are not.
+    """
     world = build_world(tmp_path)
 
     @world.tool
@@ -246,10 +388,21 @@ def test_a_world_bug_reaches_the_client_as_an_error_frame(tmp_path: Path) -> Non
         raise WorldBug("the world is wrong")
 
     with serving(world) as url, SeahavenClient(base_url=url) as env:
-        env.reset()
-        with pytest.raises(RuntimeError, match="the world is wrong"):
+        env.reset(state_format="seahaven.state+calls/1")
+        env.call("write_then_fail", sql=insert("n1"))
+        with pytest.raises(RuntimeError):
             env.call("misuse")
-        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+        env.call("crash")
+        document = env.state()
+
+    assert [entry["error"] for entry in document.state["calls"]] == [
+        "it did not work out",
+        "internal error",
+        "internal error",
+    ]
+    rendered = json.dumps(document.model_dump(), default=str, ensure_ascii=False)
+    assert "the world is wrong" not in rendered
+    assert "a bug in world code" not in rendered
 
 
 # --- the state document, over the wire: the gate ----------------------------
@@ -470,7 +623,7 @@ def test_the_control_tool_is_unknown_without_the_flag(world: World) -> None:
         env.reset()
         assert "controller_run_sql" not in [tool["name"] for tool in env.list_tools()]
         observation = env.call("controller_run_sql", sql="SELECT 1")
-        assert observation.error == {
+        assert observation.seahaven_error == {
             "code": "unknown_tool",
             "message": "unknown tool: controller_run_sql",
             "details": {"name": "controller_run_sql"},

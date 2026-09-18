@@ -741,17 +741,27 @@ class Instance:
 
         The arguments are copied on entry, before the chain runs, so the record
         is the call as made rather than whatever a tool left in the dict it was
-        handed. `error` is the message of whatever the chain raised.
+        handed. `error` is the message of whatever the chain raised, recorded as
+        it was raised: an author reading the log in process is reading their own
+        world's failure, and `CallRecord.to_dict` is where a message that was
+        never written for an agent stops.
         """
         given = _copied_arguments(arguments)
         error: str | None = None
+        tool_error = False
         try:
             yield
         except BaseException as raised:
             error = str(raised)
+            # The world's error handler runs inside the chain, so by the time an
+            # exception reaches here the world has already had its say: what
+            # arrives as a `ToolError` is what the world chose to tell the agent.
+            tool_error = isinstance(raised, ToolError)
             raise
         finally:
-            self._calls.append(CallRecord(tool=name, arguments=given, error=error))
+            self._calls.append(
+                CallRecord(tool=name, arguments=given, error=error, tool_error=tool_error)
+            )
 
     def _current_composition(self) -> Composition:
         """The world's tree, refusing one that has grown or lost a node since creation.

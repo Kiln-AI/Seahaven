@@ -279,6 +279,42 @@ def test_calls_carries_the_call_log_indexed_by_the_records_ordinal(world: World)
     }
 
 
+def test_the_calls_document_publishes_only_what_a_world_wrote_for_the_agent(
+    tmp_path: Path,
+) -> None:
+    """The document is a wire boundary, and three classes of error arrive at it.
+
+    OpenEnv's `StepEnvSessionAdapter` puts the whole document into every trace
+    entry, so a harness that renders a trace back into a model's context would
+    otherwise read a `WorldBug`'s wording, or a Python exception's, to the agent.
+    A `ToolError` is published as written; the other two become the generic error.
+    """
+    world = build_world(tmp_path)
+
+    @world.tool
+    def misuse(ctx: Ctx) -> None:
+        """Fail the way a broken world fails."""
+        raise WorldBug("the fixture names a table this world does not have")
+
+    with world.instance(None, state_format=SEAHAVEN_STATE_CALLS_V1) as live:
+        with pytest.raises(Boom):
+            live.call("write_then_fail", sql="INSERT INTO notes VALUES ('n1', 'never', 0)")
+        with pytest.raises(WorldBug):
+            live.call("misuse")
+        with pytest.raises(ValueError):
+            live.call("crash")
+
+        published = [entry["error"] for entry in live.state()["state"]["calls"]]
+        # In process nothing is hidden: the author's own message is still there.
+        assert [record.error for record in live.call_log()] == [
+            "it did not work out",
+            "the fixture names a table this world does not have",
+            "a bug in world code",
+        ]
+
+    assert published == ["it did not work out", "internal error", "internal error"]
+
+
 def test_an_argument_that_cannot_be_deep_copied_still_reaches_the_calls_document(
     tmp_path: Path,
 ) -> None:

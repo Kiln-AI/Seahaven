@@ -348,8 +348,14 @@ row".
 call_record.tool  # the tool's name as the caller gave it
 call_record.arguments  # a copy of the arguments the call carried, never re-serialised
 call_record.error  # the message of whatever the call raised, or None
+call_record.tool_error  # whether that was a ToolError: an error the world wrote for the agent
 call_record.to_dict()  # the published shape, as `seahaven.state+calls/1` writes it
 ```
+
+`error` is the real message whichever class of error it was, because an author debugging their own
+world reads it. `to_dict()` is the boundary: it publishes a `ToolError`'s message as written, and
+anything else — a `WorldBug`, a Python exception the world did not plan for — as `internal error`
+([../state.md](../state.md#reconcile-a-trace-the-document-cannot-see-seahavenstatecalls1)).
 
 `inst.call_log()` answers these in dispatch order, so `[i]` is the call a log record's `i` names.
 Under composition `tool` is the name on the root's tool surface, prefix included, rather than the
@@ -427,8 +433,15 @@ SeahavenError
 ```
 
 `ToolError.to_dict()` is `{"code", "message", "details"}`, the same shape in process and over the
-wire. Seahaven's own three codes are `invalid_arguments`, `db_error` and `unknown_tool`. A world's
-codes are its own.
+wire, where it travels in the observation's `metadata["seahaven_error"]`. Seahaven's own three codes
+are `invalid_arguments`, `db_error` and `unknown_tool`. A world's codes are its own.
+
+`ToolError.error_type` is the framework's coarse category for the same failure, published beside the
+message as OpenEnv's `error_type`. It is `tool_not_found` on `UnknownTool`, `invalid_args` on
+`ArgumentError` and `execution_error` on everything else, including every error a world defines. A
+world does not set it: a subclass that declares its own `error_type` is refused with a `WorldBug`
+where it is written.
+([../serving_and_openenv.md](../serving_and_openenv.md#calls-results-and-errors) says why).
 
 `DbError` carries SQLite's text but never puts it in the agent-facing message by itself. A world's
 SQL door is where engine text is the right answer, and the `run_sql` tool puts SQLite's message on
@@ -533,6 +546,10 @@ class SeahavenClient:  # .reset(...), .call(tool, /, **arguments), .list_tools()
 # WorldRef, NodeRef, FixtureRef and FileRef, and OpenEnv's own CallToolAction,
 # ListToolsAction and ListToolsObservation.
 ```
+
+`SeahavenClient.call(...)` answers a `SeahavenObservation`. On a failed call its `error` is
+OpenEnv's own `{error_type, message}` model and its `seahaven_error` is the world's
+`{code, message, details}` triple, read from `metadata["seahaven_error"]`.
 
 `SeahavenClient.state()` answers a `SeahavenState`: the state document, plus OpenEnv's
 `step_count`. Every envelope field of the document is a typed field on it, with `world` a

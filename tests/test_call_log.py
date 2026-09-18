@@ -82,6 +82,24 @@ def test_any_other_exception_is_logged_with_its_message(instance: Instance) -> N
     assert len(instance.call_log()) == instance.call_count == 1
 
 
+def test_a_record_says_which_class_its_error_was(instance: Instance) -> None:
+    """The class is what the published shape sorts on; the message is what an author reads."""
+    with pytest.raises(Boom):
+        instance.call("write_then_fail", sql="INSERT INTO notes VALUES ('n1', 'body', 0)")
+    with pytest.raises(ValueError):
+        instance.call("crash")
+
+    written_for_the_agent, accident = instance.call_log()
+
+    assert (written_for_the_agent.tool_error, written_for_the_agent.error) == (
+        True,
+        "it did not work out",
+    )
+    assert (accident.tool_error, accident.error) == (False, "a bug in world code")
+    assert written_for_the_agent.to_dict()["error"] == "it did not work out"
+    assert accident.to_dict()["error"] == "internal error"
+
+
 def test_a_refused_name_a_control_tool_and_a_listing_are_not_entries(instance: Instance) -> None:
     with pytest.raises(UnknownTool):
         instance.call("no_such_tool")

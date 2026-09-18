@@ -173,8 +173,22 @@ assert calls[2]["error"] == "issue ENG-999 not found"
 An entry is `{tool, arguments, error}`. `tool` is the name the caller used, which under composition
 is the name on the root's tool surface, prefix included. `arguments` is what the call carried,
 copied when the call was made and never re-serialised, so a tool that changes the dict it was
-handed does not change the record. `error` is `null` when the call returned, and the message of
-whatever it raised otherwise.
+handed does not change the record.
+
+`error` is `null` when the call returned. Otherwise it depends on what the call raised, because the
+document is read by a harness and a harness may render it back into a model's context:
+
+| What the call raised | What `error` says |
+|---|---|
+| a `ToolError`, the world's own or the framework's | its message, as the world wrote it |
+| a `WorldBug` | `internal error` |
+| anything else | `internal error` |
+
+A `ToolError` is written for the agent and the agent has already read it on the observation, so it
+is published as it is. The other two are written for the author, and the author reads them in the
+server's log with a traceback and a correlation id, not here. In process nothing is hidden:
+`inst.call_log()` answers `CallRecord`s whose `error` is the real message whatever the class was,
+which is what a world's own tests read.
 
 There is no result, because the harness already has it verbatim and a result can be a whole
 listing, and there are no counts, because every count is one pass over `calls`. Only dispatched

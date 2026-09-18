@@ -9,6 +9,7 @@ same behaviour arrives over a real socket.
 import copy
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,17 @@ from seahaven.openenv.env import (
 pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 
 CONTROL_SQL = "SELECT count(*) AS n FROM notes"
+
+
+def wire_error(observation: SeahavenObservation) -> tuple[str, str] | None:
+    """The conformant half of an error: `(error_type, message)`, or `None`.
+
+    `observation.error` is upstream's `ToolError` model, so this is what a client
+    that knows nothing of Seahaven reads; `observation.seahaven_error` is the
+    triple beside it.
+    """
+    error = observation.error
+    return None if error is None else (error.error_type.value, error.message)
 
 
 @pytest.fixture
@@ -335,7 +347,12 @@ def test_a_tool_error_is_rendered_onto_the_observation(env: SeahavenEnv) -> None
     env.reset()
     observation = call(env, "write_then_fail", sql="INSERT INTO notes VALUES ('n1', 'b', 0)")
     assert observation.result is None
-    assert observation.error == {"code": "boom", "message": "it did not work out", "details": None}
+    assert observation.seahaven_error == {
+        "code": "boom",
+        "message": "it did not work out",
+        "details": None,
+    }
+    assert wire_error(observation) == ("execution_error", "it did not work out")
     assert observation.tool_name == "write_then_fail"
     # The call's transaction rolled back with it, over the wire as in process.
     assert call(env, "rows", sql="SELECT * FROM notes").result == []
@@ -344,19 +361,25 @@ def test_a_tool_error_is_rendered_onto_the_observation(env: SeahavenEnv) -> None
 def test_an_unknown_tool_is_rendered_like_any_tool_error(env: SeahavenEnv) -> None:
     env.reset()
     observation = call(env, "no_such_tool")
-    assert observation.error == {
+    assert observation.seahaven_error == {
         "code": "unknown_tool",
         "message": "unknown tool: no_such_tool",
         "details": {"name": "no_such_tool"},
     }
+    # `TOOL_NOT_FOUND` describes the call, and this call really did name a tool
+    # the world does not have. A world's own `not_found` does not map here.
+    assert wire_error(observation) == ("tool_not_found", "unknown tool: no_such_tool")
 
 
 def test_bad_arguments_are_rendered_as_invalid_arguments(env: SeahavenEnv) -> None:
     env.reset()
     observation = call(env, "rows", sql=7)
+    seahaven_error = observation.seahaven_error
+    assert seahaven_error is not None
+    assert seahaven_error["code"] == "invalid_arguments"
+    assert seahaven_error["details"]["tool"] == "rows"
     assert observation.error is not None
-    assert observation.error["code"] == "invalid_arguments"
-    assert observation.error["details"]["tool"] == "rows"
+    assert observation.error.error_type.value == "invalid_args"
 
 
 # --- step: control tools ---------------------------------------------------
@@ -365,7 +388,7 @@ def test_bad_arguments_are_rendered_as_invalid_arguments(env: SeahavenEnv) -> No
 def test_a_control_tool_is_unknown_without_the_flag(env: SeahavenEnv) -> None:
     env.reset()
     observation = call(env, "controller_run_sql", sql=CONTROL_SQL)
-    assert observation.error == {
+    assert observation.seahaven_error == {
         "code": "unknown_tool",
         "message": "unknown tool: controller_run_sql",
         "details": {"name": "controller_run_sql"},
@@ -396,7 +419,7 @@ def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World, na
     """
     env = SeahavenEnv(world, include_control_tools=True)
     env.reset()
-    assert call(env, name).error == {
+    assert call(env, name).seahaven_error == {
         "code": "unknown_tool",
         "message": f"unknown tool: {name}",
         "details": {"name": name},
@@ -412,17 +435,42 @@ def test_an_unexpected_exception_becomes_the_generic_error_and_is_logged(
     env.reset()
     with caplog.at_level(logging.ERROR, logger="seahaven.openenv.env"):
         observation = call(env, "crash")
-    assert observation.error == {"code": "internal", "message": "internal error", "details": None}
     assert observation.result is None
+    assert wire_error(observation) == ("execution_error", "internal error")
+    seahaven_error = observation.seahaven_error
+    assert seahaven_error is not None
+    assert (seahaven_error["code"], seahaven_error["message"]) == ("internal", "internal error")
     record = next(r for r in caplog.records if r.name == "seahaven.openenv.env")
     assert record.levelno == logging.ERROR
     assert record.exc_info is not None
     assert "ValueError" in caplog.text and "a bug in world code" in caplog.text
-    # Nothing of the engine's reaches the agent.
-    assert "a bug in world code" not in str(observation.error)
+    # Nothing of the engine's reaches the agent, and the correlation id is what
+    # leads from the answer it did get to that traceback.
+    assert "a bug in world code" not in json.dumps(
+        observation.model_dump(), default=str, ensure_ascii=False
+    )
+    assert seahaven_error["details"]["id"] in record.getMessage()
 
 
-def test_a_world_bug_propagates_out_of_step(tmp_path: Path) -> None:
+def test_the_generic_error_carries_a_fresh_correlation_id_each_call(env: SeahavenEnv) -> None:
+    """Fixed code, fixed message, and one varying field, so error text stays matchable."""
+    env.reset()
+    first, second = call(env, "crash"), call(env, "crash")
+    assert first.seahaven_error is not None and second.seahaven_error is not None
+    assert first.error == second.error
+    assert first.seahaven_error["details"]["id"] != second.seahaven_error["details"]["id"]
+
+
+def test_a_world_bug_propagates_out_of_step_with_its_text_scrubbed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """It still hard-fails the frame; what it fails with says nothing.
+
+    OpenEnv renders a raised exception onto the wire as `str(e)`, so the author's
+    own wording would go out verbatim. The frame is the boundary and the message
+    is scrubbed here -- and logged here too, because this scrub takes away the
+    only other place that text appeared.
+    """
     world = build_world(tmp_path)
 
     @world.tool
@@ -432,12 +480,33 @@ def test_a_world_bug_propagates_out_of_step(tmp_path: Path) -> None:
 
     env = SeahavenEnv(world, include_control_tools=False)
     env.reset()
-    with pytest.raises(WorldBug, match="the world is wrong"):
+    with (
+        caplog.at_level(logging.ERROR, logger="seahaven.openenv.env"),
+        pytest.raises(WorldBug) as raised,
+    ):
         call(env, "misuse")
 
+    assert "the world is wrong" not in str(raised.value)
+    correlation = re.fullmatch(r"internal error \(([0-9a-f]+)\)", str(raised.value))
+    assert correlation is not None
+    record = next(r for r in caplog.records if r.name == "seahaven.openenv.env")
+    assert record.exc_info is not None
+    assert "the world is wrong" in caplog.text
+    # The join keys back to the state document, beside the traceback.
+    logged = record.getMessage()
+    assert correlation.group(1) in logged
+    assert env._instance is not None
+    assert env._instance.id in logged and env._instance.episode_id in logged
+    assert world.name in logged and "call 0" in logged
 
-def test_a_seahaven_error_that_is_neither_propagates(tmp_path: Path) -> None:
-    """Caught is `ToolError`; every other `SeahavenError` is the author's, not the agent's."""
+
+def test_a_seahaven_error_that_is_neither_is_scrubbed_the_same_way(tmp_path: Path) -> None:
+    """Caught is `ToolError`; every other `SeahavenError` is the author's, not the agent's.
+
+    The catch is deliberately the whole rest of the hierarchy: a framework error
+    nobody classified is a framework bug, and answering it as data would let an
+    eval score a world that is broken in a way nobody has named yet.
+    """
     world = build_world(tmp_path)
 
     @world.tool
@@ -447,8 +516,38 @@ def test_a_seahaven_error_that_is_neither_propagates(tmp_path: Path) -> None:
 
     env = SeahavenEnv(world, include_control_tools=False)
     env.reset()
-    with pytest.raises(SeahavenError, match="neither kind"):
+    with pytest.raises(WorldBug) as raised:
         call(env, "odd")
+    assert "neither kind" not in str(raised.value)
+    assert raised.value.__cause__ is not None
+    assert str(raised.value.__cause__) == "neither kind"
+
+
+def test_a_failure_before_dispatch_says_so_rather_than_naming_another_call(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The ordinal is a join key, so it is written only when the call really took one."""
+    world = build_world(tmp_path)
+
+    @world.tool
+    def fine(ctx: Ctx) -> int:
+        """Succeed, so there is an earlier call whose ordinal could be borrowed."""
+        return 1
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset()
+    call(env, "fine")
+    # Destroyed under the session: the instance refuses before anything is
+    # dispatched, so no call log entry exists for this one.
+    assert env._instance is not None
+    env._instance.destroy()
+    with (
+        caplog.at_level(logging.ERROR, logger="seahaven.openenv.env"),
+        pytest.raises(WorldBug),
+    ):
+        call(env, "fine")
+    logged = next(r for r in caplog.records if r.name == "seahaven.openenv.env")
+    assert "not dispatched" in logged.getMessage()
 
 
 def test_a_world_error_subclass_is_rendered_with_its_own_code(tmp_path: Path) -> None:
@@ -465,11 +564,15 @@ def test_a_world_error_subclass_is_rendered_with_its_own_code(tmp_path: Path) ->
 
     env = SeahavenEnv(world, include_control_tools=False)
     env.reset()
-    assert call(env, "fetch", key="n9").error == {
+    observation = call(env, "fetch", key="n9")
+    assert observation.seahaven_error == {
         "code": "not_found",
         "message": "no note n9",
         "details": {"key": "n9"},
     }
+    # A world's own `not_found` is a failure of the domain, not of the call: a
+    # `TOOL_NOT_FOUND` here would tell a harness the tool does not exist.
+    assert wire_error(observation) == ("execution_error", "no note n9")
 
 
 def test_an_action_of_neither_kind_is_a_world_bug(env: SeahavenEnv) -> None:
@@ -697,8 +800,10 @@ DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
         "tool_name": "The tool that was called.",
         "result": "The tool's result. A tool error travels in `error`, never here.",
         "error": (
-            "The tool's own error, as `{code, message, details}`, or null when the call "
-            "succeeded. A tool error is data the agent reads: it never ends the session."
+            "The tool's own error, as OpenEnv's `{error_type, message}`, or null when the "
+            "call succeeded. The world's own code and details travel in "
+            '`metadata["seahaven_error"]`. A tool error is data the agent reads: it never '
+            "ends the session."
         ),
     },
     SeahavenState: {
@@ -935,7 +1040,8 @@ def test_a_composite_never_lists_or_serves_a_control_tool(composite: SeahavenEnv
     composite.reset()
     assert not any(tool.name.startswith("controller_") for tool in listing(composite).tools)
     refused = call(composite, "controller_run_sql", sql="SELECT 1")
-    assert refused.error is not None and refused.error["code"] == "unknown_tool"
+    assert refused.seahaven_error is not None
+    assert refused.seahaven_error["code"] == "unknown_tool"
 
 
 def test_a_call_to_a_contributed_tool_runs_against_the_owning_node(
