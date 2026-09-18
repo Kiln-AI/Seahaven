@@ -1,14 +1,16 @@
 """A stock OpenEnv harness against a served world, and what `serving_and_openenv.md` promises it.
 
-`serving_and_openenv.md` §"What a stock harness has to supply" makes four claims
-about upstream code this repository does not own: that `_resolve_env_reward`
+The docs make four claims about upstream code this repository does not own.
+§"Why there are no rewards" closes on three of them: that `_resolve_env_reward`
 raises one exact sentence against a Seahaven rollout, that passing
-`verify_builder=` is the whole fix, that the state document reaches `verify()`
-with no Seahaven-specific code in the harness, and that `reset_kwargs` is where a
-per-step reader chooses the cheaper state format. Every one of them is a fact
-about `openenv`, so every one of them can go stale on a version bump with nothing
+`verify_builder=` is the whole fix, and that the state document reaches
+`verify()` with no Seahaven-specific code in the harness. §"Grading a run" and
+`state.md` make the fourth: that `reset` is where a per-step reader chooses the
+cheaper state format. The docs state each in a clause; each is checked in full
+here, which is why these tests are longer than the prose they guard. Every one is
+a fact about `openenv`, so every one can go stale on a version bump with nothing
 in this repository noticing. That is what these tests are for: a bump that
-changes any of the four fails here, and whoever bumps it fixes the page.
+changes any of the four fails here, and whoever bumps it fixes the docs.
 
 Driven through a real server on a real port, and through OpenEnv's own
 `MCPHarnessAdapter`, because the claims are about what a consumer sees rather
@@ -57,8 +59,8 @@ from openenv.core.llm_client import LLMResponse, ToolCall
 from seahaven.openenv import SeahavenClient
 from tests.serving import serving
 
-# The sentence `serving_and_openenv.md` quotes in a `text` fence. Spelled out
-# here rather than imported, because the page quotes the text and not the name:
+# The sentence `serving_and_openenv.md` quotes. Spelled out here rather than
+# imported, because the page quotes the text and not the name:
 # a reworded exception upstream keeps every import in this file working and
 # makes the page wrong.
 DOCUMENTED_FAILURE = "rollout did not produce an environment reward"
@@ -108,10 +110,10 @@ def model_step(
 
 
 def _session(url: str, **options: Any) -> StepEnvSessionAdapter:
-    """As the page's worked example builds the adapter, without the `verify_builder`.
+    """The adapter as a consumer following the page builds it, without the `verify_builder`.
 
-    The example's `verify_builder` is the one part a caller here supplies for
-    itself, because most of these tests are about the rollout that has no reward.
+    The `verify_builder` is the one part a caller here supplies for itself,
+    because most of these tests are about the rollout that has no reward.
     `now=` is the tests' own addition, so that a document compares equal run to
     run.
     """
@@ -181,8 +183,8 @@ def test_an_env_reward_resolves_where_a_missing_one_raises(
     trace and raises when the two disagree. Neither branch can fire for a
     Seahaven rollout, because no entry of the trace carries a reward at all.
 
-    This is the resolver and not the page's example. The test below is the
-    example.
+    This is the resolver and not the wiring the page tells a consumer to write.
+    The test below is that wiring.
     """
     _, result = rollout
     assert _resolve_env_reward(result, VerifyResult(env_reward=0.75)) == 0.75
@@ -193,11 +195,11 @@ def test_a_verify_builder_is_the_keyword_the_page_tells_a_consumer_to_pass(
 ) -> None:
     """The documented wiring end to end: the keyword, through `verify()`, to the reward.
 
-    The worked example is the one thing on the page a reader pastes, so the
-    keyword's name, the builder's four arguments in order, and the route from
-    `verify()` to `_resolve_env_reward` are all pinned here. The builder grades
-    the document the way the example does, rather than ignoring its arguments,
-    because an argument that moved would otherwise still answer 0.75.
+    `verify_builder` is the one name the page hands a reader, so the keyword,
+    the builder's four arguments in order, and the route from `verify()` to
+    `_resolve_env_reward` are all pinned here. The builder grades the document
+    rather than ignoring its arguments, because an argument that moved would
+    otherwise still answer 0.75.
     """
     seen: dict[str, Any] = {}
 
@@ -244,7 +246,7 @@ def test_the_state_document_reaches_verify_with_no_seahaven_code_in_the_harness(
 def test_the_default_format_repeats_the_whole_log_on_every_step(
     rollout: tuple[StepEnvSessionAdapter, HarnessRolloutResult],
 ) -> None:
-    """Why the page sends a per-step reader elsewhere: each step carries every record so far."""
+    """Why the docs send a per-step reader elsewhere: each step carries every record so far."""
     _, result = rollout
     per_step = [
         len(entry.result.metadata["state"]["state"]["db"]["log"]) for entry in result.tool_trace
@@ -292,7 +294,7 @@ def test_a_collect_run_of_a_seahaven_world_collects_nothing(world: World, tmp_pa
 def test_reset_kwargs_is_where_a_per_step_reader_asks_for_the_cheaper_format(
     world: World,
 ) -> None:
-    """The spelling the page gives, and that it reaches every step and the final document."""
+    """The spelling the docs give, and that it reaches every step and the final document."""
     with serving(world) as url:
         session = _session(url, reset_kwargs={"state_format": "seahaven.state+last_step/1"})
         try:
