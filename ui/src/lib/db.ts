@@ -65,9 +65,7 @@ function open(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains("calls")) {
         // The key is the record's own `id`, which every caller supplies.
-        // `autoIncrement` is kept so that a row written by an older build,
-        // which supplied none, still reads back.
-        const calls = db.createObjectStore("calls", { keyPath: "id", autoIncrement: true })
+        const calls = db.createObjectStore("calls", { keyPath: "id" })
         calls.createIndex("envId", "envId", { unique: false })
       }
     }
