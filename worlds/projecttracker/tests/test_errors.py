@@ -210,10 +210,8 @@ def test_every_tool_an_agent_can_see_has_something_for_it_to_read(
         assert tool["input_schema"]["additionalProperties"] is False
 
 
-def test_the_control_tools_are_not_on_the_list_an_agent_reads(
+def test_the_control_tool_is_not_on_the_list_an_agent_reads(
     instance: seahaven.Instance,
 ) -> None:
-    assert {"controller_run_sql", "controller_changes"} <= set(world.tools)
-    assert {tool["name"] for tool in instance.tools()}.isdisjoint(
-        {"controller_run_sql", "controller_changes"}
-    )
+    assert "controller_run_sql" in world.tools
+    assert "controller_run_sql" not in {tool["name"] for tool in instance.tools()}

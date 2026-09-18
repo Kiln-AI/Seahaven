@@ -1,6 +1,6 @@
-"""A leaf world: two tools, one table, and a startup keyword a host can bind."""
+"""A leaf world: two tools, one table, a startup keyword a host can bind, and a format."""
 
-from payments import startup, tools
+from payments import formats, startup, tools
 from payments.world import world
 
-__all__ = ["startup", "tools", "world"]
+__all__ = ["formats", "startup", "tools", "world"]

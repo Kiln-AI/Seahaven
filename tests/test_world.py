@@ -16,6 +16,7 @@ import pytest
 
 import seahaven
 from seahaven.call import Call, Handler
+from seahaven.composition import epoch
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
 from seahaven.tool import Tool
@@ -30,16 +31,19 @@ SCHEMA = "CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;"
 # A fixed instant, so a fixture frozen in a test carries a clock somebody chose.
 NOW = "2026-01-01T00:00:00.000Z"
 
+# Every world pins a state format; none of the tests below is about which one.
+PIN = "seahaven.state/1"
+
 MODULE_SOURCE = f"""
 from seahaven import World
 
-world = World("generated", "1.0.0", {SCHEMA!r})
+world = World("generated", "1.0.0", {SCHEMA!r}, state_format={PIN!r})
 """
 
 
 @pytest.fixture
 def world(tmp_path: Path) -> World:
-    return World("testworld", "1.0.0", SCHEMA, fixtures_dir=tmp_path / "fixtures")
+    return World("testworld", "1.0.0", SCHEMA, fixtures_dir=tmp_path / "fixtures", state_format=PIN)
 
 
 def echo(ctx: Ctx, word: str) -> dict[str, str]:
@@ -71,7 +75,7 @@ def world_built_in(module_path: Path) -> World:
 
 def test_a_world_is_its_name_its_version_and_its_schema(tmp_path: Path) -> None:
     """`name` and `version` are informational, and go into the sidecar and the metadata."""
-    world = World("projecttracker", "1.2.0", SCHEMA, fixtures_dir=tmp_path)
+    world = World("projecttracker", "1.2.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
 
     assert (world.name, world.version, world.schema) == ("projecttracker", "1.2.0", SCHEMA)
 
@@ -112,7 +116,7 @@ def test_a_world_name_that_is_not_a_directory_name_is_refused(tmp_path: Path, ba
     the root entirely, where the sweep never looks.
     """
     with pytest.raises(WorldBug, match="not a world name"):
-        World(bad, "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+        World(bad, "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
 
 
 def test_a_refused_world_name_says_which_clause_it_broke_and_what_the_rule_is(
@@ -120,7 +124,7 @@ def test_a_refused_world_name_says_which_clause_it_broke_and_what_the_rule_is(
 ) -> None:
     """The report this rule generates is "my world name stopped working"; this answers it."""
     with pytest.raises(WorldBug) as raised:
-        World("café", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+        World("café", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
 
     message = str(raised.value)
     assert "'é'" in message
@@ -134,34 +138,52 @@ def test_a_refused_world_name_says_which_clause_it_broke_and_what_the_rule_is(
     "name", ["payments", "my-world", "my_world", "my world", "World2", "v1.2.3", "projecttracker"]
 )
 def test_the_names_people_use_are_world_names(tmp_path: Path, name: str) -> None:
-    assert World(name, "1.0.0", SCHEMA, fixtures_dir=tmp_path).name == name
+    assert World(name, "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN).name == name
 
 
 def test_a_world_name_is_refused_before_anything_is_built(tmp_path: Path) -> None:
     """The name is checked first, so a bad name reads as a bad name and not as bad DDL."""
     with pytest.raises(WorldBug, match="not a world name"):
-        World("..", "1.0.0", "CREATE TALBE notes (id TEXT PRIMARY KEY);", fixtures_dir=tmp_path)
+        World(
+            "..",
+            "1.0.0",
+            "CREATE TALBE notes (id TEXT PRIMARY KEY);",
+            fixtures_dir=tmp_path,
+            state_format=PIN,
+        )
 
 
 def test_a_dot_inside_a_world_name_is_fine(tmp_path: Path) -> None:
     """Only a *leading* dot is refused: `..` is the traversal, `a.b` is a name."""
-    assert World("a.b", "1.0.0", SCHEMA, fixtures_dir=tmp_path).name == "a.b"
+    assert World("a.b", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN).name == "a.b"
 
 
 def test_the_schema_hash_ignores_layout_and_nothing_else(tmp_path: Path) -> None:
     spaced = "CREATE   TABLE notes\n\t(id TEXT PRIMARY KEY,\n    body TEXT NOT NULL)\n STRICT;\n"
     renamed = SCHEMA.replace("body", "text")
 
-    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
 
-    assert world.schema_hash == World("w", "1.0.0", spaced, fixtures_dir=tmp_path).schema_hash
-    assert world.schema_hash != World("w", "1.0.0", renamed, fixtures_dir=tmp_path).schema_hash
+    assert (
+        world.schema_hash
+        == World("w", "1.0.0", spaced, fixtures_dir=tmp_path, state_format=PIN).schema_hash
+    )
+    assert (
+        world.schema_hash
+        != World("w", "1.0.0", renamed, fixtures_dir=tmp_path, state_format=PIN).schema_hash
+    )
     assert world.schema == SCHEMA
 
 
 def test_a_world_whose_ddl_does_not_execute_cannot_be_built(tmp_path: Path) -> None:
     with pytest.raises(WorldBug) as raised:
-        World("w", "1.0.0", "CREATE TALBE notes (id TEXT PRIMARY KEY);", fixtures_dir=tmp_path)
+        World(
+            "w",
+            "1.0.0",
+            "CREATE TALBE notes (id TEXT PRIMARY KEY);",
+            fixtures_dir=tmp_path,
+            state_format=PIN,
+        )
 
     assert "'w'" in str(raised.value)
     assert 'near "TALBE": syntax error' in str(raised.value)  # SQLite's own words, kept
@@ -169,13 +191,13 @@ def test_a_world_whose_ddl_does_not_execute_cannot_be_built(tmp_path: Path) -> N
 
 def test_the_ddl_rules_belong_to_the_lint_and_not_to_construction(tmp_path: Path) -> None:
     """A table with no `STRICT` and no primary key is a lint finding, not a broken world."""
-    World("w", "1.0.0", "CREATE TABLE notes (id TEXT);", fixtures_dir=tmp_path)
+    World("w", "1.0.0", "CREATE TABLE notes (id TEXT);", fixtures_dir=tmp_path, state_format=PIN)
 
 
 def test_an_explicit_fixtures_dir_is_used_as_given(tmp_path: Path) -> None:
-    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path / "elsewhere").fixtures_dir == (
-        tmp_path / "elsewhere"
-    )
+    assert World(
+        "w", "1.0.0", SCHEMA, fixtures_dir=tmp_path / "elsewhere", state_format=PIN
+    ).fixtures_dir == (tmp_path / "elsewhere")
 
 
 def test_fixtures_are_at_the_project_root_of_a_src_layout(tmp_path: Path) -> None:
@@ -206,7 +228,14 @@ def test_a_copy_keeps_the_registrations_and_freezes_where_it_is_pointed(tmp_path
     into a temporary directory through this, and that is the failure it would
     otherwise get.
     """
-    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path / "here", work_dir=tmp_path / "work")
+    world = World(
+        "w",
+        "1.0.0",
+        SCHEMA,
+        fixtures_dir=tmp_path / "here",
+        work_dir=tmp_path / "work",
+        state_format=PIN,
+    )
     world.tool(echo)
     (tmp_path / "here").mkdir()
     (tmp_path / "there").mkdir()
@@ -235,7 +264,7 @@ def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
     def startup(ctx: Ctx) -> None:
         pass
 
-    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
     world.tool(echo)
 
     elsewhere = copy.copy(world)
@@ -250,6 +279,44 @@ def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
     assert world.middlewares == ()
     assert [hook.fn for hook in elsewhere.startup_hooks] == [startup]
     assert world.startup_hooks == ()
+
+
+def test_a_copy_carries_the_state_formats(tmp_path: Path) -> None:
+    """The fifth registry, snapshotted like the other four."""
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
+
+    @world.state_format("acme.state/1")
+    def acme(world: World, instance: Any) -> dict[str, Any]:
+        """A format the copy is expected to answer to as well."""
+        return {"acme": True}
+
+    twin = copy.copy(world)
+    world.state_format("acme.state/2")(acme)
+
+    assert twin.resolve_state_format("acme.state/1") is acme
+    with pytest.raises(WorldBug, match="has no state format"):
+        twin.resolve_state_format("acme.state/2")
+
+
+def test_registering_a_state_format_does_not_invalidate_a_seal(tmp_path: Path) -> None:
+    """A format is not part of a composition, so nothing about the tree changes when one lands.
+
+    Every other registration verb bumps the epoch, which reseals every world in
+    the process on its next use. This one must not, or an extension registering
+    a format would reseal a tree that has live instances.
+    """
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
+    world.tool(echo)
+    sealed = world.composition()
+    before = epoch()
+
+    @world.state_format("acme.state/1")
+    def acme(world: World, instance: Any) -> dict[str, Any]:
+        """Registered after the seal, and the seal stands."""
+        return {}
+
+    assert epoch() == before
+    assert world.composition() is sealed
 
 
 def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path, ctx: Ctx) -> None:
@@ -270,7 +337,7 @@ def test_a_copy_is_a_snapshot_the_original_cannot_reach_either(tmp_path: Path, c
     def startup(ctx: Ctx) -> None:
         pass
 
-    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
     world.tool(echo)
     elsewhere = copy.copy(world)
 
@@ -298,12 +365,13 @@ def test_the_working_directory_and_untracked_tables_are_carried(tmp_path: Path) 
         fixtures_dir=tmp_path,
         work_dir=tmp_path / "work",
         untracked_tables=["audit", "sessions"],
+        state_format=PIN,
     )
 
     assert world.work_dir == tmp_path / "work"
     assert world.untracked_tables == ("audit", "sessions")
     # `None` is the default: a per-process temporary directory, resolved later.
-    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path).work_dir is None
+    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN).work_dir is None
 
 
 def test_the_description_is_kept_as_given_and_carried_by_a_copy(tmp_path: Path) -> None:
@@ -314,12 +382,19 @@ def test_the_description_is_kept_as_given_and_carried_by_a_copy(tmp_path: Path) 
     there is no rule to enforce -- an empty string is accepted here and falls
     back at publication, which `tests/test_env.py` pins.
     """
-    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="  A world.  ")
+    world = World(
+        "w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="  A world.  ", state_format=PIN
+    )
 
     assert world.description == "  A world.  "
     assert copy.copy(world).description == "  A world.  "
-    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path).description is None
-    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="").description == ""
+    assert World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN).description is None
+    assert (
+        World(
+            "w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, description="", state_format=PIN
+        ).description
+        == ""
+    )
 
 
 def test_the_registry_is_ordered_and_read_only(world: World) -> None:
@@ -381,7 +456,7 @@ def test_a_function_that_cannot_be_a_dictionary_key_cannot_be_a_tool(world: Worl
 
 
 def test_a_copy_snapshots_the_inverted_registry_too(tmp_path: Path) -> None:
-    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path)
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
     world.tool(echo)
     elsewhere = copy.copy(world)
 
@@ -404,10 +479,9 @@ def test_the_environment_verbs_are_not_tool_names(world: World, name: str) -> No
         world.tool(echo, name=name)
 
 
-@pytest.mark.parametrize("name", ["controller_run_sql", "controller_changes"])
-def test_a_control_tool_name_is_not_a_tool_name(world: World, name: str) -> None:
+def test_a_control_tool_name_is_not_a_tool_name(world: World) -> None:
     with pytest.raises(WorldBug, match="control tool"):
-        world.tool(echo, name=name)
+        world.tool(echo, name="controller_run_sql")
 
 
 def test_a_tool_from_a_factory_is_registered_as_it_is(world: World) -> None:
@@ -606,18 +680,15 @@ def test_a_startup_hook_takes_the_context_and_nothing_else_positionally(world: W
             world.instance_startup(hook)
 
 
-def test_every_world_carries_the_two_control_tools(world: World) -> None:
+def test_every_world_carries_the_one_control_tool(world: World) -> None:
     """Registered at construction, flagged, and none of the world's own doing."""
-    assert [name for name, tool in world.tools.items() if tool.control] == [
-        "controller_run_sql",
-        "controller_changes",
-    ]
+    assert [name for name, tool in world.tools.items() if tool.control] == ["controller_run_sql"]
     assert registered(world) == []
 
 
 def test_a_control_tools_name_is_taken_even_by_another_control_tool(world: World) -> None:
     """The framework registered it, so even a second control tool is a duplicate."""
-    second = replace(Tool.from_function(echo, name="controller_changes"), control=True)
+    second = replace(Tool.from_function(echo, name="controller_run_sql"), control=True)
 
     with pytest.raises(WorldBug, match="registered twice"):
         world.tool(second)
@@ -748,7 +819,7 @@ def test_sql_files_builds_a_world_from_a_package_on_disk(
     # The second file depends on the first, which is what the ordering is for.
     (schema / "002_more.sql").write_text("CREATE INDEX a_id ON a (id);")
 
-    world = World("w", "1.0.0", sql_files(name, "schema"), fixtures_dir=tmp_path)
+    world = World("w", "1.0.0", sql_files(name, "schema"), fixtures_dir=tmp_path, state_format=PIN)
 
     with world.instance(None) as instance:
         names = instance.inspect().rows(

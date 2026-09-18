@@ -37,6 +37,7 @@ def findings(tmp_path: Path, schema: str, *, on_disk: bool = True) -> list[Findi
         schema,
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
+        state_format="seahaven.state/1",
     )
     return ddl_lint.run(stub_target(world, package_dir))
 

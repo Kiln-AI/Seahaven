@@ -29,6 +29,7 @@ SCHEMA = "CREATE TABLE t (id TEXT PRIMARY KEY) STRICT;"
 
 def make_world(name: str, *tools: str, **options: Any) -> World:
     """A world with nothing in it but the tools it is asked for, one per name."""
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(name, "1.0.0", SCHEMA, **options)
     for tool_name in tools:
         register(world, tool_name)

@@ -269,8 +269,8 @@ def test_two_fixtures_give_two_streams_for_one_seed(world: World) -> None:
         assert first.call("mint") != second.call("mint")
 
 
-@pytest.mark.parametrize("seed", [None, 7, b"sixteen bytes!!!"])
-def test_the_instance_seed_is_the_derived_one(world: World, seed: int | bytes | None) -> None:
+@pytest.mark.parametrize("seed", [None, 0, 7])
+def test_the_instance_seed_is_the_derived_one(world: World, seed: int | None) -> None:
     with world.instance(None, seed=seed) as instance:
         assert instance.seed == instance_seed(world.name, seed)
         assert instance.ctx.instance.seed == instance.seed
@@ -472,7 +472,7 @@ def test_nothing_works_on_a_destroyed_instance(world: World) -> None:
 
     for attempt in (
         lambda: instance.call("now"),
-        instance.changes,
+        instance.change_log,
         instance.inspect,
         lambda: instance.freeze("start", "Empty."),
         lambda: instance.bulk().__enter__(),

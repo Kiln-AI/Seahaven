@@ -20,7 +20,7 @@ A world is driven either in process through `world.instance(...)`, or over the W
 | [Sessions and instances](#sessions-and-instances) | What a connection holds, and what `reset` does |
 | [Driving a world from Python](#driving-a-world-from-python) | `SeahavenClient`, synchronous and asynchronous |
 | [Calls, results and errors](#calls-results-and-errors) | What comes back from a tool call |
-| [Grading a run](#grading-a-run) | Changesets over the wire, and the control tools |
+| [Grading a run](#grading-a-run) | The state document over the wire, and choosing its format |
 | [Why there are no rewards](#why-there-are-no-rewards) | The design decision behind an empty `reward` |
 | [The wire protocol](#the-wire-protocol) | Every frame, for a client in any language |
 | [The concurrency gate](#the-concurrency-gate) | What bounds tool calls, and a known defect in it |
@@ -74,7 +74,7 @@ seahaven serve --host 127.0.0.1 --port 9000
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
 | `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the control tools callable over the wire |
+| `--include-control-tools` | off | make the deprecated control tool callable over the wire; [reference/cli.md](reference/cli.md) names it |
 | `--world module:attr` | the convention | which world to serve |
 
 `--max_concurrent_envs` is spelled with underscores because that is OpenEnv's own option name, and a
@@ -114,6 +114,7 @@ A WebSocket connection is one session, and one session holds one instance.
 | `seed=` | the seed behind `ctx.ids`, and behind SQL's `random()` and `randomblob()` |
 | `now=` | the clock, for a blank instance only. A fixture carries its own, and `now=` with one is refused |
 | `episode_id=` | your own id for the episode, echoed back on `state` so a trajectory ties to your run |
+| `state_format=` | the format the `state` message answers in, in place of the world's pin ([state.md](state.md)) |
 | anything else | passed to the world's startup hooks, so a world can be set up per episode |
 
 `reset` is therefore where a run is customised. One served world covers every scenario a fixture and
@@ -211,11 +212,10 @@ Two other outcomes are worth knowing about:
   fixed `{"code": "internal", "message": "internal error"}`, so engine text cannot reach an agent
   even from a world with no error handler.
 
-The `state` message answers `episode_id`, `step_count`, `fixture`, `now`, `world` and `composition`.
-Every step counts, including one that was refused: the count is of what the session asked for.
-`composition` is the session's stores, one record per node of a world that adds other worlds, and
-`null` before the first `reset` ([composition.md](composition.md)). No observation carries any of
-it. `state` is the eval's, never the agent's.
+The `state` message answers the state document, which [Grading a run](#grading-a-run) covers. The
+one field on it that belongs to the session rather than to the document is `step_count`: every step
+counts, including one that was refused, because the count is of what the session asked for. No
+observation carries any of it. `state` is the eval's, never the agent's.
 
 The environment's metadata is the world's `name` and `version`. Its README is the world's top-level
 `README.md`, the one beside `pyproject.toml`, published whole as the card a hub shows. The one-line
@@ -233,45 +233,16 @@ world = seahaven.World(
         "world the framework is developed against. Nothing here mimics a real product's names, "
         "schema or error text."
     ),
+    state_format="seahaven.state/1",
 )
 ```
 
 ## Grading a run
 
-An eval grades the state the run left behind, and that state is a **changeset**: the net difference
-between the fixture and the database as the agent left it. Each record is `{world, table, op, key,
-before, after}`, where `op` is `insert`, `update` or `delete` and `world` is the node the row
-belongs to (`main` for a world that adds none). [concepts.md](concepts.md) has the full semantics.
-
-In process, `inst.changes()` is that changeset and needs nothing else. Over a server, an eval reads
-it through a **control tool**: a tool the eval calls on its own session, rather than a second API.
-
-Tools are the right shape for this because of what a session is. An instance is reached through the
-connection that made it, so a read has to travel on that connection to be a read of that instance. A
-separate control plane would need its own listener, its own token and a way to name an instance from
-outside the session that owns it, and none of those exist here. Seahaven registers two control tools
-on every world:
-
-| Tool | What it does |
-|---|---|
-| `controller_run_sql(sql, params=None)` | one statement on a read-only connection of the instance's own: every table, the instance clock, no caps, SQLite's own error text. Same result shape as the `run_sql` helper |
-| `controller_changes()` | the changeset, as JSON |
-
-They are thin wrappers over the instance and own no SQL and no rendering of their own.
-`controller_changes` is `inst.changes()`. `controller_run_sql` reads through the instance's own
-read-only control connection rather than through the `inspect()` handle: same file, same read-only
-opener, a second connection, because a control read borrows connection-level state for the length of
-a statement while `inspect()` is the handle you read through on any thread you like.
-
-Their arguments are validated like any tool's, so a bad `sql` argument is an `ArgumentError`.
-Nothing else about a normal call applies: no middleware, no error handler, no transaction and no
-concurrency gate, because an eval wants the real message.
-
-**Over a server they exist only with `--include-control-tools`.**
-
-```sh
-seahaven serve --include-control-tools
-```
+An eval grades the state the run left behind, and that state is the **state document**: the change
+log the episode wrote, and the provenance a judge needs to read it. In process, `inst.state()` is
+that document. Over a server, the `state` message answers the same document, and
+[state.md](state.md) is the page on it.
 
 ```py
 from seahaven.openenv import SeahavenClient
@@ -280,14 +251,51 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     env.reset(fixture="small_startup", seed=7)
     run_agent(env)  # your agent, your harness
 
-    changes = env.call("controller_changes").result
-    reward = grade(changes)  # your scenario's goal, your grader
+    reward = grade(env.state())  # your scenario's goal, your grader
 ```
 
-Without the flag, calling one is `UnknownTool` in exactly the words an unregistered name earns, so
-an agent cannot tell the two apart and a hub deployment does not expose them. They never appear in
-the tool list, flag or not. In process, `inst.call("controller_changes")` always reaches them, and
-`inst.tools()` never lists them.
+`env.state()` answers a `SeahavenState`, which is the document plus OpenEnv's `step_count`. Every
+envelope field of the document is a typed field on the model:
+
+| Field | Type | What it is |
+|---|---|---|
+| `format`, `seahaven_version` | `str` | the format that produced `state`, and the Seahaven version that produced the document |
+| `world` | `WorldRef` | the root world's `name` and `version` |
+| `composition` | `dict[str, NodeRef] \| None` | every node of the instance, keyed by canonical path; `null` before the first `reset` |
+| `fixture` | `FixtureRef \| None` | the fixture's `id`, and `nodes` keyed by the same path; `null` for a blank instance |
+| `episode_id`, `now` | `str \| None` | the episode id `reset` was given or minted, and the instance clock |
+| `seed` | `int \| None` | the seed `reset` was given |
+| `startup` | `dict[str, Any] \| None` | the reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as JSON at instance creation |
+| `call_count` | `int` | how many calls were dispatched |
+| `state` | `dict[str, Any]` | the formatter's output, left untyped because its shape is the format's |
+| `step_count` | `int` | OpenEnv's count of everything the session asked for, tool listings included. Not `call_count` |
+
+`step_count` is the only field that is the session's rather than the document's, so
+`env.state().model_dump(exclude={"step_count"})` is the document, field for field what
+`inst.state()` answers in process. `WorldRef`, `NodeRef`, `FixtureRef` and `FileRef` are exported
+from `seahaven.openenv` beside `SeahavenState`. The model keeps OpenEnv's `extra="allow"`, so a
+newer server can talk to an older client: read the fields you know and ignore the rest.
+
+Before the first `reset` there is no instance, so `composition`, `fixture`, `episode_id`, `seed`,
+`now` and `startup` are `null`, `call_count` is 0, and the world's pinned formatter runs with no
+instance. A blank instance is still told apart from no instance, because a blank instance has a
+`now` and a `composition`.
+
+**Choosing the format.** `reset(state_format="…")` selects the format for that episode, in place of
+the root world's pin. The `state` message itself carries no arguments, so one episode answers in one
+format. A harness that reads the state after every step wants `seahaven.state+last_step/1`, which
+holds only the last call's records: under `seahaven.state/1` a per-step reader saves the whole log
+once per step.
+
+```py
+from seahaven.openenv import SeahavenClient
+
+with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
+    env.reset(fixture="small_startup", seed=7, state_format="seahaven.state+last_step/1")
+    for step in scenario:  # your rollout
+        env.call(step.tool, **step.arguments)
+        record(env.state())  # only the records of that call
+```
 
 ## Why there are no rewards
 
@@ -325,7 +333,7 @@ only these frames on `ws://host:port/ws`.
 | `{"type": "reset", "data": {...}}` | make the instance; `data` holds the arguments in the table above |
 | `{"type": "step", "data": {"type": "call_tool", "tool_name": "...", "arguments": {...}}}` | call a tool |
 | `{"type": "step", "data": {"type": "list_tools"}}` | the world's tools; needs no `reset` |
-| `{"type": "state"}` | the session's state: `episode_id`, `step_count`, `fixture`, `now`, `world`, `composition` |
+| `{"type": "state"}` | the session's state document, plus `step_count` |
 | `{"type": "close"}` | end the session and destroy the instance |
 
 **Server to client:**
@@ -381,7 +389,7 @@ this shape.
 
 The gate bounds how many tool calls run at once. It never bounds admission: calls queue, and nothing
 is rejected. A call takes the gate before the instance lock, so a queued call cannot block a
-`destroy` or a `freeze`. Instance creation, tool listing and the control tools bypass it entirely.
+`destroy` or a `freeze`. Instance creation, tool listing and the control tool bypass it entirely.
 
 Its default follows the process's CPU affinity, so it respects a container's limit rather than the
 host's core count.

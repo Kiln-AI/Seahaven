@@ -37,6 +37,7 @@ world = seahaven.World(
     name="$package",
     version="1.0.0",
     schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -404,6 +405,41 @@ def test_seed_passes_through(pytester: pytest.Pytester) -> None:
         """
     )
     pytester.runpytest().assert_outcomes(passed=2)
+
+
+def test_a_bytes_seed_in_the_marker_is_refused(pytester: pytest.Pytester) -> None:
+    """The marker passes `seed=` straight through, so a world's author meets the narrowing here."""
+    write_world(pytester)
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.seahaven(fixture=None, seed=b"sixteen bytes!!!")
+        def test_it(instance):
+            assert False, "the instance should never have been made"
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*a seed must be an int or None, not bytes*"])
+
+
+def test_a_state_format_in_the_marker_passes_through(pytester: pytest.Pytester) -> None:
+    """The marker's keywords are the world's, and `state_format` is `world.instance`'s own."""
+    write_world(pytester)
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.seahaven(fixture=None, state_format="seahaven.state+calls/1")
+        def test_it(instance):
+            instance.call("add_note", body="x")
+            document = instance.state()
+            assert document["format"] == "seahaven.state+calls/1"
+            assert [call["tool"] for call in document["state"]["calls"]] == ["add_note"]
+        """
+    )
+    pytester.runpytest().assert_outcomes(passed=1)
 
 
 def test_now_passes_through(pytester: pytest.Pytester) -> None:

@@ -87,38 +87,132 @@ def test_parse_result_carries_an_error_through(client: SeahavenClient) -> None:
     assert result.done is False
 
 
-def test_parse_state_answers_a_typed_state(client: SeahavenClient) -> None:
-    state = client._parse_state(
-        {
-            "episode_id": "ep-1",
-            "step_count": 3,
-            "fixture": "start",
-            "now": INSTANT_ISO,
+# One whole document as a frame, so the parser is driven against the shape the
+# server really sends rather than a field at a time.
+DOCUMENT_FRAME: dict[str, Any] = {
+    "episode_id": "ep-1",
+    "step_count": 3,
+    "format": "seahaven.state/1",
+    "seahaven_version": "0.0.1",
+    "world": {"name": "testworld", "version": "1.0.0"},
+    "composition": {
+        "main": {
             "world": "testworld",
+            "world_version": "1.0.0",
+            "scope": None,
+            "aliases": [],
+            "schema_hash": "b" * 64,
+            "frozen_world_version": None,
+        },
+        "payments": {
+            "world": "payments",
+            "world_version": "1.4.0",
+            "scope": "eu",
+            "aliases": ["shop/payments"],
+            "schema_hash": "c" * 64,
+            "frozen_world_version": "1.3.0",
+        },
+    },
+    "fixture": {
+        "id": "start",
+        "nodes": {"main": {"file_sha256": "a" * 64}, "payments": {"file_sha256": "d" * 64}},
+    },
+    "seed": 7,
+    "now": INSTANT_ISO,
+    "startup": {"tenant": "globex"},
+    "call_count": 2,
+    "state": {
+        "db": {
+            "log": [
+                {
+                    "i": 0,
+                    "world": "main",
+                    "table": "notes",
+                    "op": "insert",
+                    "key": {"id": "n1"},
+                    "before": None,
+                    "after": {"id": "n1", "body": "a body", "n": 0},
+                }
+            ]
         }
-    )
+    },
+}
+
+
+def test_parse_state_answers_a_typed_state(client: SeahavenClient) -> None:
+    """The whole document, nested models and the format's own `state` included."""
+    state = client._parse_state(DOCUMENT_FRAME)
     assert isinstance(state, SeahavenState)
     assert (state.episode_id, state.step_count) == ("ep-1", 3)
-    assert (state.fixture, state.now, state.world) == ("start", INSTANT_ISO, "testworld")
+    assert (state.format, state.seahaven_version) == ("seahaven.state/1", "0.0.1")
+    assert (state.world.name, state.world.version) == ("testworld", "1.0.0")
+    assert state.composition is not None
+    assert list(state.composition) == ["main", "payments"]
+    assert state.composition["payments"].aliases == ["shop/payments"]
+    assert state.composition["payments"].frozen_world_version == "1.3.0"
+    assert state.fixture is not None
+    assert state.fixture.id == "start"
+    assert state.fixture.nodes["payments"].file_sha256 == "d" * 64
+    assert (state.seed, state.now, state.call_count) == (7, INSTANT_ISO, 2)
+    assert state.startup == {"tenant": "globex"}
+    # `state` is untyped on purpose: the format owns its shape, so it arrives as
+    # the dict the formatter produced and nothing validates it here.
+    assert state.state["db"]["log"][0]["key"] == {"id": "n1"}
 
 
-def test_state_answers_none_for_the_fields_a_pre_reset_frame_leaves_out(
+def test_the_document_is_the_state_without_the_step_count(client: SeahavenClient) -> None:
+    """What a harness saves as `final_state` (`functional_spec.md` §9)."""
+    state = client._parse_state(DOCUMENT_FRAME)
+    assert state.model_dump(exclude={"step_count"}) == {
+        key: value for key, value in DOCUMENT_FRAME.items() if key != "step_count"
+    }
+
+
+def test_state_answers_none_for_the_fields_a_pre_reset_frame_leaves_null(
     client: SeahavenClient,
 ) -> None:
-    """`fixture` and `now` are absent from a state before the first reset.
+    """Before the first reset the document answers `null` for five envelope fields.
 
-    `State` allows extra fields, so a field Seahaven declares is the only reason
-    reading one that the frame did not carry answers `None` instead of raising.
-    A harness that logs `state.fixture` every step must not fail on step zero.
+    They are declared with a default for that reason, so a harness that logs
+    `state.fixture` every step does not fail on step zero -- and nor does a frame
+    from a server that left one out entirely.
     """
-    state = client._parse_state({"episode_id": "ep-1", "step_count": 0, "world": "testworld"})
-    assert (state.fixture, state.now) == (None, None)
+    state = client._parse_state(
+        {
+            "episode_id": None,
+            "step_count": 0,
+            "format": "seahaven.state/1",
+            "seahaven_version": "0.0.1",
+            "world": {"name": "testworld", "version": "1.0.0"},
+            "call_count": 0,
+            "state": {"db": {"log": []}},
+        }
+    )
+    assert (state.composition, state.fixture, state.seed, state.now, state.startup) == (
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+
+
+def test_state_keeps_an_envelope_field_it_does_not_know(client: SeahavenClient) -> None:
+    """`extra="allow"` is the compatibility contract: a newer server, an older client.
+
+    A field added to the envelope is one a reader ignores (`functional_spec.md`
+    §10), so parsing a frame that carries one answers the document rather than
+    refusing it.
+    """
+    state = client._parse_state(DOCUMENT_FRAME | {"tomorrows_field": {"n": 1}})
+    assert state.format == "seahaven.state/1"
+    assert state.model_extra == {"tomorrows_field": {"n": 1}}
 
 
 def test_state_refuses_a_frame_that_does_not_name_a_world(client: SeahavenClient) -> None:
-    """`world` is the one field of a Seahaven state that is not optional."""
+    """`world` is envelope, and the envelope is not optional."""
     with pytest.raises(ValueError, match="world"):
-        client._parse_state({"episode_id": "ep-1", "step_count": 0})
+        client._parse_state({key: value for key, value in DOCUMENT_FRAME.items() if key != "world"})
 
 
 def test_a_reset_frame_parses_through_the_step_hook_with_only_its_metadata(
@@ -168,7 +262,9 @@ def test_the_client_drives_a_world_synchronously(world: World) -> None:
         assert observation.result == [{"id": "n1"}]
         assert observation.error is None
         state = env.state()
-        assert (state.world, state.fixture, state.now) == (world.name, None, INSTANT_ISO)
+        assert (state.world.name, state.world.version) == (world.name, world.version)
+        assert (state.fixture, state.now) == (None, INSTANT_ISO)
+        assert state.state["db"]["log"][0]["key"] == {"id": "n1"}
 
 
 def test_the_client_drives_a_world_asynchronously(world: World) -> None:

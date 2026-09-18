@@ -47,13 +47,25 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         tools = env.list_tools()
         obs = env.call("ping", message="hello")
         obs.result, obs.error
-        env.state().now
+        state = env.state()
+        state.state["db"]["log"]  # the format's output; here, the change log
+        final_state = state.model_dump(exclude={"step_count"})  # the document
     ```
 
-    The observation parameter is OpenEnv's base `Observation` because the client
-    answers two shapes of it. `reset` answers a plain `Observation` whose
-    `metadata` carries `fixture`, `now` and `tools`; `call`, and `step` on a
-    `CallToolAction`, answer a `SeahavenObservation`, the shape of a tool call.
+    The observation parameter is OpenEnv's base `Observation`, because a reset
+    and a tool call are not the same shape. The server answers a reset with a
+    plain `Observation` whose `metadata` carries `fixture`, `now` and `tools`,
+    and typing the parameter this way is what keeps `.result` off a reset:
+    `_parse_result` below says what a typed client makes of that frame. `call`,
+    and `step` on a `CallToolAction`, answer a `SeahavenObservation`, the shape
+    of a tool call.
+
+    `state()` answers the whole state document (`functional_spec.md` §3.1) plus
+    OpenEnv's `step_count`: `.state` is the formatter's output, everything else
+    but `step_count` is the framework's envelope, and
+    `.model_dump(exclude={"step_count"})` is the document a harness saves as
+    `final_state` -- byte for byte what `inst.state()` answers in process.
+    `reset(state_format=...)` chooses the format for the episode.
 
     A tool error arrives on the observation and never raises: `obs.error` is the
     `{"code", "message", "details"}` the world produced, and exactly one of

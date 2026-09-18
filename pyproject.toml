@@ -51,6 +51,9 @@ Homepage = "https://github.com/Kiln-AI/Seahaven"
 # dev dependencies of `seahaven` and never runtime ones: the dependency runs the
 # other way, and Seahaven imports neither.
 dev = [
+    # `tests/state_v1.schema.json` is the published shape of the built-in state
+    # documents, and this is what asserts a document against it.
+    "jsonschema>=4",
     "packaging>=24",
     "projecttracker",
     "pytest>=8",

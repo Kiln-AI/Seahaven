@@ -17,7 +17,7 @@ doing; the eval-facing consequence is that `assignee_id IS NOT NULL` and
 
 **An archived issue keeps its fields.** `archive_issue` stamps `archived_at` and
 takes the issue out of `list_issues`. It is still there -- `get_issue` answers
-with it, `run_sql` sees it, the changeset carries it -- and no tool will change a
+with it, `run_sql` sees it, the change log carries it -- and no tool will change a
 field of it again, `set_issue_labels` in `labels.py` included. Commenting on one
 still works, and appends to its trail: archiving freezes the issue, not the
 conversation about it.
@@ -310,7 +310,7 @@ def archive_issue(ctx: seahaven.Ctx, issue_id: str) -> dict[str, Any]:
 def _apply(ctx: seahaven.Ctx, issue: dict[str, Any], changes: dict[str, Any], actor: str) -> None:
     """Write the fields that really differ, stamp `updated_at`, and record the trail.
 
-    "Really differ" is what keeps the trail and the changeset honest: a call that
+    "Really differ" is what keeps the trail and the change log honest: a call that
     sets the status an issue already has writes nothing, stamps nothing and
     records nothing, so two runs that reached the same state through different
     numbers of calls still compare equal.

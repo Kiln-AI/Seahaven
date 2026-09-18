@@ -12,6 +12,7 @@ and the claim that it is is worth a test rather than a paragraph.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -22,8 +23,11 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
+import emporium
+import jsonschema
 import pytest
 
+import seahaven
 from seahaven import instances
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
@@ -51,6 +55,8 @@ from websockets.exceptions import ConnectionClosedOK
 from seahaven.openenv import SeahavenClient, _SwallowWebSocketDisconnect
 from seahaven.openenv.env import SeahavenObservation
 from tests.serving import serving
+
+pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 
 # Long enough that two threads genuinely overlap inside SQLite on a warm cache,
 # short enough that the gate tests stay in the same order of magnitude as the
@@ -115,6 +121,7 @@ def trivial_world(tmp_path: Path) -> Iterator[World]:
         "CREATE TABLE notes (id TEXT PRIMARY KEY) STRICT;",
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
+        state_format="seahaven.state/1",
     )
 
     @world.tool
@@ -151,8 +158,9 @@ def test_the_typed_client_drives_a_session_end_to_end(world: World) -> None:
         env.call("execute", sql=insert("n1"))
         assert ids(env.call("rows", sql="SELECT id FROM notes ORDER BY id")) == ["n0", "n1"]
         state = env.state()
-        assert (state.world, state.fixture, state.now) == (world.name, fixture_id, INSTANT_ISO)
-        assert state.step_count == 4
+        assert (state.world.name, state.world.version) == (world.name, world.version)
+        assert state.fixture is not None and state.fixture.id == fixture_id
+        assert (state.now, state.step_count, state.call_count) == (INSTANT_ISO, 4, 3)
 
 
 def test_the_stock_client_drives_the_same_session(world: World) -> None:
@@ -181,8 +189,8 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
             "metadata": {},
         }
         state = env.state()
-        assert state["world"] == world.name
-        assert state["fixture"] == fixture_id
+        assert state["world"] == {"name": world.name, "version": world.version}
+        assert state["fixture"]["id"] == fixture_id
 
 
 def test_a_reset_frame_carries_its_facts_at_the_top_level_of_the_envelope(world: World) -> None:
@@ -239,6 +247,164 @@ def test_a_world_bug_reaches_the_client_as_an_error_frame(tmp_path: Path) -> Non
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
+# --- the state document, over the wire: the gate ----------------------------
+
+# `functional_spec.md` §9's confirmation step, and the gate this project's
+# implementation plan put at this phase. Subclass fields travel over the
+# websocket state message while the HTTP `GET /state` route strips them
+# (huggingface/OpenEnv#1155, cited from `env.py`), and nothing above
+# `SeahavenState` works unless that holds for a document carrying nested models,
+# a composition keyed by node path and an arbitrarily deep `state`. So it is
+# driven over a real socket, to the typed client and to the stock one, rather
+# than assumed.
+
+SCHEMA = json.loads((Path(__file__).parent / "state_v1.schema.json").read_text())
+
+# The one episode both clients drive: a fixture, a seed, a named episode, a
+# startup keyword and one write, so no envelope field below is left at its
+# default.
+EPISODE: dict[str, Any] = {"seed": 7, "episode_id": "ep-1", "tenant": "globex"}
+WRITE = CallToolAction(tool_name="execute", arguments={"sql": insert("n1")})
+
+
+@pytest.fixture
+def document_world(tmp_path: Path) -> World:
+    """The notes world with a startup keyword, so no envelope field is empty."""
+    world = build_world(tmp_path)
+
+    @world.instance_startup
+    def tenant(ctx: Ctx, *, tenant: str = "acme") -> None:
+        """Accept the keyword; the document reports it whatever the hook does."""
+
+    return world
+
+
+def expected_document(world: World, fixture_id: str) -> dict[str, Any]:
+    """What `EPISODE` plus `WRITE` leaves behind, field by field, as §3.1 defines it."""
+    fixture = {found.id: found for found in world.fixtures()}[fixture_id]
+    return {
+        "format": "seahaven.state/1",
+        "seahaven_version": seahaven.__version__,
+        "world": {"name": world.name, "version": world.version},
+        "composition": {
+            "main": {
+                "world": world.name,
+                "world_version": world.version,
+                "scope": None,
+                "aliases": [],
+                "schema_hash": world.schema_hash,
+                "frozen_world_version": None,
+            }
+        },
+        "fixture": {"id": fixture_id, "nodes": {"main": {"file_sha256": fixture.meta.file_sha256}}},
+        "episode_id": "ep-1",
+        "seed": 7,
+        "now": INSTANT_ISO,
+        "startup": {"tenant": "globex"},
+        "call_count": 1,
+        "state": {
+            "db": {
+                "log": [
+                    {
+                        "i": 0,
+                        "world": "main",
+                        "table": "notes",
+                        "op": "insert",
+                        "key": {"id": "n1"},
+                        "before": None,
+                        "after": {"id": "n1", "body": "a body", "n": 0},
+                    }
+                ]
+            }
+        },
+    }
+
+
+def test_the_whole_document_arrives_over_the_websocket(document_world: World) -> None:
+    """Every field of `functional_spec.md` §3.1, with the value it has in process."""
+    fixture_id = _freeze(document_world)
+    with serving(document_world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(fixture=fixture_id, **EPISODE)
+        env.call("execute", sql=insert("n1"))
+        state = env.state()
+    assert state.model_dump(exclude={"step_count"}) == expected_document(document_world, fixture_id)
+    assert state.step_count == 1
+
+
+def test_the_stock_client_sees_the_same_document(document_world: World) -> None:
+    """No Seahaven on the client side at all: the document is plain JSON.
+
+    The same episode driven twice against the same server answers the same
+    document down to the last field, which is `functional_spec.md` §3.3's
+    determinism read over the wire: the episode id is the one both were given,
+    and everything else is the world's or the episode's.
+    """
+    fixture_id = _freeze(document_world)
+    with serving(document_world) as url:
+        with GenericEnvClient(base_url=url) as generic:
+            generic.reset(fixture=fixture_id, **EPISODE)
+            generic.step(WRITE.model_dump())
+            stock = generic.state()
+        with SeahavenClient(base_url=url) as typed:
+            typed.reset(fixture=fixture_id, **EPISODE)
+            typed.call("execute", sql=insert("n1"))
+            document = typed.state().model_dump()
+    assert stock == expected_document(document_world, fixture_id) | {"step_count": 1}
+    assert stock == document
+
+
+def test_the_document_over_the_wire_validates_against_the_published_schema(
+    document_world: World,
+) -> None:
+    """What the stock client holds is a `seahaven.state/1` document and nothing else."""
+    fixture_id = _freeze(document_world)
+    with serving(document_world) as url, GenericEnvClient(base_url=url) as generic:
+        generic.reset(fixture=fixture_id, **EPISODE)
+        generic.step(WRITE.model_dump())
+        stock = generic.state()
+    jsonschema.validate({key: value for key, value in stock.items() if key != "step_count"}, SCHEMA)
+
+
+def test_the_document_of_a_composite_arrives_whole(tmp_path: Path) -> None:
+    """Four nodes over the wire, and a record from an added node's store in the log.
+
+    The nested `composition` and the per-node `world` on a record are what a leaf
+    world cannot prove: a document that flattened either would still pass every
+    assertion above it.
+    """
+    world = copy.copy(emporium.world)
+    world.work_dir = tmp_path / "work"
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(now=INSTANT_ISO)
+        env.call("pay_create_charge", amount=250)
+        state = env.state()
+    assert state.composition is not None
+    assert list(state.composition) == ["main", "payments", "payments_eu", "shop"]
+    assert state.composition["payments"].aliases == ["shop/payments"]
+    assert state.composition["payments_eu"].scope == "eu"
+    assert state.fixture is None
+    assert [record["world"] for record in state.state["db"]["log"]] == ["payments"]
+
+
+def test_reset_selects_a_state_format_over_the_wire(world: World) -> None:
+    """The state message carries no arguments, so the episode's format is the only one."""
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(state_format="seahaven.state+last_step/1")
+        env.call("execute", sql=insert("n1"))
+        env.call("execute", sql=insert("n2"))
+        state = env.state()
+    assert state.format == "seahaven.state+last_step/1"
+    assert [record["key"]["id"] for record in state.state["db"]["log"]] == ["n2"]
+
+
+def test_an_unknown_state_format_is_an_error_frame_and_the_session_survives(world: World) -> None:
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        with pytest.raises(RuntimeError, match="state format"):
+            env.reset(state_format="acme.state/1")
+        env.reset()
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+
+
 # --- sessions --------------------------------------------------------------
 
 
@@ -275,10 +441,10 @@ def test_a_second_reset_over_the_wire_starts_from_the_fixture_again(world: World
         assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n0"]
 
 
-# --- control tools ---------------------------------------------------------
+# --- the control tool ------------------------------------------------------
 
 
-def test_control_tools_are_callable_with_the_flag_and_never_listed(world: World) -> None:
+def test_the_control_tool_is_callable_with_the_flag_and_never_listed(world: World) -> None:
     with (
         serving(world, include_control_tools=True) as url,
         SeahavenClient(base_url=url) as env,
@@ -292,11 +458,11 @@ def test_control_tools_are_callable_with_the_flag_and_never_listed(world: World)
             "row_count": 1,
             "truncated": False,
         }
-        changes = env.call("controller_changes").result
-        assert [(change["table"], change["op"]) for change in changes] == [("notes", "insert")]
+        logged = env.state().state["db"]["log"]
+        assert [(record["table"], record["op"]) for record in logged] == [("notes", "insert")]
 
 
-def test_control_tools_are_unknown_without_the_flag(world: World) -> None:
+def test_the_control_tool_is_unknown_without_the_flag(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         env.reset()
         assert "controller_run_sql" not in [tool["name"] for tool in env.list_tools()]
@@ -435,7 +601,9 @@ def test_a_websocket_session_is_untouched_by_the_refusal(world: World) -> None:
         assert _request(url + "/state")[0] == 501
         env.call("execute", sql=insert("n1"))
         state = env.state()
-        assert (state.world, state.step_count) == (world.name, 1)
+        assert (state.world.name, state.step_count) == (world.name, 1)
+        # Whole and real: the write this session just made is in the document.
+        assert [record["key"]["id"] for record in state.state["db"]["log"]] == ["n1"]
         assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n1"]
 
 

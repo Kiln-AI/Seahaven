@@ -29,8 +29,8 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   private instance per session, thousands of tool calls per second.
 - **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same fixture, same frozen
   clock, same seeded ids: the same run, every time. The clock is frozen in Python and in SQL.
-- **[Changesets](src/seahaven/docs/concepts.md#changeset).** The net diff between the fixture and
-  what the agent left behind. Grade on state, not on transcripts.
+- **[Change log](src/seahaven/docs/state.md).** Every row the agent changed, call by call, in one
+  versioned document with the provenance to read it. Grade on state, not on transcripts.
 - **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
   or Shopify API. Compose, reuse and share worlds.
 - **[OpenEnv](src/seahaven/docs/serving_and_openenv.md).** `seahaven serve` is an OpenEnv
@@ -58,6 +58,7 @@ world = seahaven.World(
     CREATE TABLE contacts (id TEXT PRIMARY KEY, email TEXT NOT NULL, notes TEXT NOT NULL, stage TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
     CREATE VIRTUAL TABLE contacts_fts USING fts5(notes, content='contacts');
     """,
+    state_format="seahaven.state/1",
 )
 
 
@@ -89,7 +90,7 @@ def search_stale_leads(ctx: seahaven.Ctx, query: str) -> list[dict[str, str]]:
 Each tool's signature is the JSON schema an agent sees, and its docstring is the description.
 
 **Run your agent against it:** Every rollout gets a private copy of a fixture, the same seed replays the
-same run, and what the agent changed is a diff:
+same run, and what the agent changed is a document you grade:
 
 ```py
 for rollout in range(100):
@@ -97,7 +98,7 @@ for rollout in range(100):
         "big_co", seed=rollout
     ) as world_instance:  # a private copy of the fixture, in ms
         run_agent(world_instance)  # your agent, your harness
-        reward = grade(world_instance.changes())  # the net diff the agent left behind
+        reward = grade(world_instance.state())  # what the agent left behind, as a document
 ```
 
 **Serve it:** Host an OpenEnv endpoint. Every connection gets its own instance. Any OpenEnv client can connect.
@@ -113,7 +114,7 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     env.reset(fixture="big_co", seed=42)
     env.call("create_contact", email="ada@example.com", notes="asked about pricing for 50 seats")
     stale = env.call("search_stale_leads", query="pricing").result
-    changes = env.state()  # the final state, as a diff
+    final_state = env.state()  # the document the eval grades
 ```
 
 **Example World:** see [ProjectTracker](worlds/projecttracker/), the reference world: a

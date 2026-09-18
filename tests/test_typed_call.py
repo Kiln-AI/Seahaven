@@ -31,7 +31,10 @@ from seahaven.errors import ArgumentError, WorldBug
 from seahaven.world import World
 from tests.conftest import INSTANT_ISO
 
-pytestmark = pytest.mark.usefixtures("isolated_imports")
+pytestmark = [
+    pytest.mark.usefixtures("isolated_imports"),
+    pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated"),
+]
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 
@@ -46,6 +49,7 @@ def rowed(name: str, **options: Any) -> Tools:
     The functions themselves, not their names: a host reaches an added world's
     tool by importing it, and this is what an import would hand back.
     """
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(
         name,
         "1.0.0",

@@ -255,4 +255,4 @@ def test_it_describes_the_live_schema_and_writes_nothing(described: Instance) ->
     described.call("execute", sql="CREATE TABLE users_extra (id TEXT PRIMARY KEY) STRICT")
 
     assert described.call("describe_schema")["tables"][1]["name"] == "users"
-    assert described.changes() == []
+    assert described.change_log() == []

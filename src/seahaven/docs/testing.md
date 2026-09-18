@@ -140,8 +140,9 @@ def test_transitioning_an_issue_records_it_in_the_trail(instance: seahaven.Insta
     assert [event["kind"] for event in episode] == ["status", "assignee"]
 ```
 
-**The changeset, for anything an eval will grade.** If an eval is going to score "the issue was
-closed", test that closing it produces the change you expect.
+**The change log, for anything an eval will grade.** If an eval is going to score "the issue was
+closed", test that closing it produces the change you expect. [state.md](state.md) is the page on
+the log and the document an eval reads it from.
 
 ```python
 import pytest
@@ -154,10 +155,10 @@ def test_closing_an_issue_is_one_update_of_that_row(instance: seahaven.Instance)
     issue = instance.call("get_issue", key="ENG-4")
     instance.call("transition_issue", issue_id=issue["id"], status="canceled")
 
-    issue_changes = [change for change in instance.changes() if change.table == "issues"]
-    assert [change.op for change in issue_changes] == ["update"]
-    assert issue_changes[0].key == {"id": issue["id"]}
-    assert issue_changes[0].after["status"] == "canceled"
+    issue_records = [record for record in instance.change_log() if record.table == "issues"]
+    assert [record.op for record in issue_records] == ["update"]
+    assert issue_records[0].key == {"id": issue["id"]}
+    assert issue_records[0].after["status"] == "canceled"
 ```
 
 **Determinism, once.** One test that the same seed gives the same ids is worth having, because it
@@ -183,4 +184,4 @@ have promised in its description — that `agency` really has twelve people, tha
 an assignee — and regenerating it cannot then quietly change the deal.
 
 **What not to test: the framework.** That a `Literal` produces a JSON schema, that a rollback rolls
-back, that the changeset renders. Those have tests of their own in Seahaven's suite.
+back, that the change log records a write. Those have tests of their own in Seahaven's suite.

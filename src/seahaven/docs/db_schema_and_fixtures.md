@@ -42,8 +42,8 @@ code catches one type.
 Seahaven owns the connection setup: write-ahead logging, foreign keys on, SQLite's defensive mode,
 and the overrides that make the clock and `random()` read the instance's own values. World code
 never sets a pragma. Do not close `ctx.db.conn`, change its pragmas or its authorizer, or open a
-second connection to the instance's file. The clock functions, the changeset session and the
-per-call transaction all depend on that one connection.
+second connection to the instance's file. The clock functions, the change log's per-call session
+and the per-call transaction all depend on that one connection.
 
 To read an instance without going through a tool — in a test, or when grading a run — use
 `inst.inspect()`. It is a read-only handle on a second connection, with the same `one` and `rows`,
@@ -92,8 +92,8 @@ to hold what the schema says. A `STRICT` table's columns must each be declared `
 `REAL`, `TEXT`, `BLOB` or `ANY`, so a column written `VARCHAR(64)` becomes `TEXT`.
 
 **Every table has an explicit primary key.** SQLite's implicit `rowid` does not count. A row with no
-key cannot be identified in a changeset, so writes to a table without one are invisible to the eval
-grading the run. A join table takes a composite key: `PRIMARY KEY (issue_id, label_id)`.
+key cannot be identified in a change-log record, so writes to a table without one are invisible to
+the eval grading the run. A join table takes a composite key: `PRIMARY KEY (issue_id, label_id)`.
 
 **No expression reads the wall clock.** No `CURRENT_TIMESTAMP` default, no `datetime('now')` in a
 trigger, and nothing like them in a view, a generated column or a partial index. The problem is the
@@ -213,6 +213,7 @@ world = seahaven.World(
     version="1.0.0",
     schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
     fixtures_dir=Path("fixtures"),
+    state_format="seahaven.state/1",
 )
 
 with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
@@ -229,7 +230,7 @@ assert fixture.parent_id is None
 with world.instance("seeded") as inst:
     assert inst.inspect().one("SELECT count(*) AS n FROM notes") == {"n": 1000}
     # A fresh instance of a fixture has changed nothing yet.
-    assert inst.changes() == []
+    assert inst.change_log() == []
 ```
 
 `freeze` cannot run inside a `bulk()` block, because the rows are not committed yet. Leave the block

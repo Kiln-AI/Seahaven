@@ -23,6 +23,7 @@ from seahaven.sandbox import Authorizer, SqlResult
 from seahaven.tool import Tool
 from seahaven.world import World
 from tests.conftest import Caller, build_world
+from tests.fold_support import fold
 
 SCHEMA = """
 CREATE TABLE issues (
@@ -161,24 +162,24 @@ def test_a_write_to_a_listed_table_commits_with_the_call(tmp_path: Path) -> None
             {"points": 9},
             {"points": 5},
         ]
-        # Net, as a changeset always is: the seeded insert and this update are
-        # one insert of the row as it now stands.
+        # Net over the episode: the seeded insert and this update fold into one
+        # insert of the row as it now stands.
         assert {"id": "i1", "title": "first", "points": 9} in [
-            change.after for change in instance.changes()
+            net.after for net in fold(instance.change_log())
         ]
 
 
-def test_a_write_to_a_table_the_world_never_wrote_leaves_the_changeset_readable(
+def test_a_write_to_a_table_the_world_never_wrote_leaves_the_log_readable(
     tmp_path: Path,
 ) -> None:
-    """The changeset session's first sight of a table happens inside the agent's statement.
+    """The change log's session first sees a table inside the agent's statement.
 
     SQLite asks `PRAGMA table_xinfo` then, and a denial is not an error the
-    statement reports -- the session stores it and every later `changeset()`
-    raises `SQLITE_AUTH` instead. So the damage shows up nowhere near the write:
-    the call succeeds, the row is there, and the eval's score is gone for the
-    life of the instance. `attachments` is the table the seeding never touches,
-    which is what makes this the agent's write and not the world's.
+    statement reports -- the session stores it and the `changeset()` that call
+    reads raises `SQLITE_AUTH` instead. So the damage shows up nowhere near the
+    write: the call succeeds, the row is there, and the records it should have
+    left are gone. `attachments` is the table the seeding never touches, which is
+    what makes this the agent's write and not the world's.
     """
     world = sql_world(tmp_path, read_only=False)
     with world.instance(None) as instance:
@@ -187,22 +188,21 @@ def test_a_write_to_a_table_the_world_never_wrote_leaves_the_changeset_readable(
         ask(instance, "INSERT INTO attachments (id, blob) VALUES ('a1', NULL)")
 
         assert sorted(
-            (change.table, change.op, tuple(change.key.items())) for change in instance.changes()
+            (record.table, record.op, tuple(record.key.items())) for record in instance.change_log()
         ) == [
             ("attachments", "insert", (("id", "a1"),)),
             ("issues", "insert", (("id", "i1"),)),
             ("issues", "insert", (("id", "i2"),)),
             ("salaries", "insert", (("person", "alice"),)),
         ]
-        # Every shape of write, each the first this session sees of its table,
-        # and the control tool reads the same changeset through its own path.
+        # Every shape of write, each the first the call's session sees of its
+        # table, folded back into the net an eval grades.
         ask(instance, "UPDATE attachments SET blob = x'00' WHERE id = 'a1'")
         ask(instance, "DELETE FROM issues WHERE id = 'i2'")
-        rendered = instance.call("controller_changes")
         assert sorted(
-            (change["table"], change["op"], change["key"]["id"])
-            for change in rendered
-            if change["table"] != "salaries"
+            (net.table, net.op, str(net.key["id"]))
+            for net in fold(instance.change_log())
+            if net.table != "salaries"
         ) == [
             ("attachments", "insert", "a1"),
             ("issues", "insert", "i1"),

@@ -1,8 +1,9 @@
 # The benchmark
 
-Two workloads over ProjectTracker `agency`, a sweep of the concurrency gate, and what a node of a
-composite world costs. Run by hand and before a release (`architecture.md` §10). **Never a gate:**
-it is not in CI, nothing fails on a number, and no threshold is asserted anywhere.
+Two workloads over ProjectTracker `agency`, a sweep of the concurrency gate, what a node of a
+composite world costs, and what the change log costs a call. Run by hand and before a release
+(`architecture.md` §10). **Never a gate:** it is not in CI, nothing fails on a number, and no
+threshold is asserted anywhere.
 
 The committed results are [`results/latest.md`](results/latest.md). Read the top of that document
 before reading any number in it.
@@ -17,15 +18,21 @@ uv run python -m bench baseline                             # one thread, ~1 min
 uv run python -m bench sweep --progress                     # the gate sweep, ~9 min
 uv run python -m bench isolation                            # the slow-call probe, ~1 min
 uv run python -m bench composite                            # what a node costs, ~10 s
+uv run python -m bench recording                            # what the change log costs, ~1 min
 ```
 
 With no `--out` the report goes to stdout. `--progress` prints a line per point on stderr, which
-is worth having on the sweep. `--quick` shrinks every count to something that finishes in a second
+is worth having on the sweep. `--quick` shrinks every count to something that finishes in seconds
 and measures nothing: it is for checking that the harness runs.
 
 Useful knobs: `--repeats`, `--calls`, `--baseline-calls`, `--gates 1 2 4 0`, `--workers 4 32`,
 `--seconds`, `--readers`, `--composite-calls`, `--tree-repeats`, `--seed`, `--warm-only`.
 `python -m bench --help` lists them all.
+
+The recording probe needs a longer run than these defaults before its totals settle: at 200 calls
+over 3 repeats a write probe's total moves by tens of points between runs, and comes out well
+above what a longer run gives. The figures in `src/seahaven/docs/state.md` come from
+`--calls 1000 --repeats 9`, which is what to run when a number is going to be quoted.
 
 ## Before you believe a number
 
@@ -69,6 +76,7 @@ Environment table already says.
 | `baseline.py` | one thread: what a call costs, and how much of it is SQLite |
 | `sweep.py` | the gate sweep, and the slow-call isolation probe |
 | `composite.py` | what a node costs: the `tests/worlds/` ladder stood up, and driven |
+| `recording.py` | what the change log costs a call, split three ways, at one node and at four |
 | `environment.py` | what the numbers were produced on |
 | `report.py` | the markdown, caveats first |
 | `__main__.py` | the CLI |
