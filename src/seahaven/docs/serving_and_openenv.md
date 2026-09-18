@@ -22,6 +22,7 @@ A world is driven either in process through `world.instance(...)`, or over the W
 | [Calls, results and errors](#calls-results-and-errors) | What comes back from a tool call |
 | [Grading a run](#grading-a-run) | The state document over the wire, and choosing its format |
 | [Why there are no rewards](#why-there-are-no-rewards) | The design decision behind an empty `reward` |
+| [What a stock harness has to supply](#what-a-stock-harness-has-to-supply) | What that decision costs an off-the-shelf consumer |
 | [The wire protocol](#the-wire-protocol) | Every frame and model, for a client in any language |
 | [The concurrency gate](#the-concurrency-gate) | What bounds tool calls, and a known defect in it |
 | [Running it in production](#running-it-in-production) | Reaping, disconnects, and scaling out |
@@ -320,6 +321,122 @@ The payoff is reuse. A world with no opinion about reward is a world you build o
 freeze the fixture `BigClient`, and then write hundreds of scenarios against that pair, each with
 its own goal and its own grader. A world that computed a reward would have baked one scenario's goal
 into the environment, and the next scenario would need a new world.
+
+## What a stock harness has to supply
+
+An off-the-shelf OpenEnv consumer pays for an empty `reward` and a `done` that never turns true, in
+two places, and both failures arrive after the model calls are paid for. OpenEnv's harness helpers
+treat a missing reward as an error, and OpenEnv's own client documentation teaches a loop that a
+Seahaven episode never ends. This section says what each failure looks like and what to write
+instead. Everything in it is checked against `openenv 0.5.0`, which is what the `serve` extra's
+`openenv>=0.5.0,<0.6` resolves to today.
+
+### A missing reward fails every rollout
+
+`_resolve_env_reward` in `openenv/core/harness/__init__.py` resolves one reward per rollout. The
+function reads the last reward in the tool trace, falls back to the `env_reward` that the rollout's
+`verify()` returned, and raises when neither is there:
+
+```text
+ValueError: rollout did not produce an environment reward
+```
+
+A Seahaven world reaches that raise on every episode. `StepEnvSessionAdapter` builds each tool
+result out of the observation it just received, so `metadata["reward"]` and `data["reward"]` are
+both `null` on every entry of the trace, and the stock `verify()` forwards the same `null` as
+`env_reward`. There is nothing for `_resolve_env_reward` to find.
+
+Two consumers do different things with the exception:
+
+- `CollectRunner`, in `openenv/core/harness/collect.py`, builds each episode record inside a `try`,
+  so the exception is caught and the episode is counted as a failure. No episode is ever written,
+  and `results.jsonl` is never created. Run through `openenv collect`, the command prints
+  `failed=N`, then `avg_reward=0.000 success_rate=0%`. With `--push-to-hub`, `push_to_hf_hub` then
+  raises `FileNotFoundError`, because the file the command uploads is not there.
+- The TRL-style rollout function that `build_harness_rollout_func` returns calls
+  `_resolve_env_reward` with no `except` around it. The `ValueError` ends the training step.
+
+### Forward the judge's score through `verify()`
+
+Give the session a `verify_builder` that returns your judge's score as `env_reward`. A session that
+implements OpenEnv's `ResourceSession.verify()` directly does the same thing by returning the same
+`VerifyResult`. Either satisfies `_resolve_env_reward`, and one function unblocks the collector and
+the trainer together.
+
+Upstream's `VerifyResult` asks that `env_reward` forward a reward the environment already produced,
+and asks a caller not to synthesize one in the orchestration layer. A Seahaven world produces none,
+so an external judge's score is what goes there. Nothing else satisfies `_resolve_env_reward`.
+
+```py
+from openenv.core.env_server.mcp_types import CallToolAction
+from openenv.core.harness import StepEnvSessionAdapter, VerifyResult
+
+from seahaven.openenv import SeahavenClient
+
+
+def verify_builder(transcript, final_state, last_result, state):
+    """`state` is the `SeahavenState` the client just answered. Grade it, and forward the score."""
+    document = state.model_dump(exclude={"step_count"})
+    return VerifyResult(env_reward=grade(document), done=True)  # your scenario's grader
+
+
+session = StepEnvSessionAdapter(
+    SeahavenClient(base_url="http://127.0.0.1:8000"),
+    tool_specs=specs,  # the world's tools, as OpenEnv `Tool` models
+    action_builder=lambda name, arguments: CallToolAction(tool_name=name, arguments=arguments),
+    # `goal` is your scenario's instruction to the agent.
+    initial_messages_builder=lambda reset_result, task: [{"role": "user", "content": goal}],
+    verify_builder=verify_builder,
+    reset_kwargs={"fixture": "small_startup", "seed": 7},
+)
+```
+
+The material the grader needs arrives with no Seahaven-specific code in the harness.
+`StepEnvSessionAdapter` calls `state()` after the reset and after every tool call, so the `state`
+argument above is the same `SeahavenState` that [Grading a run](#grading-a-run) describes, and the
+stock `verify()` already writes that state into `artifacts["final_state"]`, with `step_count`
+alongside the document's own fields. A grader written against `inst.state()` in process runs
+unchanged on `document` above, which is the `state` argument without `step_count`.
+
+### Bound the rollout yourself
+
+**A Seahaven episode never ends itself.** `done` is `false` on the reset observation and on every
+observation after it, and no Seahaven tool can set `done`. The loop in `EnvClient`'s class
+docstring, in `openenv/core/env_client.py`, is the first code many consumers read:
+
+```py
+result = await env.reset(seed=42)
+while not result.done:
+    action = agent.predict(result.observation)
+    result = await env.step(action)
+```
+
+Against a Seahaven world that loop runs forever. **Bound a rollout by turns, by tool calls, or by
+your scenario's own completion test. Never wait for the environment to stop one.**
+
+This failure is worse than the missing reward, even though it reads as the smaller of the two. The
+missing reward names its own cause in an exception text; a loop waiting on `done` produces no error
+at all. Upstream's own `MCPHarnessAdapter` is unaffected, because the adapter bounds its loop with
+`HarnessRunLimits.max_turns`, which defaults to 10, and stops early when the model emits no more
+tool calls. Only a hand-rolled loop hangs.
+
+### Read per-step state in the cheaper format
+
+`StepEnvSessionAdapter` calls `state()` after every tool call and stamps the whole document into
+that call's `metadata["state"]`, and `CollectRunner` writes every one of those entries into
+`results.jsonl`. Under the default `seahaven.state/1` each entry carries the change log from the
+start of the episode, so an episode of N calls transfers and stores that log N times over.
+
+Ask for `seahaven.state+last_step/1` instead, which holds only the last call's records. The adapter
+has no argument of its own for the format. The adapter forwards `reset_kwargs` to `reset`, and
+`reset` is where the format is chosen:
+
+```py
+reset_kwargs = {"fixture": "small_startup", "seed": 7, "state_format": "seahaven.state+last_step/1"}
+```
+
+The document that reaches `verify()` at the end of the episode then holds the last call's records
+too, so a grader that needs the whole change log wants the default format and pays the cost above.
 
 ## The wire protocol
 
