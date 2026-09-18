@@ -11,6 +11,7 @@
     "mock": "node mock/server.mjs",
     "check": "tsc --noEmit",
     "e2e": "node e2e/smoke.mjs",
+    "licences": "node scripts/check-licences.mjs",
     "mock:plain": "node mock/server.mjs --port 8001 --plain"
   },
   "dependencies": {

@@ -101,6 +101,13 @@ jobs:
             exit 1
           }
 
+      # The build inlines its dependencies into the file that ships in the
+      # wheel, so an npm dependency reaches a user the same way a PyPI one does.
+      # `scripts/check_licences.py` is the no-copyleft rule for the Python
+      # closure and cannot see this one.
+      - name: Bundled licences
+        run: npm run licences
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
