@@ -83,7 +83,7 @@ anything on that branch that assumes an instance is one store is wrong here.
   review rounds for the sentences that were wrong. *Not reference:* its page set, its style, or
   anything it wrote into `serving.md` or `BACKLOG.md`.
 
-- [ ] **Phase 6: The cost, measured.** Second priority, deliberately last. Run
+- [x] **Phase 6: The cost, measured.** Second priority, deliberately last. Run
   `bench/recording.py` on ProjectTracker's write mix and read workloads and on `emporium`; record
   the numbers in the phase plan and in `state.md` as approximate, with the exact command and its
   flags, and no figure the probe does not produce (ARCH §16). If a number is surprising, report

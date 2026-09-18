@@ -711,9 +711,10 @@ Eight codes, all of them for mistakes a composite makes silently.
   findings and nothing else, so the count appears where it is actionable, which is `SH504` at the
   bound. In process the count is `len(world.composition().nodes)`, and per instance
   `inst.composition()`.
-- **An idle composite instance is one file, one connection and one session per node.** Cost scales
-  with the tree, and the design target — hundreds of concurrent instances with minute-long lifetimes
-  — holds for a small number of nodes. The benchmark measures one node per instance and reads as a
+- **An idle composite instance is one file and one connection per node.** A session is opened per
+  node per call and closed with the call, so an idle instance holds none. Cost scales with the
+  tree, and the design target — hundreds of concurrent instances with minute-long lifetimes —
+  holds for a small number of nodes. The benchmark measures one node per instance and reads as a
   per-node floor.
 - **Sealing costs a walk of the tree,** on the first use after any registration anywhere in the
   process. The invalidation is global, because a world cannot be told what added it. Steady state is

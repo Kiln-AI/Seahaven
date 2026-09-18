@@ -843,7 +843,9 @@ def test_reducing_no_passes_at_all_says_so() -> None:
         seconds_per_call([])
 
 
-def _recorded(*, per_call: float, unread: float, long_lived: float) -> Recording:
+def _recorded(
+    *, per_call: float, unread: float, long_lived: float, wrote_rows: bool = True
+) -> Recording:
     """One probe's three legs at chosen costs, for the report's own arithmetic."""
     return Recording(
         world="ProjectTracker agency",
@@ -853,7 +855,7 @@ def _recorded(*, per_call: float, unread: float, long_lived: float) -> Recording
         per_call_seconds=per_call,
         unread_seconds=unread,
         long_lived_seconds=long_lived,
-        wrote_rows=True,
+        wrote_rows=wrote_rows,
     )
 
 
@@ -893,6 +895,45 @@ def test_a_split_that_cannot_be_read_is_printed_as_noise(
     assert flatten("| noise |") in section
     assert flatten("Its split is left unreported") in section
     assert "points are reading the changeset" not in section
+
+
+@pytest.mark.parametrize("wrote_rows", [True, False], ids=["wrote rows", "wrote none"])
+def test_a_total_that_cannot_be_read_is_printed_as_noise(wrote_rows: bool) -> None:
+    """The total is a measured figure too, and the same order decides whether it can be read.
+
+    The full leg does everything the long-lived leg does, on a session opened and
+    attached per node per call rather than once, and reads a changeset back as
+    well. A run that timed it no dearer measured its own passes, so neither the
+    table nor the finding may put a percentage on the total -- including on the
+    probe whose calls wrote no rows, which still has its own total to report when
+    the legs do come out in order.
+    """
+    inverted = _recorded(per_call=0.2, unread=0.3, long_lived=0.4, wrote_rows=wrote_rows)
+    assert not inverted.total_reads
+    assert not inverted.split_reads
+
+    section = _section_eight(inverted)
+
+    assert flatten("| a session per call | 200 ms | noise |") in section
+    assert flatten("Its total is this run's own noise and is left unreported") in section
+    assert "-50%" not in section, "the signed total the arithmetic gives is the negative one"
+
+
+def test_a_total_in_the_order_construction_forces_is_reported() -> None:
+    """The other side of that guard, on the probe whose split stays unreadable.
+
+    A pass that wrote no rows has nothing to render, so its split is noise while
+    its total is a real cost: a session opened and attached per node per call,
+    and an empty `changeset()` read back.
+    """
+    read_only = _recorded(per_call=0.3, unread=0.25, long_lived=0.2, wrote_rows=False)
+    assert read_only.total_reads
+    assert not read_only.split_reads
+
+    section = _section_eight(read_only)
+
+    assert flatten("| a session per call | 300 ms | +50% |") in section
+    assert flatten("costs about +50% against the framework's previous shape") in section
 
 
 def test_a_split_in_the_order_construction_forces_is_reported() -> None:

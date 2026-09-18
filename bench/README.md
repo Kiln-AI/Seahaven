@@ -29,6 +29,11 @@ Useful knobs: `--repeats`, `--calls`, `--baseline-calls`, `--gates 1 2 4 0`, `--
 `--seconds`, `--readers`, `--composite-calls`, `--tree-repeats`, `--seed`, `--warm-only`.
 `python -m bench --help` lists them all.
 
+The recording probe needs a longer run than these defaults before its totals settle: at 200 calls
+over 3 repeats a write probe's total moves by tens of points between runs, and comes out well
+above what a longer run gives. The figures in `src/seahaven/docs/state.md` come from
+`--calls 1000 --repeats 9`, which is what to run when a number is going to be quoted.
+
 ## Before you believe a number
 
 - Run it on an otherwise idle machine, and say what that machine was. The report captures the

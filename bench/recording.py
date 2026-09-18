@@ -132,6 +132,22 @@ class Recording:
         return self._share(self.per_call_seconds - self.unread_seconds)
 
     @property
+    def total_reads(self) -> bool:
+        """Whether this run's total can be read as a cost at all.
+
+        The full leg does everything the long-lived leg does and more: it opens
+        and attaches a session on every node per call where the long-lived leg
+        opens each once, and it reads a changeset back besides. So a run that
+        timed the full leg no dearer than the long-lived one has measured its own
+        passes, and the total taken from it comes out negative -- a cost that
+        cannot exist, whether or not the pass wrote rows.
+
+        `split_reads` is this same reading taken one leg finer, and implies this
+        one.
+        """
+        return self.per_call_seconds > self.long_lived_seconds
+
+    @property
     def split_reads(self) -> bool:
         """Whether this run's legs can be read as shares of the total at all.
 

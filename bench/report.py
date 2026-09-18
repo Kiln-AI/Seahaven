@@ -842,47 +842,81 @@ def _recording_rows(probe: Recording) -> str:
 
     The stable share is rounded and the noisy one takes the remainder, so the
     middle row and the finding below the table cannot disagree by a point. A
-    probe whose split cannot be read gets no middle figure at all, for the
-    reasons `Recording.split_reads` gives: printing one as a percentage would
-    invite it to be read.
+    probe whose split cannot be read gets no middle figure at all, and one whose
+    total cannot be read gets no total either, for the reasons
+    `Recording.split_reads` and `Recording.total_reads` give: printing a figure
+    as a percentage would invite it to be read.
     """
     total = round(probe.overhead * 100)
     rendering = round(probe.rendering * 100)
+    against = f"{total:+d}%" if probe.total_reads else "noise"
     middle = f"{total - rendering:+d}%" if probe.split_reads else "noise"
     head = f"| `{probe.world}` | {probe.nodes} | `{probe.workload}` |"
     return "\n".join(
         (
-            f"{head} a session per call | {_ms(probe.per_call_seconds)} | {total:+d}% |",
+            f"{head} a session per call | {_ms(probe.per_call_seconds)} | {against} |",
             f"{head} a session per call, never read | {_ms(probe.unread_seconds)} | {middle} |",
             f"{head} one long-lived session | {_ms(probe.long_lived_seconds)} | -- |",
         )
     )
 
 
-def _recording_finding(probe: Recording) -> str:
+def _recording_cost(probe: Recording) -> str:
+    """The opening clause of a finding: this probe's total, or why it has none.
+
+    A total is a measured figure like the shares below it, and the same order
+    decides whether it can be read: the full leg does everything the long-lived
+    leg does, on a session it opens and attaches per node per call rather than
+    once, and reads a changeset back as well. A run that timed it no dearer has
+    measured its own passes, and printing that as a signed percentage would put a
+    negative cost beside the sentence saying each leg does strictly more than the
+    one below it.
+
+    The clause carries no full stop, because what follows it differs by branch.
+    """
     where = f"**`{probe.workload}` on `{probe.world}`**"
+    if not probe.total_reads:
+        return (
+            f"{where} timed no dearer than the framework's previous shape, which is not a cost "
+            "this probe can produce: the full leg does everything the long-lived leg does, on a "
+            "session it opens and attaches per node per call rather than once, and reads a "
+            "changeset back as well. Its total is this run's own noise and is left unreported"
+        )
+    return (
+        f"{where} costs about {round(probe.overhead * 100):+d}% against the framework's previous "
+        "shape"
+    )
+
+
+def _recording_finding(probe: Recording) -> str:
+    cost = _recording_cost(probe)
     total = round(probe.overhead * 100)
     rendering = round(probe.rendering * 100)
     if not probe.wrote_rows:
         return (
-            f"{where} costs about {total:+d}% against the framework's previous shape. No call of "
-            "the pass gave a session a row, so there was nothing to render and nothing to free: "
-            "what it pays is a session opened and attached per node per call, and an empty "
-            "`changeset()` read back. Its two comparison legs therefore differ by that empty read "
-            "alone, so whatever separates them here is not a measurement of anything and the split "
-            "is left unreported."
+            f"{cost}. No call of the pass gave a session a row, so there was nothing to render and "
+            "nothing to free: what it pays is a session opened and attached per node per call, and "
+            "an empty `changeset()` read back. Its two comparison legs therefore differ by that "
+            "empty read alone, so whatever separates them here is not a measurement of anything "
+            "and the split is left unreported."
         )
     if not probe.split_reads:
+        # When the total could not be read either, the clause above has already
+        # given the reason and the finer reading does not repeat it.
+        why = (
+            " for the same reason, one leg finer."
+            if not probe.total_reads
+            else ": this run did not time the three legs in the order their construction forces -- "
+            "each does strictly less than the one above it -- so at least one share of the total "
+            "would come out negative, which is a cost that cannot exist. What separates those legs "
+            "here is the passes' own noise."
+        )
         return (
-            f"{where} costs about {total:+d}% against the framework's previous shape. Its split is "
-            "left unreported: this run did not time the three legs in the order their construction "
-            "forces -- each does strictly less than the one above it -- so at least one share of "
-            "the total would come out negative, which is a cost that cannot exist. What separates "
-            "those legs here is the passes' own noise. Re-run it before reading a split into these "
-            "rows."
+            f"{cost}. Its split is left unreported{why} Re-run it before reading a split into "
+            "these rows."
         )
     return (
-        f"{where} costs about {total:+d}% against the framework's previous shape, of which roughly "
+        f"{cost}, of which roughly "
         f"{rendering:+d} points are reading the changeset and rendering the records and the "
         f"remaining {total - rendering:+d} are what a fresh session per call costs over a "
         "warmed-up one. The first of those is work that used to happen once an episode, when an "
