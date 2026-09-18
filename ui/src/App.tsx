@@ -218,7 +218,6 @@ export default function App() {
           busy: false,
         }
         setEnvs((current) => [live, ...current])
-        void envStore.put(live.record)
         setActiveId(id)
         setTab("tools")
         void settings.set("root", request.root)
