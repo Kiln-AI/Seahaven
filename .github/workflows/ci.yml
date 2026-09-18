@@ -117,5 +117,17 @@ jobs:
         run: |
           node mock/server.mjs --port 8000 &
           node mock/server.mjs --port 8001 --plain &
-          sleep 2
+          # Wait for both to answer rather than sleeping at them. A mock that
+          # dies on startup otherwise surfaces as a locator timeout somewhere
+          # in the middle of the run instead of as "the mock did not start".
+          for port in 8000 8001; do
+            for _ in $(seq 50); do
+              curl -sf "http://127.0.0.1:$port/health" >/dev/null && break
+              sleep 0.2
+            done
+            curl -sf "http://127.0.0.1:$port/health" >/dev/null || {
+              echo "::error::the mock on $port never came up"
+              exit 1
+            }
+          done
           node e2e/smoke.mjs
