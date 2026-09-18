@@ -17,7 +17,7 @@ app, mounted at `/`, which is the shape a hub expects.
 """
 
 import json
-import logging
+from contextlib import suppress
 from typing import Any, NoReturn
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -30,7 +30,6 @@ from openenv.core.env_server.mcp_types import (
     ListToolsObservation,
 )
 from openenv.core.env_server.types import ConcurrencyConfig
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from seahaven.openenv.client import SeahavenClient
 from seahaven.openenv.env import (
@@ -59,8 +58,6 @@ __all__ = [
     "app",
 ]
 
-_log = logging.getLogger(__name__)
-
 # The operator's budget, not a design limit. Seahaven refuses no session of its
 # own accord; over capacity OpenEnv answers `CAPACITY_REACHED` and closes the
 # connection, and `seahaven serve --max_concurrent_envs` moves the number.
@@ -73,48 +70,10 @@ DEFAULT_MAX_CONCURRENT_ENVS = 500
 DEFAULT_SESSION_TIMEOUT = 3600.0
 
 
-class _SwallowWebSocketDisconnect:
-    """ASGI middleware: a peer that has gone away is not a server error.
-
-    OpenEnv's `/ws` handler closes the connection in a `finally` guarded by
-    `except RuntimeError`, and closing one whose peer has already closed raises
-    `WebSocketDisconnect` instead -- `http_server.py` line 1694 in openenv 0.4.2.
-    Upstream's `ws /mcp` did the same at line 1254; that handler is replaced by
-    the refusal below, whose own `close()` is unguarded, so this still covers it.
-    It escapes the app, and uvicorn logs `ERROR:
-    Exception in ASGI application` with a full traceback for a session that ended
-    perfectly normally. On a 500-session server that buries the errors an
-    operator is actually looking for.
-
-    `SeahavenClient` no longer provokes it -- it waits for the server to close
-    first -- so this is for the clients Seahaven does not ship: a stock
-    `GenericEnvClient`, a raw socket, a harness that simply dies. It is scoped as
-    narrowly as the fault allows, to a websocket connection and to
-    `WebSocketDisconnect` alone, which reaching this far up the stack means the
-    peer went away and never anything the server can act on. Every other
-    exception, and every HTTP request, passes through untouched.
-    """
-
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "websocket":
-            await self.app(scope, receive, send)
-            return
-        try:
-            await self.app(scope, receive, send)
-        except WebSocketDisconnect:
-            # Absorbed, not hidden. One debug line, so an operator chasing a
-            # disconnect can still find it, and so a test can tell "nobody left
-            # early" apart from "somebody did and we swallowed it".
-            _log.debug("websocket peer disconnected before the handler finished: %s", scope["path"])
-
-
 # OpenEnv's three plain-HTTP episode-control routes. Every one of their handlers
 # builds an `Environment` from the factory, uses it and closes it in a `finally`
-# before answering -- `http_server.py` lines 674/695 (`/reset`), 709/733
-# (`/step`) and 1347/1351 (`/state`) in openenv 0.4.2 -- so each request runs
+# before answering -- `http_server.py` lines 691/712 (`/reset`), 726/750
+# (`/step`) and 1382/1386 (`/state`) in openenv 0.5.0 -- so each request runs
 # against its own throwaway environment and none of the three observes another.
 # The answers are well-formed, 200, and meaningless. `/metadata` builds one the
 # same way and is deliberately not in this set: metadata is the world's and not
@@ -162,7 +121,7 @@ def _http_episode_control_message(route: str) -> str:
         "HTTP request and closes it again before replying, so this route would have answered "
         "from an environment that has never seen your reset, never ran your steps, and is about "
         "to be thrown away -- with a 200 and a plausible body. That is an upstream defect in "
-        "openenv 0.4.2, not a Seahaven limitation and not something a world can fix from its own "
+        "openenv 0.5.x, not a Seahaven limitation and not something a world can fix from its own "
         "side: every /reset, /step and /state handler in openenv/core/env_server/http_server.py "
         "builds an Environment from the factory and closes it in a finally, a regression "
         "introduced in OpenEnv commit 86a222d. Drive the episode over the WebSocket transport at "
@@ -182,7 +141,7 @@ def _http_episode_control_refusal(route: str) -> dict[str, Any]:
             "use_instead": "/ws",
             "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
             "upstream": {
-                "package": "openenv 0.4.2",
+                "package": "openenv >=0.5.0,<0.6 (verified against 0.5.0)",
                 "file": "openenv/core/env_server/http_server.py",
                 "regression": "86a222d",
                 "defect": (
@@ -246,7 +205,7 @@ def _refuse_http_episode_control(served: FastAPI) -> None:
 
 # OpenEnv's `/mcp`, on both transports: a `POST` route and a websocket route at
 # the same path. Every method on both is refused. `mcp_handler`
-# (`http_server.py:736` in openenv 0.4.2) dispatches exactly four --
+# (`http_server.py:753` in openenv 0.5.0) dispatches exactly four --
 # `openenv/session/create`, `openenv/session/close`, `tools/list` and
 # `tools/call` -- and none of the four is usable here. `tools/list` answers a
 # full tool list that no caller can then use; `tools/call` answers `reset first`
@@ -322,7 +281,7 @@ def _mcp_transport_refusal(method: str | None) -> dict[str, Any]:
             "use_instead": "/ws",
             "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
             "upstream": {
-                "package": "openenv 0.4.2",
+                "package": "openenv >=0.5.0,<0.6 (verified against 0.5.0)",
                 "file": "openenv/core/env_server/http_server.py",
                 "dispatches": [
                     "openenv/session/create",
@@ -419,13 +378,24 @@ def _refusing_mcp_websocket(route: APIWebSocketRoute) -> APIWebSocketRoute:
         # Either key, because upstream's `receive_text` raises on a binary frame
         # and a caller who sent one still deserves the refusal.
         raw = message.get("text") or message.get("bytes") or b""
-        await websocket.send_text(json.dumps(_mcp_refusal_frame(raw), ensure_ascii=False))
-        # Closed rather than left open answering frame after frame. Every method
-        # on this transport is refused, so a second frame could only earn the
-        # same answer, and a socket that stays open implies a negotiation that
-        # does not exist -- an MCP client would sit there waiting for one. The
-        # refusal is stated once, in full, and the connection ends normally.
-        await websocket.close()
+        # A peer that hangs up between its frame and this answer is not a server
+        # error, but starlette raises on a write to a socket the peer has already
+        # closed -- `WebSocketDisconnect` from `send_text` -- and an exception
+        # escaping this handler costs uvicorn an `ERROR: Exception in ASGI
+        # application` traceback for a connection that ended in the one way this
+        # handler always ends it. Upstream guards the same two on the `ws /mcp`
+        # handler this one replaces, and on the `/ws` handler it still owns --
+        # `http_server.py` lines 1290 and 1767 in openenv 0.5.0.
+        frame = json.dumps(_mcp_refusal_frame(raw), ensure_ascii=False)
+        with suppress(WebSocketDisconnect, RuntimeError):
+            await websocket.send_text(frame)
+            # Closed rather than left open answering frame after frame. Every
+            # method on this transport is refused, so a second frame could only
+            # earn the same answer, and a socket that stays open implies a
+            # negotiation that does not exist -- an MCP client would sit there
+            # waiting for one. The refusal is stated once, in full, and the
+            # connection ends normally.
+            await websocket.close()
 
     return APIWebSocketRoute(route.path, refuse, name=route.name)
 
@@ -499,16 +469,17 @@ def app(
         CallToolAction,
         SeahavenObservation,
         env_name=world.name,
+        # `GET /schema` answers `state_cls.model_json_schema()` and nothing else
+        # publishes the state shape, so a client that is not told the class here
+        # is told OpenEnv's bare `State` instead. The parameter arrived in openenv
+        # 0.5.0, which is what closed huggingface/OpenEnv#1155; 0.4.2 had no way
+        # to say this.
+        state_cls=SeahavenState,
         concurrency_config=ConcurrencyConfig(
             max_concurrent_envs=max_concurrent_envs,
             session_timeout=session_timeout,
         ),
     )
-    # Added to the app rather than wrapped around it, so this function still
-    # answers a `FastAPI` and every way of serving a world -- `seahaven serve`,
-    # the test helper, a hub world's `openenv_app.py` -- is covered without each
-    # of them remembering to wrap.
-    served.add_middleware(_SwallowWebSocketDisconnect)
     _refuse_http_episode_control(served)
     _refuse_mcp_transport(served)
     return served

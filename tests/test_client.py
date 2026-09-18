@@ -25,7 +25,6 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
-from openenv.core.env_client import EnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 
 from seahaven.openenv import SeahavenClient, SeahavenObservation, SeahavenState
@@ -337,22 +336,3 @@ def test_the_client_is_a_context_manager_that_closes_its_session(world: World) -
         with SeahavenClient(base_url=url) as second:
             second.reset()
             assert second.call("rows", sql="SELECT * FROM notes").result == []
-
-
-# --- the seam under the polite close ---------------------------------------
-
-
-def test_the_private_hook_this_client_overrides_is_still_there() -> None:
-    """The check that fails loudly if OpenEnv ever moves this method.
-
-    `SeahavenClient` overrides one *private* method of `EnvClient`.
-    `_disconnect_async` makes a close wait for the server, which is what keeps a
-    server's log free of a traceback per session; its docstring has the story.
-    An OpenEnv that renamed or dropped the method would leave the override
-    defining something nobody calls, and the only symptom would be noise in
-    somebody else's log. This says so here instead.
-    """
-    assert hasattr(EnvClient, "_disconnect_async"), (
-        "openenv no longer has the _disconnect_async hook SeahavenClient overrides"
-    )
-    assert SeahavenClient._disconnect_async is not EnvClient._disconnect_async

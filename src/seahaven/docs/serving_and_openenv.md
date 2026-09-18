@@ -4,7 +4,7 @@ A world can run as a server, so that an eval harness, an RL trainer or an agent 
 over the network instead of importing it. Each connection gets its own session, and each session
 gets its own private instance. Hundreds of sessions run against one process.
 
-Seahaven speaks [OpenEnv](https://github.com/huggingface/OpenEnv) (v0.4.x), an open standard for
+Seahaven speaks [OpenEnv](https://github.com/huggingface/OpenEnv) (v0.5.x), an open standard for
 connecting to reinforcement-learning environments. A server hosts an environment, a client connects,
 and the session is `reset` / `step` / `state` / `close` over a WebSocket, with JSON frames on the
 wire. Seahaven took that standard rather than inventing a protocol, which means two useful things:
@@ -22,7 +22,7 @@ A world is driven either in process through `world.instance(...)`, or over the W
 | [Calls, results and errors](#calls-results-and-errors) | What comes back from a tool call |
 | [Grading a run](#grading-a-run) | The state document over the wire, and choosing its format |
 | [Why there are no rewards](#why-there-are-no-rewards) | The design decision behind an empty `reward` |
-| [The wire protocol](#the-wire-protocol) | Every frame, for a client in any language |
+| [The wire protocol](#the-wire-protocol) | Every frame and model, for a client in any language |
 | [The concurrency gate](#the-concurrency-gate) | What bounds tool calls, and a known defect in it |
 | [Running it in production](#running-it-in-production) | Reaping, disconnects, and scaling out |
 | [Publishing to a hub](#publishing-to-a-hub) | `seahaven new --hub`, and what does not work yet |
@@ -372,6 +372,21 @@ The action type for a tool call is OpenEnv's `CallToolAction`, and the server al
 `ListToolsAction`, which returns every registered tool as `{name, description, input_schema}` —
 OpenEnv's own `Tool` shape. Control tools are never in that list.
 
+### `GET /schema` publishes the three models
+
+A client can read the shapes off the running server instead of off this page. `GET /schema` answers
+one JSON object holding a JSON Schema document under each of three keys.
+
+| Key | The model it describes |
+|---|---|
+| `action` | `CallToolAction`, the shape of a tool call |
+| `observation` | `SeahavenObservation`, the shape of a tool call's answer |
+| `state` | `SeahavenState`, the whole state document |
+
+Every field Seahaven declares carries the description this page gives it, so a generated client
+carries the descriptions too. The `state` document is the world's own model rather than OpenEnv's
+base `State`. Publishing the world's own model needs openenv 0.5 or newer on the server.
+
 ### One thing to plan for if you write your own client
 
 OpenEnv's docstrings say `error` is only for transport failures, but its own implementation uses it
@@ -438,17 +453,11 @@ environment on the wire ([composition.md](composition.md)).
 memory, and a client that drops without closing holds one for ever. An hour is long enough that no
 live eval is reaped and short enough that a crashed harness does not accumulate instances.
 
-**A disconnect is not an error in the log.** OpenEnv's WebSocket handler closes the connection from
-its own side after the peer has usually already gone, and lets the `WebSocketDisconnect` escape into
-uvicorn's ASGI error path — an `ERROR: Exception in ASGI application` and a full traceback for a
-session that ended perfectly normally. Seahaven closes both halves of that. `SeahavenClient` asks
-the server to close and waits for it to, so the handshake finishes and nothing is raised at all. The
-app also carries ASGI middleware that absorbs a `WebSocketDisconnect` escaping a WebSocket route,
-which covers every client Seahaven does not ship: a stock `GenericEnvClient`, a raw socket, a
-harness that dies mid-session. An absorbed disconnect is one `DEBUG` line on the `seahaven.openenv`
-logger, so it can still be found. The price is that a `WebSocketDisconnect` reaching the top of a
-WebSocket connection is never reported as a server error, which is the right trade: it only ever
-means the peer went away.
+**A disconnect is not an error in the log.** A session that ends normally leaves nothing on
+`uvicorn.error`, whatever client ended it: `SeahavenClient`, a stock `GenericEnvClient`, a raw
+socket, or a harness that simply dies. Seahaven carried a client-side close handshake and an ASGI
+middleware to get that under openenv 0.4.2, and carries neither now, because openenv 0.5 logs no
+error for a normal close.
 
 **A dropped connection is a lost episode, so `SeahavenClient` waits longer before calling one
 dead.** A session is one connection holding one instance, and there is no resume: any disconnect
@@ -534,7 +543,7 @@ triple the rest of the framework uses:
       "use_instead": "/ws",
       "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
       "upstream": {
-        "package": "openenv 0.4.2",
+        "package": "openenv >=0.5.0,<0.6 (verified against 0.5.0)",
         "file": "openenv/core/env_server/http_server.py",
         "regression": "86a222d",
         "defect": "each handler builds an Environment from the factory and closes it ..."
@@ -595,9 +604,3 @@ frames — a `{"type": "mcp"}` message on a `/ws` connection reaches the same up
 the *session's* environment, and works correctly once the session has been reset. Anything built on
 `openenv/session/create` would be thrown away the day upstream ships real Streamable HTTP; a world
 reached over `/ws` would not.
-
-### `GET /schema` publishes the base state model
-
-A client never sees the state shape it is driving: `create_app` takes an action class and an
-observation class and no state class, and the route answers `State.model_json_schema()` for every
-environment. ([huggingface/OpenEnv#1155](https://github.com/huggingface/OpenEnv/issues/1155).)
