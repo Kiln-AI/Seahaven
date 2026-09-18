@@ -71,7 +71,7 @@ anything on that branch that assumes an instance is one store is wrong here.
   list (`main`'s is different and larger), its `BACKLOG.md` edits (the file is gone), and its
   measured numbers.
 
-- [ ] **Phase 5: Documentation.** `state.md` under `AGENTS.md`'s "Docs style" with a table of
+- [x] **Phase 5: Documentation.** `state.md` under `AGENTS.md`'s "Docs style" with a table of
   contents, in FS §12's case order; the state section in `serving_and_openenv.md`;
   `composition.md`, `db_schema_and_fixtures.md`, `testing.md`, `concepts.md`, `authoring.md`,
   `index.md`, `reference/api.md`, `reference/cli.md`'s one line, `reference/lints.md`'s SH101

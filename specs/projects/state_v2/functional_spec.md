@@ -100,7 +100,7 @@ describes. For `seahaven.state/1`, `state` is `{"db": {"log": [...]}}`.
 | `episode_id` | Over OpenEnv, the session's episode id (the one given to `reset`, or the generated one). In-process, the instance id. |
 | `seed` | The `seed=` the caller gave: an integer, or `null`. The API narrows to `int \| None` (§8). |
 | `now` | The instance clock as an ISO-8601 instant, the same string `inst.clock.iso()` answers. |
-| `startup` | The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, exactly as the startup hooks received them. An object; empty when there were none. |
+| `startup` | The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as JSON at instance creation. A startup hook receives the caller's own value; this carries that value's JSON rendering, so a `datetime` or a model is text or an object here. An object; empty when there were none. |
 | `call_count` | How many calls have been dispatched to the instance so far (§7). Not OpenEnv's `step_count`, which also counts tool listings. |
 | `state` | The formatter's output. Under `seahaven.state/1`: `{"db": {"log": [...]}}`, the change log (§3.2). |
 

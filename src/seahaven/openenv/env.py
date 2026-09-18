@@ -242,8 +242,9 @@ class SeahavenState(State):
     startup: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, exactly as "
-            "the startup hooks received them; empty when there were none, null before any reset."
+            "The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as "
+            "JSON when the instance was created: a hook receives the caller's value and this "
+            "carries its JSON rendering. Empty when there were none, null before any reset."
         ),
     )
     call_count: int = Field(

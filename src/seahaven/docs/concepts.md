@@ -262,9 +262,13 @@ And over the instance:
   shadow tables;
 - an added world's store is in it, under its own path, with that world's own exclusions applied.
 
+Two traps come out of "never folded across calls", and [state.md](state.md) has both: counting
+records is not counting rows, and two episodes with the same end state can have different logs.
+
 This is what an eval grades on: the state the run left behind, rather than the transcript of how it
 got there. `inst.state()` is the document that carries the log, with the provenance needed to read
-it.
+it. [state.md](state.md) is the page on the document, the formats it comes in, and the fold that
+turns a log into the net difference an episode made.
 
 ## What Seahaven does not do
 

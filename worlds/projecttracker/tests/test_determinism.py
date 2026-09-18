@@ -4,7 +4,7 @@
 framework -- Seahaven promises a fixed clock and a seeded source, and a world that
 reaches past `ctx` for either gets what it asked for. This module is where this
 world says it does not: a scripted sequence of calls against one fixture and one
-seed produces the same identifiers, the same keys and the same changeset every
+seed produces the same identifiers, the same keys and the same change log every
 time, and a different seed produces different identifiers.
 """
 

@@ -585,9 +585,8 @@ Nothing agent-facing says a world is composed. Everything eval-facing does.
 
 - **`inst.inspect()`** is the read-only connection it always was, with every added node attached
   read-only under a schema named by its path, with `/` replaced by `__`: `payments.charges`,
-  `payments__tax.rates`. "Was the invoice created and was the charge taken" is one statement. The
-  same is true of `controller_run_sql` over a server. Writes, `ATTACH` and `DETACH` are denied on
-  it, as they always were.
+  `payments__tax.rates`. "Was the invoice created and was the charge taken" is one statement.
+  Writes, `ATTACH` and `DETACH` are denied on it, as they always were.
 - **`inst.change_log()`** is one list covering every node, in call order. Each record carries
   `world`, the owning node's path, which is `main` for the root. That is what tells two tables of the
   same name in two stores apart; the records of one call are sorted by that path, then the table,
@@ -596,8 +595,11 @@ Nothing agent-facing says a world is composed. Everything eval-facing does.
   `path`, `world`, `world_version`, `scope`, `aliases`, `schema_hash`, and `frozen_world_version` —
   the version the fixture recorded, when that is not the version installed, and `None` otherwise. It
   describes the files on disk rather than whatever the world's seal says now.
-- **Over OpenEnv**, the `state` message carries those same records under `composition`, and `null`
-  before the first `reset`, so a session can say what tree it is running against. `state` is not an
+- **`inst.state()`** is the whole document an eval grades on, and a node's path is what joins that
+  document together. `composition` is keyed by path. `fixture` holds one `file_sha256` per path. A
+  log record's `world` names one ([state.md](state.md)).
+- **Over OpenEnv**, the `state` message carries that same document, with `composition` `null` before
+  the first `reset`, so a session can say what tree it is running against. `state` is not an
   observation, and nothing agent-facing carries any of it.
 
 ## Typed access

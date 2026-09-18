@@ -64,6 +64,9 @@ float in a `TEXT` one. A world is a mock of a real product's data, and an eval t
 column's value needs the column to hold what the schema says. The failure without this rule is
 silent and arrives weeks later as a comparison that does not match.
 
+`STRICT` is also what keeps every row visible to the change log: a `STRICT` table refuses `NULL` in
+a primary-key column, and a row with `NULL` in one is never recorded, which is SQLite's own rule.
+
 **Fix.** `append STRICT to the CREATE TABLE <name>`. A `STRICT` table's columns must each be
 declared with one of the types SQLite allows there: `INT`, `INTEGER`, `REAL`, `TEXT`, `BLOB` or
 `ANY`. So a column written `VARCHAR(64)` or `BOOLEAN` has to be spelled `TEXT` or `INTEGER`.

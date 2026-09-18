@@ -140,8 +140,9 @@ def test_transitioning_an_issue_records_it_in_the_trail(instance: seahaven.Insta
     assert [event["kind"] for event in episode] == ["status", "assignee"]
 ```
 
-**The changeset, for anything an eval will grade.** If an eval is going to score "the issue was
-closed", test that closing it produces the change you expect.
+**The change log, for anything an eval will grade.** If an eval is going to score "the issue was
+closed", test that closing it produces the change you expect. [state.md](state.md) is the page on
+the log and the document an eval reads it from.
 
 ```python
 import pytest
@@ -183,4 +184,4 @@ have promised in its description — that `agency` really has twelve people, tha
 an assignee — and regenerating it cannot then quietly change the deal.
 
 **What not to test: the framework.** That a `Literal` produces a JSON schema, that a rollback rolls
-back, that the changeset renders. Those have tests of their own in Seahaven's suite.
+back, that the change log records a write. Those have tests of their own in Seahaven's suite.

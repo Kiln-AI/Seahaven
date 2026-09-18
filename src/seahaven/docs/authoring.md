@@ -1,12 +1,13 @@
 # Authoring a world
 
-This is the long page. It covers the package layout, tools, arguments, results, transactions,
-errors, the error handler, middleware, startup hooks, the schema files, and the things that go wrong
-quietly.
+This is the long page. It covers the package layout, the state format a world pins, tools,
+arguments, results, transactions, errors, the error handler, middleware, startup hooks, the schema
+files, and the things that go wrong quietly.
 
 | Section | What it covers |
 |---|---|
 | [Scaffolding a world](#scaffolding-a-world) | `seahaven new`, the layout it writes, and three rules about it |
+| [Pinning a state format](#pinning-a-state-format) | The one `World` argument with no default |
 | [Writing a tool](#writing-a-tool) | Signatures, arguments, results, transactions, and what registration refuses |
 | [Errors](#errors) | This world's error shapes, the framework's own, and the error handler |
 | [Middleware](#middleware) | Wrapping every call |
@@ -73,6 +74,36 @@ bites later rather than at import.
 effects, then registers any imported factories. A module under `tools/` or `middleware/` that
 nothing imports registers nothing, and `seahaven check` fails on it (`SH301`) rather than letting
 the world quietly have one tool fewer than you think.
+
+## Pinning a state format
+
+`World(state_format=...)` is **required**, and it is the one constructor argument with no default.
+It names the format `inst.state()` answers in, and a `World` built without it is refused at
+construction with the built-in format names in the message. The scaffold writes
+`state_format="seahaven.state/1"`, which is the format a harness that reads the state once at the
+end of an episode wants. [state.md](state.md) covers the three built-in formats, and how to register
+one of your own.
+
+```py
+world = seahaven.World(
+    name="notes",
+    version="1.0.0",
+    schema=seahaven.sql_files(__package__, "schema"),
+    state_format="seahaven.state/1",
+)
+```
+
+Three things follow from the pin, and each of them catches an author out once:
+
+- **The root decides.** An instance is made from one root world, and that root's pin is the
+  instance's format. The pin of a world you added is not consulted, and neither are the formats it
+  registered. Every world may be a root, which is why every world carries a pin.
+- **A caller may override it per instance**, with `world.instance(state_format=...)` or
+  `reset(state_format=...)`. `state_format` is therefore a reserved reset keyword beside `fixture`,
+  `seed` and `now`: a startup hook that names a parameter `state_format` is refused at registration,
+  and the keyword never reaches a hook.
+- **Changing the pin changes what every eval built on the world saves**, so bump `world.version`
+  when you change it. These docs recommend it; nothing enforces it.
 
 ## Writing a tool
 
@@ -244,8 +275,8 @@ All of it happens at import, with a message naming the tool and the parameter. A
 when it:
 
 - duplicates another tool's name;
-- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or `controller_run_sql`
-  (Seahaven's control tool);
+- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or the control tool that
+  [reference/cli.md](reference/cli.md) names;
 - is an `async def`, a generator, or an async generator;
 - has no first parameter, or one that is not positional and either annotated `seahaven.Ctx` or left
   unannotated;
@@ -547,9 +578,9 @@ and random overrides — so world code never sets a pragma.
 
 **FTS5** is supported as far as a world's own search tool needs. A virtual table and its sync
 triggers are allowed in the schema and are exempt from the `STRICT` and primary-key rules. FTS5's
-shadow tables are known to Seahaven and stay out of changesets, out of the freeze comparison, and
-out of `run_sql`'s default allowlist. Write the search tool in plain SQL with `MATCH`, `bm25()` and
-`snippet()`. The ranking is FTS5's, which is not Lucene's, so an eval that grades on "the best
+shadow tables are known to Seahaven and stay out of the change log, out of the freeze comparison,
+and out of `run_sql`'s default allowlist. Write the search tool in plain SQL with `MATCH`, `bm25()`
+and `snippet()`. The ranking is FTS5's, which is not Lucene's, so an eval that grades on "the best
 result" is grading on what this SQLite build computes.
 
 A world's own search tool is the usual path, and ProjectTracker's `search_issues` is the pattern.
@@ -625,7 +656,7 @@ it. See [db_schema_and_fixtures.md](db_schema_and_fixtures.md).
 rowid`. For a *tool* there is no complete answer: a keyset cursor has to carry its tiebreaker as a
 value, `rowid` is not a column a world projects, and `ctx` offers no monotonic per-instance counter
 to page on instead. Order by `(created_at, id)`, say so in the tool's docstring, and grade evals on
-state and changesets rather than on the order of an activity feed.
+the state document rather than on the order of an activity feed.
 
 **Lists without a tiebreak.** `ORDER BY created_at DESC` over rows that share an instant is not
 deterministic. Always order by a column *and* by the id.

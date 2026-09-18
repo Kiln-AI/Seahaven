@@ -704,8 +704,9 @@ DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
         "seed": "The seed `reset` was given, or null if it was given none.",
         "now": "The instance's clock as an ISO-8601 instant, or null before the first reset.",
         "startup": (
-            "The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, exactly as "
-            "the startup hooks received them; empty when there were none, null before any reset."
+            "The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as "
+            "JSON when the instance was created: a hook receives the caller's value and this "
+            "carries its JSON rendering. Empty when there were none, null before any reset."
         ),
         "call_count": (
             "How many calls have been dispatched to the instance. Not `step_count`, which also "

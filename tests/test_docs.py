@@ -1,11 +1,13 @@
 """The bundled docs: the layout exists, and the lint reference is not stale.
 
 The pages are hand-written and nothing generates them, so there is no drift test
-to write for their prose -- `components/pytest_and_docs.md` §2 says so. Two things
-can go wrong silently and are checked here: a page named by the layout (and by
-`index.md`, and by a scaffolded world's `AGENTS.md`) that is not there, and the
-lint reference falling behind the rules, which is the one page whose content is a
-list of things that exist elsewhere in the code.
+to write for their prose -- `components/pytest_and_docs.md` §2 says so. What can
+go wrong silently is checked here: a page named by the layout (and by `index.md`,
+and by a scaffolded world's `AGENTS.md`) that is not there; the lint reference
+falling behind the rules, which is the one page whose content is a list of things
+that exist elsewhere in the code; and a page still naming either of the two
+surfaces the state-format project removed from the docs, which no fence check
+catches in prose.
 """
 
 import re
@@ -26,6 +28,7 @@ PAGES = (
     "composition.md",
     "db_schema_and_fixtures.md",
     "testing.md",
+    "state.md",
     "serving_and_openenv.md",
     "extensions.md",
     "projecttracker.md",
@@ -148,3 +151,34 @@ def test_the_lint_packages_own_table_agrees_with_the_reference() -> None:
     from seahaven import lint
 
     assert set(_DOCUMENTED.findall(lint.__doc__ or "")) == registered_codes()
+
+
+# `functional_spec.md` §11: `controller_run_sql` is deprecated and leaves the docs
+# but for the one line of `reference/cli.md` that documents the flag it is behind.
+# The prefix is what to search for, because it is how every control tool is
+# spelled, and the exception is one line rather than a whole page, so that the
+# deprecation line cannot quietly grow a worked example.
+_CONTROL_PREFIX = "controller_"
+_CONTROL_PAGE = "reference/cli.md"
+
+# `Instance.changes()` was removed with the change log. A page that still calls it
+# is an example that raises `AttributeError` for whoever pastes it, and no fence
+# check catches a mention in prose.
+_REMOVED_CALL = "changes()"
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_no_page_names_a_control_tool_but_the_cli_reference(page: str) -> None:
+    text = (DOCS / page).read_text(encoding="utf-8")
+    naming = [line for line in text.splitlines() if _CONTROL_PREFIX in line]
+    if page != _CONTROL_PAGE:
+        assert not naming, f"{page} names a control tool: {naming}"
+    else:
+        assert len(naming) == 1, f"{page} names a control tool on {len(naming)} lines, not one"
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_no_page_calls_the_removed_changes_method(page: str) -> None:
+    text = (DOCS / page).read_text(encoding="utf-8")
+    naming = [line for line in text.splitlines() if _REMOVED_CALL in line]
+    assert not naming, f"{page} still calls a method the framework removed: {naming}"

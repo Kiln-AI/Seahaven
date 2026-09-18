@@ -12,7 +12,8 @@ change without notice.
 | [`Ctx`](#ctx) | What every tool receives |
 | [`Worlds` and `WorldHandle`](#worlds-and-worldhandle) | Reaching an added world |
 | [`Db`](#db), [`Clock`](#clock), [`Ids`](#ids) | The database, the time and the seeded stream |
-| [`Call`](#call), [`Tool`](#tool), [`LogRecord`](#logrecord) | One call, one tool, one row a call changed |
+| [`Call`](#call), [`Tool`](#tool) | One call as dispatch sees it, and one registered tool |
+| [`LogRecord`](#logrecord), [`CallRecord`](#callrecord) | One row a call changed, and one call the instance was given |
 | [The composition report](#the-composition-report) | The stores one instance holds |
 | [`Fixture`](#fixture), [`seahaven.fixtures`](#seahavenfixtures) | Fixtures, and the module that reads them |
 | [Errors](#errors) | The exception hierarchy |
@@ -45,7 +46,8 @@ import seahaven
 
 seahaven.World, seahaven.Instance, seahaven.Ctx, seahaven.Tool, seahaven.Call
 seahaven.Worlds, seahaven.WorldHandle
-seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.LogRecord, seahaven.Fixture
+seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.LogRecord, seahaven.CallRecord
+seahaven.Fixture
 seahaven.SeahavenError, seahaven.WorldBug
 seahaven.ToolError, seahaven.ArgumentError, seahaven.DbError, seahaven.UnknownTool
 seahaven.sql_files, seahaven.helpers, seahaven.sandbox
@@ -94,7 +96,7 @@ constructing module to the directory holding `pyproject.toml`, and to `fixtures/
 where there is none. `work_dir` is where instance copies are kept; the default is a per-process
 directory under the system temp directory, which is swept of previous processes' leftovers, and a
 directory you name is used exactly as given and never swept. `untracked_tables` names tables the
-changeset session does not attach.
+change log's sessions do not attach.
 
 A `World` whose schema does not execute cannot be constructed: the schema is built in memory to
 compute the schema hash, and SQLite's own message is reported.
@@ -179,6 +181,7 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.bulk()` | a context manager yielding the instance's own `Ctx`, in one transaction, for loading rows fast |
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
 | `inst.id`, `inst.fixture`, `inst.seed` | the instance id, the fixture id (or `None`), the derived seed bytes |
+| `inst.state_format` | the format `inst.state()` answers in, fixed for the instance's life |
 | `inst.clock`, `inst.world`, `inst.state_path` | the clock, the world, and the instance's own database file |
 
 The tool name is positional-only, so a world may have a tool argument called `name`.
@@ -248,8 +251,8 @@ rather than the statement, so read it straight after an `INSERT`.
 
 `db.conn` is there for what the wrapper does not cover, such as blob I/O or an exec trace. The
 invariants: **do not close it, change its pragmas or its authorizer, or open a second connection to
-the instance file.** The clock functions, the changeset session and the per-call transaction all use
-that one connection.
+the instance file.** The clock functions, the change log's per-call session and the per-call
+transaction all use that one connection.
 
 ## `Clock`
 
@@ -339,6 +342,22 @@ non-key columns the call changed, old values in `before` and new in `after`, and
 which `key` already holds. Flattening the two would turn "changed the assignee" into "rewrote the
 row".
 
+## `CallRecord`
+
+```py
+call_record.tool  # the tool's name as the caller gave it
+call_record.arguments  # a copy of the arguments the call carried, never re-serialised
+call_record.error  # the message of whatever the call raised, or None
+call_record.to_dict()  # the published shape, as `seahaven.state+calls/1` writes it
+```
+
+`inst.call_log()` answers these in dispatch order, so `[i]` is the call a log record's `i` names.
+Under composition `tool` is the name on the root's tool surface, prefix included, rather than the
+owning world's own name for it. `arguments` is copied when the call is made, so a tool that changes
+the dict it was handed does not change the record, and it is never re-serialised: an in-process
+caller who passed something JSON cannot carry gets it back as it was. Only dispatched calls are in
+the log: a name the world refused, a tool listing and a control tool are not calls.
+
 ## The composition report
 
 `inst.composition()` returns one record per store, root first, in `seahaven.composition`:
@@ -355,7 +374,8 @@ report.frozen_world_version  # what the fixture recorded, when that is not what 
 It describes the stores this instance holds, which is the set it was created with rather than
 whatever the world's seal says now. `frozen_world_version` is `None` for a blank instance, and also
 wherever the fixture and the installed world agree. A version difference under a matching schema
-hash is reported, never refused. Over OpenEnv the same list is the `state` message's `composition`.
+hash is reported, never refused. The state document carries the same records as `composition`, keyed
+by `path` rather than listed ([../state.md](../state.md)).
 
 ## `Fixture`
 
@@ -509,11 +529,19 @@ class SeahavenClient:  # .reset(...), .call(tool, /, **arguments), .list_tools()
     ...
 
 
-# Also exported: SeahavenEnv, SeahavenObservation, SeahavenState, and OpenEnv's own
-# CallToolAction, ListToolsAction and ListToolsObservation.
+# Also exported: SeahavenEnv, SeahavenObservation, SeahavenState, its four nested models
+# WorldRef, NodeRef, FixtureRef and FileRef, and OpenEnv's own CallToolAction,
+# ListToolsAction and ListToolsObservation.
 ```
 
-See [../serving_and_openenv.md](../serving_and_openenv.md).
+`SeahavenClient.state()` answers a `SeahavenState`: the state document, plus OpenEnv's
+`step_count`. Every envelope field of the document is a typed field on it, with `world` a
+`WorldRef`, `composition` a `dict[str, NodeRef]`, `fixture` a `FixtureRef` whose `nodes` is a
+`dict[str, FileRef]`, and `state` a `dict[str, Any]` because its shape is the format's.
+`state().model_dump(exclude={"step_count"})` is the document as `inst.state()` answers it in
+process.
+
+See [../serving_and_openenv.md](../serving_and_openenv.md) and [../state.md](../state.md).
 
 ## The pytest plugin
 
