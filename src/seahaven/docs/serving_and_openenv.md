@@ -349,6 +349,20 @@ freeze the fixture `BigClient`, and then write hundreds of scenarios against tha
 its own goal and its own grader. A world that computed a reward would have baked one scenario's goal
 into the environment, and the next scenario would need a new world.
 
+**Some OpenEnv clients expect a reward and a terminal `done`, and fail without them.** For example,
+OpenEnv's harness helpers read an empty `reward` as an error rather than a null, and end every
+Seahaven episode with `ValueError: rollout did not produce an environment reward`. `CollectRunner`
+and the TRL rollout function are both built on those helpers. Three ways out:
+
+- Drive `SeahavenClient` yourself, and grade the state document it answers.
+- Write your own client, which owns termination and scoring.
+- Keep the harness helpers, and give the session a `verify_builder` that returns the judge's score
+  as `env_reward`.
+
+Nothing in Seahaven sets `done`, so bound a rollout by turns, by tool calls or by the scenario's own
+completion test.
+
+
 ## The wire protocol
 
 `SeahavenClient` is a convenience. The protocol is OpenEnv's, and a client in any language needs
