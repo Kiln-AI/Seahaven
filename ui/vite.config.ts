@@ -14,6 +14,11 @@ const TARGET = process.env.OPENENV_TARGET ?? "http://127.0.0.1:8000"
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), viteSingleFile()],
+  // The dependencies' licence notices travel with the code they cover. esbuild
+  // drops every comment by default, which would minify React's `@license`
+  // header out of a file that ships inside the wheel, and an attribution
+  // licence is complied with by keeping the notice.
+  esbuild: { legalComments: "inline" },
   build: {
     target: "es2022",
     assetsInlineLimit: 100 * 1024 * 1024,
