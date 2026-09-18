@@ -171,14 +171,14 @@ _ACTIONS = {
 # well -- what is allowed there is not a pragma agent SQL can ask.
 _PRAGMAS = frozenset({"data_version"})
 
-# The changeset session's own question, and only its own. When a statement makes
-# the first change to a table the instance's session has not recorded before,
-# SQLite's session extension prepares `PRAGMA table_xinfo(<that table>)` to learn
-# the table's shape -- *inside* the agent's statement, so it arrives here like
-# anything else the statement asks for. Denied, the session stores the
-# `SQLITE_AUTH` and every later `changeset()` fails with it: one agent write to a
-# table the world's own fixtures never touched, and `Instance.changes()` -- the
-# eval's score -- is gone for the life of the instance.
+# The change log's session and only it. When a statement makes the first change
+# to a table the call's session has not recorded before, SQLite's session
+# extension prepares `PRAGMA table_xinfo(<that table>)` to learn the table's
+# shape -- *inside* the agent's statement, so it arrives here like anything else
+# the statement asks for. Denied, the session stores the `SQLITE_AUTH` and its
+# `changeset()` fails with it: one agent write to a table the world's own
+# fixtures never touched, and that call's records -- the eval's score -- are
+# gone.
 #
 # `_wrote_a_row` is what keeps this from being a pragma the agent can ask. The
 # session's question can only follow a row write that was already allowed, so the
@@ -307,7 +307,7 @@ class Authorizer:
         return self._refuse(_describe(action, third, fourth))
 
     def _session_asking(self, third: str | None, fourth: str | None) -> bool:
-        """The changeset session reading the shape of a table this call wrote.
+        """The change log's session reading the shape of a table this call wrote.
 
         Never the agent's own pragma: it is answered only once this call has
         already been allowed a row write, which the session's question always

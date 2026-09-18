@@ -54,6 +54,7 @@ world = seahaven.World(
     name="myworld",
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema") + seahaven_xmlrpc.CALL_LOG_DDL,
+    state_format="seahaven.state/1",
 )
 ```
 
@@ -77,7 +78,7 @@ errors (`WorldBug`, `ToolError`, `ArgumentError`, `DbError`, `UnknownTool`).
 - **Register itself.** The world registers what it wants, by name, in its own `__init__`. An
   extension that registered itself on import would make a world's tool surface depend on its import
   order.
-- **Set `control`.** That flag is Seahaven's own, for its two control tools, and
+- **Set `control`.** That flag is Seahaven's own, for its control tool, and
   `Tool.from_function` cannot set it.
 
 ## The worked example: XML-RPC

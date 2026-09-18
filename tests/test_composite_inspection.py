@@ -22,7 +22,10 @@ from seahaven.errors import DbError, ToolError
 from seahaven.instances import Instance
 from tests.conftest import INSTANT_ISO, composable_world
 
-pytestmark = pytest.mark.usefixtures("isolated_imports")
+pytestmark = [
+    pytest.mark.usefixtures("isolated_imports"),
+    pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated"),
+]
 
 
 @pytest.fixture

@@ -19,4 +19,5 @@ world = seahaven.World(
         "world the framework is developed against. Nothing here mimics a real product's names, "
         "schema or error text."
     ),
+    state_format="seahaven.state/1",
 )

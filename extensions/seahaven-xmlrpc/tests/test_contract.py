@@ -36,7 +36,12 @@ def test_importing_the_extension_registers_nothing() -> None:
     control tools and nothing else. Nothing in the extension runs at import: no
     tool, no middleware, no startup hook, no schema.
     """
-    world = seahaven.World("empty_after_import", "1.0.0", "CREATE TABLE t (id TEXT PRIMARY KEY);")
+    world = seahaven.World(
+        "empty_after_import",
+        "1.0.0",
+        "CREATE TABLE t (id TEXT PRIMARY KEY);",
+        state_format="seahaven.state/1",
+    )
     assert set(world.tools) == set(CONTROL_TOOL_NAMES)
     assert world.middlewares == ()
     assert world.startup_hooks == ()
@@ -245,7 +250,10 @@ def test_the_extensions_table_is_in_the_worlds_schema_hash(
     runs on a copy of ProjectTracker rather than on ProjectTracker.
     """
     without = seahaven.World(
-        "tracker_rpc", world.version, seahaven.sql_files("projecttracker", "schema")
+        "tracker_rpc",
+        world.version,
+        seahaven.sql_files("projecttracker", "schema"),
+        state_format="seahaven.state/1",
     )
     assert world.schema_hash != without.schema_hash
     assert instance.inspect().one(

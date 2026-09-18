@@ -15,7 +15,7 @@ def events(instance: seahaven.Instance, issue_id: str) -> list[dict[str, Any]]:
 
     Read through `inspect()` rather than through a tool, because this world has
     no tool that lists events: the trail is what an eval grades on, and it
-    reaches an eval through `run_sql`, the changeset, or a read like this one.
+    reaches an eval through `run_sql`, the change log, or a read like this one.
 
     `created_at, rowid`, and the second half is load bearing. An instance's clock
     does not move, so three events written by three calls in one test all carry
@@ -199,7 +199,7 @@ def test_a_transition_records_where_the_issue_came_from(
 def test_a_transition_to_the_status_it_already_has_changes_nothing(
     instance: seahaven.Instance, scaffold: Scaffold
 ) -> None:
-    """A no-op write would put a lie in the trail and a change in the changeset."""
+    """A no-op write would put a lie in the trail and a record in the change log."""
     issue = an_issue(instance, scaffold)
     same = instance.call(
         "transition_issue", issue_id=issue["id"], status="backlog", actor_id=scaffold.admin

@@ -159,8 +159,8 @@ class Db:
 
         Errors raised through it are APSW's, not `DbError`. Do not close it,
         change its pragmas or its authorizer, or open a second connection to the
-        same file: the clock and randomness functions, the changeset session and
-        the per-call transaction all live on this connection.
+        same file: the clock and randomness functions, the change log's per-call
+        session and the per-call transaction all run on this connection.
         """
         return self._conn
 
@@ -290,7 +290,7 @@ def open_inspection(
     """Open a second, read-only view of an instance for looking at its state.
 
     `stream` names which read-only door this is -- `INSPECTION_STREAM` for the
-    handle a caller reads state through, `CONTROL_STREAM` for the control tools'
+    handle a caller reads state through, `CONTROL_STREAM` for the control tool's
     own -- so that two doors onto one instance do not hand out the same random
     values. See `ids.register_random_functions`. One door is one stream whatever
     it is attached to: a composite instance's read-only handles each draw from a

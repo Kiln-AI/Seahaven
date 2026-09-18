@@ -101,7 +101,20 @@ def test_a_cli_error_carries_the_code_check_renders_it_with() -> None:
 def test_the_ddl_failure_message_is_the_constant_check_matches_on(tmp_path: Path) -> None:
     """`cli.check` tells SH104 from SH501 by this phrase, so the two must not drift."""
     with pytest.raises(Exception) as raised:
-        World("broken", "1.0.0", "CREATE TABLE t (a NOTATYPE) STRICT;", fixtures_dir=tmp_path)
+        World(
+            "broken",
+            "1.0.0",
+            "CREATE TABLE t (a NOTATYPE) STRICT;",
+            fixtures_dir=tmp_path,
+            state_format="seahaven.state/1",
+        )
     assert DDL_DOES_NOT_EXECUTE in str(raised.value)
     # And a world whose DDL is fine never says it.
-    World("fine", "1.0.0", NOTES_SCHEMA, fixtures_dir=tmp_path, work_dir=tmp_path)
+    World(
+        "fine",
+        "1.0.0",
+        NOTES_SCHEMA,
+        fixtures_dir=tmp_path,
+        work_dir=tmp_path,
+        state_format="seahaven.state/1",
+    )

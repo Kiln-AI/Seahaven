@@ -246,7 +246,9 @@ def test_every_documented_command_line_parses(block: Block) -> None:
 
 
 # The receivers the docs write examples and member tables against, and the type
-# each one is. `tracker` is `projecttracker.md`'s name for an instance.
+# each one is. `tracker` is `projecttracker.md`'s name for an instance, and
+# `call_record` is the reference's name for a `CallRecord`, which `record` cannot
+# also be: the two record classes share no field.
 _RECEIVER_TYPES = {
     "world": "world",
     "inst": "instance",
@@ -258,7 +260,8 @@ _RECEIVER_TYPES = {
     "ids": "ids",
     "call": "call",
     "tool": "tool",
-    "change": "change",
+    "record": "record",
+    "call_record": "call_record",
     "fixture": "fixture",
 }
 
@@ -290,6 +293,7 @@ def receivers(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
         version="1.0.0",
         schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
         fixtures_dir=directory / "fixtures",
+        state_format="seahaven.state/1",
     )
 
     @world.tool
@@ -314,7 +318,8 @@ def receivers(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, ob
                 "ids": ctx.ids,
                 "call": seahaven.Call(name=tool.name, arguments={}, tool=tool),
                 "tool": tool,
-                "change": inst.changes()[0],
+                "record": inst.change_log()[0],
+                "call_record": inst.call_log()[0],
                 "fixture": fixture,
             }
 

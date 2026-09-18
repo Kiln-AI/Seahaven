@@ -13,7 +13,7 @@ without explaining them again, so read this page first.
 | [Context](#context) | The `ctx` object every tool receives |
 | [Clock](#clock) | The instance's frozen point in time |
 | [Reproducibility](#reproducibility) | Why the same run replays the same way |
-| [Changeset](#changeset) | The net difference an agent left behind |
+| [The change log](#the-change-log) | What the agent changed, call by call |
 
 ## World
 
@@ -29,6 +29,7 @@ world = seahaven.World(
     name="notes",
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema"),
+    state_format="seahaven.state/1",
 )
 ```
 
@@ -72,8 +73,8 @@ into the one string `World(schema=...)` takes.
 Three rules apply to every table, and `seahaven check` enforces all three:
 
 - every table is `STRICT`, so SQLite stores what the column says rather than whatever it was handed;
-- every table has an explicit primary key, because a row with no key cannot be identified in a
-  changeset;
+- every table has an explicit primary key, because a row with no key cannot be identified in the
+  change log;
 - no expression anywhere reads the wall clock — no `CURRENT_TIMESTAMP` default, and no
   `datetime('now')` in a trigger. World code writes timestamps, from the instance's clock, in one
   format.
@@ -106,7 +107,7 @@ description file. See [db_schema_and_fixtures.md](db_schema_and_fixtures.md) and
 ## Instance
 
 An **instance** is a private copy of a fixture's SQLite file, plus one connection, one clock, one id
-generator and one changeset session. It lives for the length of one run, in a working directory
+generator and the change log it keeps. It lives for the length of one run, in a working directory
 under the system temp directory, and it is what a run actually drives.
 
 ```python
@@ -135,9 +136,9 @@ shares those slots, and the gate is unfair whenever it binds.
 known defect.
 
 An instance of a world that **adds other worlds** is the same thing once per **store**, where a
-store is one database owned by one world in the tree. Each store gets its own file, connection, id
-stream and changeset session, under one clock, one seed and one lock. Every sentence above still
-holds, which is what [composition.md](composition.md) is about.
+store is one database owned by one world in the tree. Each store gets its own file, connection and
+id stream, and each is recorded in the change log, under one clock, one seed and one lock. Every
+sentence above still holds, which is what [composition.md](composition.md) is about.
 
 ## Context
 
@@ -228,13 +229,14 @@ get right. A list a world returns needs a deterministic tiebreak: order by a col
 or two identical runs will disagree about rows that share a value. And anything outside the world,
 such as a live external tool an eval also gives the agent, is outside the promise.
 
-## Changeset
+## The change log
 
-`inst.changes()` returns what the instance has changed since it was created: a list of records
-carrying the store, the table, the operation, the row's key, and the row before and after. The store
-is `change.world`. A world that adds no other worlds has one store, so every record says `main`. A
-world that adds others has one store per added world, and `change.world` names the one the row
-belongs to ([composition.md](composition.md)).
+`inst.change_log()` returns every row the instance has changed since it was created, one record per
+row per call, in call order. A record carries the call's ordinal `i`, the store, the table, the
+operation, the row's key, and the row before and after. The store is `record.world`. A world that
+adds no other worlds has one store, so every record says `main`. A world that adds others has one
+store per added world, and `record.world` names the one the row belongs to
+([composition.md](composition.md)).
 
 ```python
 import projecttracker
@@ -242,24 +244,31 @@ import projecttracker
 with projecttracker.world.instance("small_startup") as inst:
     issue = inst.call("get_issue", key="ENG-3")
     inst.call("transition_issue", issue_id=issue["id"], status="done")
-    changed = {(change.table, change.op) for change in inst.changes()}
+    changed = {(record.table, record.op) for record in inst.change_log()}
     assert ("issues", "update") in changed
 ```
 
-**A changeset is a net difference, not a log of calls.** It compares the fixture with the current
-state:
+**A record is the net of its own call, and the log is never folded across calls.** Inside one call:
 
 - a write that leaves a value unchanged records nothing;
 - an insert followed by an update of the same row is one insert;
-- a call that rolled back leaves no trace;
-- rows written by startup hooks are not in it, because the session is attached after the hooks have
-  run, and those rows are the world's setup rather than the agent's work;
+- a call that rolled back leaves no trace.
+
+And over the instance:
+
+- rows written by startup hooks are not in the log, because no session is open while they run, and
+  those rows are the world's setup rather than the agent's work;
 - tables the world names in `World(untracked_tables=...)` are not in it, and neither are FTS5's
   shadow tables;
 - an added world's store is in it, under its own path, with that world's own exclusions applied.
 
+Two traps come out of "never folded across calls", and [state.md](state.md) has both: counting
+records is not counting rows, and two episodes with the same end state can have different logs.
+
 This is what an eval grades on: the state the run left behind, rather than the transcript of how it
-got there.
+got there. `inst.state()` is the document that carries the log, with the provenance needed to read
+it. [state.md](state.md) is the page on the document, the formats it comes in, and the fold that
+turns a log into the net difference an episode made.
 
 ## What Seahaven does not do
 

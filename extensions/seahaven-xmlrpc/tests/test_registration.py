@@ -68,6 +68,7 @@ def test_the_registered_tool_is_the_one_the_factory_built(tmp_path: Any) -> None
         seahaven.sql_files("projecttracker", "schema"),
         fixtures_dir=tmp_path / "fixtures",
         work_dir=tmp_path / "work",
+        state_format="seahaven.state/1",
     )
     tool = seahaven_xmlrpc.xmlrpc_call(methods=_METHODS, name=RPC)
     assert world.tool(tool) is tool

@@ -16,6 +16,7 @@ from typing import Any
 import emporium
 import pytest
 
+import seahaven
 from seahaven.ctx import Ctx
 from seahaven.errors import SeahavenError, ToolError, WorldBug
 from seahaven.world import World
@@ -39,7 +40,17 @@ from openenv.core.env_server.mcp_types import (
 from openenv.core.env_server.types import Action, EnvironmentMetadata
 from pydantic import BaseModel
 
-from seahaven.openenv.env import SeahavenEnv, SeahavenObservation, SeahavenState
+from seahaven.openenv.env import (
+    FileRef,
+    FixtureRef,
+    NodeRef,
+    SeahavenEnv,
+    SeahavenObservation,
+    SeahavenState,
+    WorldRef,
+)
+
+pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 
 CONTROL_SQL = "SELECT count(*) AS n FROM notes"
 
@@ -191,6 +202,7 @@ def test_a_failed_reset_leaves_the_session_as_a_fresh_one(env: SeahavenEnv) -> N
     assert not first.dir.exists()
     state = env.state
     assert (state.episode_id, state.step_count, state.fixture, state.now) == (None, 0, None, None)
+    assert state.state == {"db": {"log": []}}
     # And the session is still usable: another reset is all it takes.
     env.reset(episode_id="second")
     assert env.state.episode_id == "second"
@@ -215,7 +227,6 @@ def test_list_tools_never_lists_a_control_tool(world: World) -> None:
         env.reset()
         names = [tool.name for tool in listing(env).tools]
         assert "controller_run_sql" not in names
-        assert "controller_changes" not in names
         assert "rows" in names
 
 
@@ -359,19 +370,24 @@ def test_a_control_tool_is_callable_with_the_flag(world: World) -> None:
         "row_count": 1,
         "truncated": False,
     }
-    changes = call(env, "controller_changes").result
-    assert isinstance(changes, list)
-    assert [change["table"] for change in changes] == ["notes"]
+    logged = env.state.state["db"]["log"]
+    assert [record["table"] for record in logged] == ["notes"]
 
 
-def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World) -> None:
-    """The flag admits the control tools and nothing else."""
+@pytest.mark.parametrize("name", ["controller_nonsense", "controller_changes"])
+def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World, name: str) -> None:
+    """The flag admits the control tool and nothing else.
+
+    `controller_changes` is the case worth naming: it was a control tool until
+    this release, so a harness that still calls it is told the name does not
+    exist rather than reaching something that no longer records what it did.
+    """
     env = SeahavenEnv(world, include_control_tools=True)
     env.reset()
-    assert call(env, "controller_nonsense").error == {
+    assert call(env, name).error == {
         "code": "unknown_tool",
-        "message": "unknown tool: controller_nonsense",
-        "details": {"name": "controller_nonsense"},
+        "message": f"unknown tool: {name}",
+        "details": {"name": name},
     }
 
 
@@ -453,16 +469,85 @@ def test_an_action_of_neither_kind_is_a_world_bug(env: SeahavenEnv) -> None:
 # --- state -----------------------------------------------------------------
 
 
-def test_state_before_reset_names_the_world_and_nothing_else(
+def leaf_node(world: World) -> NodeRef:
+    """The one node a world that adds nothing is, as the document reports it."""
+    return NodeRef(
+        world=world.name,
+        world_version=world.version,
+        scope=None,
+        aliases=[],
+        schema_hash=world.schema_hash,
+        frozen_world_version=None,
+    )
+
+
+def test_state_before_reset_is_the_worlds_pinned_format_with_no_instance(
     env: SeahavenEnv, world: World
 ) -> None:
+    """`functional_spec.md` §3.5: the framework's envelope, and the world's pin run with `None`.
+
+    Field by field rather than against a dict, because this is the one document
+    nothing in process produces: there is no instance to ask, so every value here
+    comes from the world or from the "no instance" arm of the envelope.
+    """
     state = env.state
-    assert state.world == world.name
-    assert state.fixture is None
-    assert state.now is None
+    assert state.format == world.pinned_state_format == "seahaven.state/1"
+    assert state.seahaven_version == seahaven.__version__
+    assert state.world == WorldRef(name=world.name, version=world.version)
     assert state.composition is None
+    assert state.fixture is None
     assert state.episode_id is None
+    assert state.seed is None
+    assert state.now is None
+    assert state.startup is None
+    assert state.call_count == 0
+    assert state.state == {"db": {"log": []}}
     assert state.step_count == 0
+
+
+def test_state_before_reset_runs_a_custom_pinned_formatter_with_no_instance(
+    tmp_path: Path,
+) -> None:
+    """A world that pins its own format decides what "no episode yet" looks like.
+
+    The framework has no default `state` and never builds one: this is the only
+    thing that answers it, and it is handed the `None` the world's formatter was
+    written to expect.
+    """
+    world = build_world(tmp_path, state_format="acme.state/1")
+
+    @world.state_format("acme.state/1")
+    def acme(world: World, instance: Any) -> dict[str, Any]:
+        return {"episode": "not started" if instance is None else instance.id}
+
+    state = SeahavenEnv(world, include_control_tools=False).state
+    assert state.format == "acme.state/1"
+    assert state.state == {"episode": "not started"}
+    # The envelope is the framework's under every format, custom or built in.
+    assert state.world == WorldRef(name=world.name, version=world.version)
+    assert state.call_count == 0
+
+
+def test_state_after_reset_is_the_instances_document_and_the_step_count(
+    env: SeahavenEnv,
+) -> None:
+    """The wire answers exactly what `inst.state()` answers, and nothing beside it.
+
+    One document, built in one place: a session that wrote its own envelope could
+    drift from the in-process one, which is the whole reason `state.document`
+    exists.
+    """
+    env.reset(episode_id="ep-9")
+    call(env, "execute", sql="INSERT INTO notes VALUES ('n1', 'a body', 0)")
+    listing(env)
+    instance = env.instance
+    assert instance is not None
+    state = env.state
+    assert state.model_dump(exclude={"step_count"}) == instance.state()
+    # `step_count` is OpenEnv's and counts the listing; `call_count` is the
+    # document's and does not (`functional_spec.md` §9).
+    assert (state.step_count, state.call_count) == (2, 1)
+    assert [record["table"] for record in state.state["db"]["log"]] == ["notes"]
 
 
 def test_state_after_reset_carries_the_one_node_a_leaf_world_is(
@@ -470,27 +555,84 @@ def test_state_after_reset_carries_the_one_node_a_leaf_world_is(
 ) -> None:
     """A leaf world is a composition of one node, and `state` says so rather than nothing."""
     env.reset()
-    assert env.state.composition == [
-        {
-            "path": "main",
-            "world": world.name,
-            "world_version": world.version,
-            "scope": None,
-            "aliases": [],
-            "schema_hash": world.schema_hash,
-            "frozen_world_version": None,
-        }
-    ]
+    assert env.state.composition == {"main": leaf_node(world)}
 
 
 def test_state_after_reset_carries_the_fixture_and_the_clock(
     env: SeahavenEnv, world: World
 ) -> None:
     fixture_id = make_fixture(world)
-    env.reset(fixture=fixture_id, episode_id="ep-9")
+    env.reset(fixture=fixture_id, episode_id="ep-9", seed=7)
+    instance = env.instance
+    assert instance is not None
     state = env.state
-    assert (state.world, state.fixture, state.now) == (world.name, fixture_id, INSTANT_ISO)
-    assert state.episode_id == "ep-9"
+    assert state.world == WorldRef(name=world.name, version=world.version)
+    assert instance.fixture_files is not None
+    assert state.fixture == FixtureRef(
+        id=fixture_id,
+        nodes={"main": FileRef(file_sha256=instance.fixture_files["main"])},
+    )
+    assert (state.now, state.episode_id, state.seed) == (INSTANT_ISO, "ep-9", 7)
+    assert state.startup == {}
+
+
+def test_reset_selects_a_state_format(env: SeahavenEnv) -> None:
+    """`reset(state_format=)` overrides the world's pin for the episode."""
+    env.reset(state_format="seahaven.state+last_step/1")
+    call(env, "execute", sql="INSERT INTO notes VALUES ('n1', 'a body', 0)")
+    call(env, "execute", sql="INSERT INTO notes VALUES ('n2', 'a body', 0)")
+    state = env.state
+    assert state.format == "seahaven.state+last_step/1"
+    assert [record["key"]["id"] for record in state.state["db"]["log"]] == ["n2"]
+
+
+def test_an_unknown_state_format_refuses_the_reset_and_leaves_the_session_fresh(
+    env: SeahavenEnv,
+) -> None:
+    """Refused like any other reset: before anything is copied, session still open."""
+    with pytest.raises(WorldBug, match=r"has no state format 'acme\.state/1'"):
+        env.reset(state_format="acme.state/1")
+    assert env.instance is None
+    env.reset()
+    assert env.instance is not None
+
+
+def test_the_state_format_never_reaches_a_startup_hook(tmp_path: Path) -> None:
+    """A reserved reset keyword, like `fixture`, `seed` and `now`."""
+    world = build_world(tmp_path)
+    seen: list[dict[str, Any]] = []
+
+    @world.instance_startup
+    def record(ctx: Ctx, **kwargs: Any) -> None:
+        """Take every keyword the reset carried, so a leak would show up here."""
+        seen.append(kwargs)
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset(state_format="seahaven.state+last_step/1", tenant="globex")
+    assert seen == [{"tenant": "globex"}]
+    assert env.state.startup == {"tenant": "globex"}
+
+
+def test_close_discards_the_log_with_the_instance(env: SeahavenEnv) -> None:
+    """A closed session answers §3.5's document again: the log went with the instance."""
+    env.reset()
+    call(env, "execute", sql="INSERT INTO notes VALUES ('n1', 'a body', 0)")
+    assert len(env.state.state["db"]["log"]) == 1
+    env.close()
+    state = env.state
+    assert state.state == {"db": {"log": []}}
+    assert (state.episode_id, state.call_count, state.composition) == (None, 0, None)
+
+
+def test_a_second_reset_starts_a_new_log(env: SeahavenEnv) -> None:
+    """The log goes with the instance: a new episode starts from nothing."""
+    env.reset()
+    call(env, "execute", sql="INSERT INTO notes VALUES ('n1', 'a body', 0)")
+    assert len(env.state.state["db"]["log"]) == 1
+    env.reset()
+    state = env.state
+    assert state.state == {"db": {"log": []}}
+    assert (state.call_count, state.step_count) == (0, 0)
 
 
 def test_every_step_counts_and_reset_starts_again_from_zero(env: SeahavenEnv) -> None:
@@ -548,12 +690,61 @@ DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
         ),
     },
     SeahavenState: {
-        "fixture": "The fixture the instance was made from, or null for a blank one.",
-        "now": "The instance's clock as an ISO-8601 instant, or null before the first reset.",
-        "world": "The world this session is connected to. Known before any reset.",
+        "format": (
+            "The format that produced `state`, as `<family>/<major>`. A reader checks this "
+            "before reading `state`, and keys on nothing else for it."
+        ),
+        "seahaven_version": "The Seahaven version of the producing process. Informational only.",
+        "world": "The root world this session is connected to.",
         "composition": (
-            "Every node of the instance's composition -- path, world, version, scope, aliases "
-            "and schema hash -- or null before the first reset. Never agent-facing."
+            "Every node of the instance, keyed by canonical path and root first, or null "
+            "before the first reset. Never agent-facing."
+        ),
+        "fixture": "The fixture the instance was made from, or null for a blank one.",
+        "seed": "The seed `reset` was given, or null if it was given none.",
+        "now": "The instance's clock as an ISO-8601 instant, or null before the first reset.",
+        "startup": (
+            "The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as "
+            "JSON when the instance was created: a hook receives the caller's value and this "
+            "carries its JSON rendering. Empty when there were none, null before any reset."
+        ),
+        "call_count": (
+            "How many calls have been dispatched to the instance. Not `step_count`, which also "
+            "counts tool listings. The last call's ordinal is one less than this."
+        ),
+        "state": (
+            "The formatter's output, and the only part of this model `format` describes. Left "
+            "untyped because its shape is the format's, not the framework's."
+        ),
+    },
+    WorldRef: {
+        "name": "The world's name, as `World(name=...)` gives it.",
+        "version": (
+            "The root world's version. A judge assumes two documents with the same name and "
+            "version came from the same schema and the same tools."
+        ),
+    },
+    NodeRef: {
+        "world": "The name of the world this node runs.",
+        "world_version": "That world's version, as it was added.",
+        "scope": "The node's scope, or null for a node that has none.",
+        "aliases": ("Every other path that reaches this same node, so a shared store is visible."),
+        "schema_hash": ("The SHA-256 of the node's schema, which is what invalidates a fixture."),
+        "frozen_world_version": (
+            "The world version recorded in the fixture this node was built from, when it "
+            "differs from `world_version`; null otherwise."
+        ),
+    },
+    FileRef: {
+        "file_sha256": (
+            "The SHA-256 of that node's frozen database file, from the fixture's sidecar."
+        ),
+    },
+    FixtureRef: {
+        "id": "The fixture's id, as `reset(fixture=...)` named it.",
+        "nodes": (
+            "Each node's starting file, keyed by the same path `composition` uses. With "
+            "`composition`, this is the lookup for the state the episode started from."
         ),
     },
 }
@@ -766,16 +957,24 @@ def test_state_carries_every_node_of_a_composite(composite: SeahavenEnv) -> None
     composite.reset()
     reported = composite.state.composition
     assert reported is not None
-    assert [node["path"] for node in reported] == ["main", "payments", "payments_eu", "shop"]
-    assert [node["world"] for node in reported] == ["emporium", "payments", "payments", "shop"]
-    assert [node["scope"] for node in reported] == [None, None, "eu", None]
-    assert [node["aliases"] for node in reported] == [[], ["shop/payments"], [], []]
+    assert list(reported) == ["main", "payments", "payments_eu", "shop"]
+    assert [node.world for node in reported.values()] == [
+        "emporium",
+        "payments",
+        "payments",
+        "shop",
+    ]
+    assert [node.scope for node in reported.values()] == [None, None, "eu", None]
+    assert [node.aliases for node in reported.values()] == [[], ["shop/payments"], [], []]
 
 
-def test_the_composition_in_state_is_json(composite: SeahavenEnv) -> None:
+def test_the_whole_document_of_a_composite_is_json(composite: SeahavenEnv) -> None:
     """`state` travels over a wire, so every value in it has to survive the trip."""
     composite.reset()
-    assert json.loads(json.dumps(composite.state.composition)) == composite.state.composition
+    call(composite, "pay_create_charge", amount=250)
+    document = composite.state.model_dump()
+    assert json.loads(json.dumps(document)) == document
+    assert [record["world"] for record in document["state"]["db"]["log"]] == ["payments"]
 
 
 def test_nothing_agent_facing_carries_the_composition(composite: SeahavenEnv) -> None:

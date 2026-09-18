@@ -163,7 +163,7 @@ def test_every_nodes_rows_survive_a_freeze_and_a_load(tmp_path: Path) -> None:
         assert live.call("host_read") == ["in the root"]
         assert live.call("child_read") == ["in the child"]
         # What the fixture holds is starting state, not a change the agent made.
-        assert live.changes() == []
+        assert live.change_log() == []
 
 
 def test_a_fork_chains_its_parent_and_keeps_every_node(tmp_path: Path) -> None:
@@ -426,7 +426,7 @@ def test_a_store_frozen_from_a_differently_named_world_is_reported_not_refused(
 
     # The same DDL under another world's name: the schema hash is unchanged, so
     # nothing is refused, and the difference has to be visible somewhere.
-    substitute = World("renamed", "1.0.0", CHILDS_DDL)
+    substitute = World("renamed", "1.0.0", CHILDS_DDL, state_format="seahaven.state/1")
     renamed = rooted("host", tmp_path)
     renamed.add_world(substitute, name="child")
 

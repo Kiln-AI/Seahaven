@@ -18,7 +18,7 @@ SCHEMA = "CREATE TABLE t (id TEXT PRIMARY KEY) STRICT;"
 
 
 def make_world(name: str) -> World:
-    return World(name, "1.0.0", SCHEMA)
+    return World(name, "1.0.0", SCHEMA, state_format="seahaven.state/1")
 
 
 def test_the_name_defaults_to_the_added_worlds_own_name() -> None:

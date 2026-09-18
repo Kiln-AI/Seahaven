@@ -13,7 +13,7 @@ from bench.harness import Run, closed_loop, cold_cache_supported, evict
 from bench.workloads import Session, Workload
 from seahaven import World
 
-__all__ = ["CACHES", "Cache", "calls_per_worker", "measure", "sessions"]
+__all__ = ["CACHES", "Cache", "calls_per_worker", "measure", "sessions", "whole_cycles"]
 
 # What an instance has been through before the clock starts.
 #
@@ -31,7 +31,17 @@ CACHES: tuple[Cache, ...] = ("warm", "cold")
 
 def calls_per_worker(workload: Workload, calls: int) -> int:
     """`calls`, rounded down to whole cycles of the workload, at least one cycle."""
-    return max(calls - calls % workload.cycle, workload.cycle)
+    return whole_cycles(calls, workload.cycle)
+
+
+def whole_cycles(calls: int, cycle: int) -> int:
+    """`calls`, rounded down to whole cycles of `cycle`, at least one cycle.
+
+    Taken by cycle rather than by workload because `bench.recording` drives legs
+    that are not `Workload`s and has to round a pass the same way, or its table
+    and the sweep's would not be counting the same units of work.
+    """
+    return max(calls - calls % cycle, cycle)
 
 
 @contextmanager
@@ -62,8 +72,8 @@ def measure(
     warm-up is real work -- it files as many issues as the measured pass will --
     which is why a pass is a few hundred calls and every repeat starts from a new
     instance: an instance's write cost climbs slowly as its tables and its
-    changeset session grow, and a long pass would report that climb as the cost of
-    a call.
+    change log grow, and a long pass would report that climb as the cost of a
+    call.
 
     **That makes the write mix's warm and cold passes differ by more than a page
     cache**, and the report says so rather than pretending otherwise. A warm write

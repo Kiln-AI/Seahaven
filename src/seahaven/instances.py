@@ -2,12 +2,13 @@
 
 An instance is a working directory holding one file per node of its world's
 composition, a connection on each, a frozen clock they share, and per node a
-seeded id stream, a state dict and a changeset session -- plus one lock over the
-whole of it. A world that adds nothing has one node, so its instance is the one
-file it has always been. `world.instance(...)` makes one, `inst.call(...)` runs a
-tool on whichever node owns it, and `inst.destroy()` (or leaving its `with`
-block) takes the files away again. Nothing is shared between two instances: two
-instances of one fixture are two copies of one file.
+seeded id stream and a state dict -- plus a change log and a call log kept in
+memory, and one lock over the whole of it. A world that adds nothing has one
+node, so its instance is the one file it has always been. `world.instance(...)`
+makes one, `inst.call(...)` runs a tool on whichever node owns it, and
+`inst.destroy()` (or leaving its `with` block) takes the files away again.
+Nothing is shared between two instances: two instances of one fixture are two
+copies of one file.
 
 *The activation.* Taking the lock from depth 0 opens a `Frame` (`handles.py`) and
 returning to depth 0 closes it. That is the lifetime of every `ctx.worlds` handle
@@ -16,14 +17,14 @@ moment more.
 
 Three rules hold the concurrency together.
 
-*One lock per instance.* `call`, `changes`, `freeze`, `bulk`, `destroy`, a
-nested call through a handle and the opens inside `inspect()` and `_control_db()`
-take it, so calls into one instance serialise and a destroy waits for the call in
-flight. Reads through the `inspect()` handle afterwards do not take it: that
-handle is the caller's, to read from whatever thread it likes. The lock is an
-`RLock` because a control tool is called with it already held and then asks the
-instance for something -- its changeset, its control handle -- that takes it
-again on the same thread.
+*One lock per instance.* `call`, `change_log`, `call_log`, `state`, `freeze`,
+`bulk`, `destroy`, a nested call through a handle and the opens inside
+`inspect()` and `_control_db()` take it, so calls into one instance serialise and
+a destroy waits for the call in flight. Reads through the `inspect()` handle
+afterwards do not take it: that handle is the caller's, to read from whatever
+thread it likes. The lock is an `RLock` because a control tool is called with it
+already held and then asks the instance for something -- its control handle --
+that takes it again on the same thread.
 
 *The gate before the lock.* The concurrency gate bounds how many tool calls run
 at once across the process. It is taken before the instance lock, so a call
@@ -48,16 +49,22 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, ExitStack, contextmanager, suppress
-from dataclasses import dataclass
+from contextlib import AbstractContextManager, ExitStack, closing, contextmanager, suppress
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Concatenate, Self, overload
 
-import apsw
-
-from seahaven.call import Call, arguments_of, name_of
-from seahaven.changes import Change, render, start_session
+from seahaven.call import Call, arguments_of, name_of, serialise
+from seahaven.changes import (
+    CallRecord,
+    LogRecord,
+    _copied_arguments,
+    _sort_key,
+    open_session,
+    render_log,
+    tracked_tables,
+)
 from seahaven.clock import Clock
 from seahaven.composition import (
     ROOT_PATH,
@@ -73,6 +80,7 @@ from seahaven.errors import ToolError, UnknownTool, WorldBug
 from seahaven.fixtures import Fixture, check_composition, check_id, freeze, load, verify
 from seahaven.handles import Frame, unbound
 from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, Ids, instance_seed
+from seahaven.state import Formatter, document
 from seahaven.tool import Tool
 
 if TYPE_CHECKING:  # `world.py` imports this module; the annotation is all that is needed here
@@ -240,9 +248,15 @@ class NodeRuntime:
     ids: Ids
     state: dict[str, Any]
     ctx: Ctx[Any]
-    # Attached after the startup hooks have run, so what they wrote is starting
-    # state rather than a change the agent made.
-    session: apsw.Session | None = None
+    # The tables every per-call session on this node attaches, settled once at
+    # creation: a node's schema does not change while its instance is alive.
+    tracked: tuple[str, ...] = ()
+    # The per-table column names, key positions and non-key positions
+    # `render_log` fills as it goes, and never invalidates, for the same reason.
+    # (architecture.md §2.2 names the first two; the third is a function of the
+    # table as well, and belongs in the same cache rather than in the per-row
+    # path.)
+    columns: dict[str, tuple[list[str], list[int], list[int]]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -269,6 +283,12 @@ class Instance:
         dir: Path,
         world: World,
         manager: InstanceManager,
+        state_format: str,
+        formatter: Formatter,
+        episode_id: str,
+        caller_seed: int | None,
+        fixture_files: Mapping[str, str] | None,
+        startup: Mapping[str, Any],
     ) -> None:
         self.id = id
         self.fixture = fixture
@@ -279,12 +299,35 @@ class Instance:
         # The derived instance seed -- what actually drove the root's `ctx.ids` --
         # and not the `seed=` the caller passed, which is one of its two inputs.
         self.seed = self.ctx.instance.seed
+        # The `seed=` the caller gave, which is the one a state document reports:
+        # `self.seed` above is what it was hashed into.
+        self.caller_seed = caller_seed
         self.dir = dir
         self.world = world
+        # Over OpenEnv the session's episode id, and in process the instance id:
+        # in process an instance is an episode (`functional_spec.md` §3.1).
+        self.episode_id = episode_id
+        # Per node path, the `file_sha256` its fixture sidecar recorded, the root
+        # included; `None` for a blank instance. With `composition()` this is a
+        # reader's lookup for the state the episode started from.
+        self.fixture_files = dict(fixture_files) if fixture_files is not None else None
+        # The reset keywords beyond `fixture`, `seed`, `now` and `state_format`,
+        # already JSON-able: serialised at creation, so a keyword no document
+        # could carry is refused there rather than at `state()` time.
+        self.startup = dict(startup)
+        # The format this instance answers in, fixed for its life, and the
+        # formatter the root resolved it to when the instance was made.
+        self.state_format = state_format
+        self._formatter = formatter
+        # The thread running a formatter on this instance, or `None`. A thread
+        # id rather than a flag because `call` asks before taking the gate: only
+        # the formatting thread is refused, and a call from another thread waits
+        # for the lock like any other.
+        self._formatting: int | None = None
         self.closed = False
         # Re-entrant: a control tool holds this lock and then asks the instance
-        # for its changeset or its control handle, which take it again, and a
-        # tool calling into an added world re-enters it from the same thread.
+        # for its control handle, which takes it again, and a tool calling into an
+        # added world re-enters it from the same thread.
         self.lock = threading.RLock()
         # The node set this instance was created with, and the seal it was last
         # compared against. A tool or a middleware registered later reaches this
@@ -305,6 +348,17 @@ class Instance:
         self._depth = 0
         self._epoch = 0
         self._frame: Frame | None = None
+        # The change log, appended to in commit order as each call's recording
+        # ends; the call log, appended to as each dispatched call returns or
+        # raises, so `_calls[i]` is call `i`; and the ordinal counter, which is
+        # `len(_calls)` once a call has finished.
+        self._records: list[LogRecord] = []
+        self._calls: list[CallRecord] = []
+        self._call_count = 0
+        # Whether a recording is already open on this instance. Only the
+        # outermost one records, which is what an `inst.call(...)` made inside a
+        # `bulk()` block turns on (`_recording`).
+        self._recording_rows = False
 
     @property
     def ctx(self) -> Ctx[Any]:
@@ -320,6 +374,17 @@ class Instance:
     def state_path(self) -> Path:
         """The root node's database file."""
         return self.dir / self._runtime[self._root_key].node.file_name
+
+    @property
+    def call_count(self) -> int:
+        """How many calls have been dispatched to this instance.
+
+        Every tool call that reached the world, including one that raised a
+        `ToolError`; never a name the world refused, a control tool, a nested
+        call through a handle, or `tools()`. The last call's ordinal is one less
+        than this.
+        """
+        return self._call_count
 
     @overload
     def call[**P, R](
@@ -347,6 +412,10 @@ class Instance:
         owns it. Raises the owning world's `ToolError` subclasses to the caller;
         over OpenEnv the same error is rendered onto the observation instead.
         """
+        # Ahead of the gate, and ahead of everything else: a formatter reaching
+        # this holds the instance lock, and queueing for a gate slot whose
+        # holders may be waiting on that lock would hang instead of raising.
+        self._refuse_if_formatting()
         started = time.perf_counter()
         # The exposed name once there is one, so an eval grouping the log on it
         # cannot tell the two ways in apart; the function's qualified name until
@@ -421,22 +490,77 @@ class Instance:
             for runtime in self._runtime.values()
         )
 
-    def changes(self) -> list[Change]:
-        """Every row this instance has changed since it was created, in every node.
+    def change_log(self) -> list[LogRecord]:
+        """Every row this instance has changed, one record per row per call, in call order.
 
-        One list: each node's changeset rendered against its own connection and
-        stamped with its own path, concatenated in the composition's canonical
-        order, root first. A world that adds nothing has one node, so its list is
-        what it always was with `main` on every record.
+        Across every node, one flat list: a record says which node with `world`.
+        Costs no database work: each call's records were rendered when that call
+        committed, and this hands back what is already in memory.
+
+        The list is the caller's, but the records in it are the instance's: a
+        `LogRecord` is frozen and its `key`, `before` and `after` dicts are the
+        ones the log holds, handed out rather than copied because copying every
+        record on every read would cost an episode's worth of dicts per call.
+        Read them; `to_dict()` is the copy.
         """
         with self._held():
-            return [
-                change
-                for runtime in self._runtime.values()
-                for change in render(
-                    _session_of(runtime).changeset(), runtime.db.conn, runtime.node.path
+            return list(self._records)
+
+    def call_log(self) -> list[CallRecord]:
+        """Every call dispatched to this instance, in dispatch order, so `[i]` is call `i`.
+
+        Each entry carries the tool's name as the caller gave it, a copy of the
+        arguments as the call carried them, and the message of what it raised or
+        `None`. Nothing is re-serialised: an in-process caller who passed
+        something that is not JSON gets it back as it was.
+        """
+        with self._held():
+            return list(self._calls)
+
+    def state(self, format: str | None = None) -> dict[str, Any]:
+        """The state document: this instance's provenance, and `state` from its format.
+
+        A plain dict, JSON-serialisable with the standard library, so a caller
+        saves an episode with `json.dump` and nothing else. It costs
+        serialisation only: the change log is in memory and was rendered as each
+        call committed, so this does no database work. The document is the
+        caller's, all the way down -- editing it edits nothing the instance holds.
+
+        `format` answers in another format registered on this world instead, for
+        the same instance. It is in-process only, because the OpenEnv `state`
+        message carries no arguments, and the instance's own format is unchanged.
+
+        Refused inside a transaction -- `bulk()`, or a tool call -- where the
+        rows written are not committed and no document could describe them.
+        """
+        with self._held():
+            if any(runtime.db.in_transaction for runtime in self._runtime.values()):
+                # The lock is an `RLock`, so a `state()` inside `bulk()` gets this
+                # far and would then build a document from transactions that have
+                # not committed: the log would be missing the rows the same block
+                # can already read through `ctx.db`, with nothing to say so. A
+                # formatter never runs in a transaction (`functional_spec.md` §6).
+                # Any node: `bulk()` opens a transaction on every one of them, and
+                # a call into an added world opens one on that node alone.
+                raise WorldBug(
+                    "state cannot run inside a transaction: a formatter reads what the instance "
+                    "holds, and inside bulk() or a tool call the rows written are not committed "
+                    "yet. Read it after the block or the call returns"
                 )
-            ]
+            name = self.state_format if format is None else format
+            formatter = (
+                self._formatter if format is None else self.world.resolve_state_format(format)
+            )
+            # Saved and restored rather than set and cleared: a formatter may read
+            # `instance.state(format=...)` to build a variation of a built-in
+            # (`functional_spec.md` §6), and the inner read must not leave the
+            # outer one unguarded for the rest of the formatter.
+            formatting = self._formatting
+            self._formatting = threading.get_ident()
+            try:
+                return document(self.world, self, name, formatter)
+            finally:
+                self._formatting = formatting
 
     def freeze(self, id: str, description: str) -> Fixture:
         """Mint a fixture from this instance's current state: every node's store, together.
@@ -532,10 +656,102 @@ class Instance:
                 from seahaven import control
 
                 return control.dispatch(self, ctx)
+            # Every call that reaches the world takes an ordinal, a `ToolError`
+            # and a middleware short-circuit included: the harness's Nth call is
+            # this instance's Nth (functional_spec.md §7).
+            i = self._next_ordinal()
             # The chain is read from the node here rather than held, so a
             # middleware registered after this instance was made applies to it.
-            with in_call():
+            with self._recording(i), self._logging_call(target.name, arguments), in_call():
                 return target.node.agent_chain(ctx, call)
+
+    def _next_ordinal(self) -> int:
+        """The ordinal of the call about to run, counting from 0. The lock is held."""
+        self._call_count += 1
+        return self._call_count - 1
+
+    @contextmanager
+    def _recording(self, i: int | None) -> Iterator[None]:
+        """Log every row the block changes, on every node, as one call's worth of records.
+
+        Every node and not only the target's: a tool on one node reaches another
+        through `ctx.worlds.<name>.call(...)`, which never re-enters
+        `Instance.call`, so the nested writes are recorded under the outer `i`
+        because the outer call's sessions are already open there.
+
+        A session per call rather than per-call deltas off one long-lived
+        session: diffing consecutive cumulative changesets is O(everything the
+        episode changed) per call, which is the cost the change log exists to
+        keep off a harness. This is O(what the call changed).
+
+        Re-entrant, and the outermost recording is the one that records. The
+        nesting is `inst.call(...)` inside a `bulk()` block, which is a
+        supported pattern (`_held`, and `docs/composition.md`): the call writes
+        inside the block's transactions, so its rows commit or roll back with
+        the block and not with the call. A nested recording that read its own
+        changeset would read it while those transactions are still open --
+        logging rows the block may yet roll back, and logging them a second time
+        under the block's own recording. The rows therefore land under the outer
+        `i`, which for a `bulk()` block is `None` (functional_spec.md §3.2).
+        """
+        if self._recording_rows:
+            yield
+            return
+        self._recording_rows = True
+        try:
+            with ExitStack() as sessions:
+                opened = [
+                    (
+                        runtime,
+                        sessions.enter_context(
+                            closing(open_session(runtime.db.conn, runtime.tracked))
+                        ),
+                    )
+                    for runtime in self._runtime.values()
+                ]
+                try:
+                    yield
+                finally:
+                    # After every node's transaction has committed or rolled back
+                    # and before any other write: `changeset()` joins what a
+                    # session recorded against the live table, so a rolled-back
+                    # row, or one written back to its original values, contributes
+                    # nothing (functional_spec.md §3.2 "net per call").
+                    records: list[LogRecord] = []
+                    for runtime, session in opened:
+                        changeset = session.changeset()
+                        if changeset:
+                            records.extend(
+                                render_log(
+                                    changeset,
+                                    runtime.db.conn,
+                                    runtime.columns,
+                                    i=i,
+                                    world=runtime.node.path,
+                                )
+                            )
+                    records.sort(key=_sort_key)
+                    self._records.extend(records)
+        finally:
+            self._recording_rows = False
+
+    @contextmanager
+    def _logging_call(self, name: str, arguments: Mapping[str, Any]) -> Iterator[None]:
+        """Append one call-log entry when the block ends, however it ends.
+
+        The arguments are copied on entry, before the chain runs, so the record
+        is the call as made rather than whatever a tool left in the dict it was
+        handed. `error` is the message of whatever the chain raised.
+        """
+        given = _copied_arguments(arguments)
+        error: str | None = None
+        try:
+            yield
+        except BaseException as raised:
+            error = str(raised)
+            raise
+        finally:
+            self._calls.append(CallRecord(tool=name, arguments=given, error=error))
 
     def _current_composition(self) -> Composition:
         """The world's tree, refusing one that has grown or lost a node since creation.
@@ -559,7 +775,7 @@ class Instance:
         return composition
 
     def _control_db(self) -> Db:
-        """A second read-only handle, opened once, for the control tools alone.
+        """A second read-only handle, opened once, for the control tool alone.
 
         Not the `inspect()` handle, though it is opened the same way. A control
         read runs through `sandbox.run_statement`, which sets the connection's
@@ -570,7 +786,7 @@ class Instance:
         and one that takes the interpreter with it, because the thread waiting on
         the connection is holding the GIL.
 
-        Reached only from the control tools, which `Instance.call` runs with the
+        Reached only from the control tool, which `Instance.call` runs with the
         instance lock held, so this connection has one statement on it at a time
         and the state `run_statement` borrows is state nobody else can see.
         """
@@ -607,9 +823,27 @@ class Instance:
         """
         return tuple(self._runtime.values())
 
+    def _refuse_if_formatting(self) -> None:
+        """Refuse a write from inside a formatter.
+
+        A formatter runs with the instance lock held, and the lock is an `RLock`,
+        so a formatter calling `inst.call` or `inst.bulk` on its own instance
+        would otherwise be let straight through to write.
+
+        The test is against *this* thread: another thread's call must wait for
+        the lock like any other, not be refused because the instance happens to
+        be formatting somewhere else.
+        """
+        if self._formatting == threading.get_ident():
+            raise WorldBug("a state formatter reads an instance and never writes to it")
+
     @contextmanager
     def _bulk(self) -> Iterator[Ctx[Any]]:
-        with self._held() as frame, ExitStack() as stack:
+        self._refuse_if_formatting()
+        # `_recording(None)`: authoring writes happen after creation and count,
+        # but there is no call in flight for them to belong to. It is outside the
+        # transactions, so it reads each changeset after they have all settled.
+        with self._held() as frame, self._recording(None), ExitStack() as stack:
             # Every node's transaction open before the block runs and committed in
             # sequence on the way out, so a bulk write that reaches two stores
             # through `ctx.worlds` either lands in both or in neither.
@@ -652,13 +886,10 @@ class Instance:
     def _close(self) -> None:
         """Release every handle the instance holds.
 
-        The session goes before the connection it records on. APSW tolerates the
-        other order (it finalises a session with its connection), but a session
-        is a growing buffer of every row the instance changed, and releasing it
-        first is what makes a destroyed instance cost nothing.
-
-        Both read-only handles -- the caller's, from `inspect()`, and the control
-        tools' own -- are closed here as well; either may never have been opened.
+        No session outlives a call -- each one is opened and closed inside
+        `_recording` -- so what is left here is a connection per node. Both
+        read-only handles, the caller's from `inspect()` and the control tool's
+        own, may never have been opened.
         """
         for handle in (self._inspection, self._control):
             if handle is not None:
@@ -666,8 +897,6 @@ class Instance:
         self._inspection = None
         self._control = None
         for runtime in self._runtime.values():
-            if runtime.session is not None:
-                runtime.session.close()
             runtime.db.close()
 
     def _log_failure(
@@ -742,17 +971,24 @@ class InstanceManager:
         self,
         fixture_id: str | None = None,
         *,
-        seed: int | bytes | None = None,
+        seed: int | None = None,
         now: str | datetime | None = None,
+        state_format: str | None = None,
+        episode_id: str | None = None,
         startup_kwargs: Mapping[str, Any] | None = None,
     ) -> Instance:
         """Materialise an instance from a fixture, or from the world's DDL.
 
-        One SQLite file, one connection, one `Ids` stream and one changeset
-        session per node of the world's composition -- which for a world that
-        adds nothing is one of each, in the directory it has today. A composite
-        fixture carries one frozen file per node and every one of them is copied;
-        a blank instance builds every node from its own world's DDL.
+        One SQLite file, one connection and one `Ids` stream per node of the
+        world's composition -- which for a world that adds nothing is one of each,
+        in the directory it has today. A composite fixture carries one frozen file
+        per node and every one of them is copied; a blank instance builds every
+        node from its own world's DDL.
+
+        `state_format` is the format this instance answers `state()` in, in place
+        of the root world's pin, and `episode_id` the id every document of the
+        episode reports; over OpenEnv `reset` mints one before the instance
+        exists, and in process the instance id is it.
         """
         world = self._world
         kwargs = startup_kwargs or {}
@@ -760,11 +996,17 @@ class InstanceManager:
         # the tree, and this is one.
         composition = world.composition()
         # Everything else that can be refused is refused here, before a directory
-        # exists: an unknown startup argument, an id that is not an id, a fixture
-        # that is missing, modified or frozen from another schema, and `now=`
-        # where the fixture already carries the clock. A creation that cannot
-        # succeed copies nothing and leaves nothing behind.
+        # exists: an unknown startup argument, a startup value no state document
+        # could carry, a format nothing registered, an id that is not an id, a
+        # fixture that is missing, modified or frozen from another schema, and
+        # `now=` where the fixture already carries the clock. A creation that
+        # cannot succeed copies nothing and leaves nothing behind.
         _check_startup_kwargs(composition, kwargs)
+        startup = _serialised_startup(kwargs)
+        # On the root, and only the root: an added world's registrations are
+        # never consulted (`functional_spec.md` §6).
+        format_name = state_format if state_format is not None else world.pinned_state_format
+        formatter = world.resolve_state_format(format_name)
         fixture = self._fixture(composition, fixture_id, now) if fixture_id is not None else None
         _sweep_once(self)
 
@@ -807,21 +1049,26 @@ class InstanceManager:
                 dir=directory,
                 world=world,
                 manager=self,
+                state_format=format_name,
+                formatter=formatter,
+                episode_id=episode_id or instance_id,
+                caller_seed=seed,
+                fixture_files=_fixture_files(fixture),
+                startup=startup,
             )
             # One activation for the whole of creation, so a root hook's handles
             # stay live across every hook that runs after it.
             with instance._held() as frame:
                 _run_startup_hooks(composition, frame, kwargs)
                 for node_runtime in runtime.values():
-                    node_runtime.session = start_session(
+                    # Asked once, here, so that the refusal of a table with no
+                    # primary key is still a refusal at instance creation and
+                    # the per-call sessions have nothing to work out.
+                    node_runtime.tracked = tracked_tables(
                         node_runtime.db.conn, node_runtime.node.world
                     )
         except BaseException:
             for node_runtime in runtime.values():
-                # The session before the connection it records on, as `_close`
-                # does and for the same reason.
-                if node_runtime.session is not None:
-                    node_runtime.session.close()
                 node_runtime.db.close()
             shutil.rmtree(directory, ignore_errors=True)
             raise
@@ -1082,15 +1329,40 @@ def _open_node(
     )
 
 
-def _session_of(runtime: NodeRuntime) -> apsw.Session:
-    """A node's changeset session, which exists for as long as its instance does.
+def _serialised_startup(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    """The startup keywords as the state document reports them, one at a time.
 
-    The field is optional because the session is attached after the startup hooks
-    have run, and that is inside creation -- before any caller holds the instance.
+    Rendered at creation so that a keyword a document could never carry is a
+    refusal there rather than at the end of an episode, and one keyword at a
+    time so that the refusal can say which one. The hooks themselves still
+    receive the raw values.
     """
-    if runtime.session is None:
-        raise WorldBug(f"the changeset session of node {runtime.node.path!r} is not attached")
-    return runtime.session
+    startup: dict[str, Any] = {}
+    for keyword, value in kwargs.items():
+        try:
+            startup[keyword] = serialise(value)
+        except WorldBug as error:
+            # `serialise` speaks about tool results, which is what it is for
+            # everywhere else; this is the one caller that is not one, and it is
+            # the one that can say which keyword was the problem.
+            raise WorldBug(
+                f"startup keyword {keyword!r} must be JSON-able data, because the state "
+                f"document reports it: {error}"
+            ) from error
+    return startup
+
+
+def _fixture_files(fixture: Fixture | None) -> dict[str, str] | None:
+    """Per node path, the `file_sha256` the fixture's sidecar recorded. `None` for a blank one.
+
+    The root under `ROOT_PATH`, because a sidecar's version-1 fields describe the
+    root and `nodes` lists only what the root adds (`fixtures.py`).
+    """
+    if fixture is None:
+        return None
+    return {ROOT_PATH: fixture.meta.file_sha256} | {
+        node.path: node.file_sha256 for node in fixture.meta.nodes
+    }
 
 
 def _frozen_versions(fixture: Fixture | None, composition: Composition) -> dict[str, str]:

@@ -8,8 +8,8 @@ An eval inspects every store through one SQL connection.
 This page is for the author of a world that adds others. Nothing here changes a world that adds
 none. A world with no added worlds is a composition of exactly one **node**, meaning one store, and
 every mechanism below runs for it unchanged: one middleware chain, a `format_version: 1` fixture,
-and every `Change` saying `main`. There is no second code path, which is why every rule on every
-other page still holds.
+and every change-log record saying `main`. There is no second code path, which is why every rule on
+every other page still holds.
 
 | Section | What it covers |
 |---|---|
@@ -21,7 +21,7 @@ other page still holds.
 | [Startup hooks](#startup-hooks) | Broadcasting and binding keyword arguments |
 | [One instance, many stores](#one-instance-many-stores) | Files, clocks, seeds and isolation |
 | [Fixtures](#fixtures) | The version-2 sidecar, and what freeze and create check |
-| [What an eval sees](#what-an-eval-sees) | Inspection, changesets and the composition report |
+| [What an eval sees](#what-an-eval-sees) | Inspection, the change log and the composition report |
 | [Typed access](#typed-access) | Calling a tool by its function |
 | [What `seahaven check` adds](#what-seahaven-check-adds) | Eight codes |
 | [Limits](#limits) | The hard cap, the costs, and what is deliberately absent |
@@ -36,6 +36,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -51,6 +52,7 @@ company = seahaven.World(
     name="company",
     version="0.1.0",
     schema="CREATE TABLE invoices (id TEXT PRIMARY KEY, charge_id TEXT NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments", tool_prefix="pay_")
 
@@ -78,15 +80,15 @@ with company.instance(now="2026-06-01T09:00:00.000Z") as inst:
     )
     assert joined is not None and joined["amount"] == 500
 
-    # One changeset, and every record says which store it came from.
-    assert {(change.world, change.table) for change in inst.changes()} == {
+    # One change log, and every record says which store it came from.
+    assert {(record.world, record.table) for record in inst.change_log()} == {
         ("main", "invoices"),
         ("payments", "charges"),
     }
 ```
 
 That example is the whole feature. There is one new registration verb, one new handle on `ctx`, and
-everything else — the tool list, the changeset, the inspection connection, the fixture — gains a
+everything else — the tool list, the change log, the inspection connection, the fixture — gains a
 node dimension it did not have before.
 
 ## Declaring
@@ -100,7 +102,7 @@ import payments_world
 
 import seahaven
 
-world = seahaven.World(name="company", version="0.1.0", schema=...)
+world = seahaven.World(name="company", version="0.1.0", schema=..., state_format="seahaven.state/1")
 world.add_world(payments_world.world, name="payments", tool_prefix="pay_")
 ```
 
@@ -170,7 +172,7 @@ observes**, so a host that cares orders its `add_world` calls to match the clien
 Three rules fall out of that:
 
 - After filtering and prefixing, every name must be unique across the whole tree, and must not be
-  one of the reserved names (`reset`, `step`, `state`, `close`, and the two control tools). A
+  one of the reserved names (`reset`, `step`, `state`, `close`, and the control tool). A
   collision is a seal error, never resolved silently.
 - A prefixed name must still be a valid tool name (`^[A-Za-z0-9_-]{1,128}$`), so a `tool_prefix` of
   `"payments."` is refused rather than published.
@@ -205,6 +207,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -220,6 +223,7 @@ shop = seahaven.World(
     name="shop",
     version="1.0.0",
     schema="CREATE TABLE orders (id TEXT PRIMARY KEY, total INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 # The shop charges through payments and hides it from the agent entirely.
 shop.add_world(payments, tool_allow_list=[])
@@ -235,7 +239,10 @@ def place_order(ctx: seahaven.Ctx, total: int) -> dict[str, object]:
 
 
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments", tool_prefix="pay_")
 company.add_world(shop, name="shop", tool_prefix="shop_")
@@ -265,8 +272,8 @@ is `<parent path>/<name>`. Every other route that reaches the node is an **alias
 string like `shop/payments` above. Aliases are not nodes. Nothing is created for them, and sharing
 *reduces* the number of stores.
 
-One node is one file, one connection, one attached schema, one changeset key, one id stream and one
-entry in a fixture's sidecar.
+One node is one file, one connection, one attached schema, one change-log path, one id stream and
+one entry in a fixture's sidecar.
 
 Two things about scopes are worth knowing before they surprise you. **Scoping is coarse**: a
 `store=` scopes a whole subtree, so "the merchant's payments but the company's chat, under one shop"
@@ -328,9 +335,13 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments")
 
@@ -406,6 +417,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -417,7 +429,10 @@ def configure(ctx: seahaven.Ctx, *, region: str = "us", plan: str = "free") -> N
 
 
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments")
 company.add_world(payments, name="payments_eu", store="eu", startup={"region": "eu"})
@@ -541,12 +556,14 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 company = seahaven.World(
     name="company",
     version="0.1.0",
     schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
     fixtures_dir="fixtures",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments")
 
@@ -568,19 +585,21 @@ Nothing agent-facing says a world is composed. Everything eval-facing does.
 
 - **`inst.inspect()`** is the read-only connection it always was, with every added node attached
   read-only under a schema named by its path, with `/` replaced by `__`: `payments.charges`,
-  `payments__tax.rates`. "Was the invoice created and was the charge taken" is one statement. The
-  same is true of `controller_run_sql` over a server. Writes, `ATTACH` and `DETACH` are denied on
-  it, as they always were.
-- **`inst.changes()`** is one list covering every node, in canonical order, root first. Each
-  `Change` carries `world`, the owning node's path, which is `main` for the root. That is what tells
-  two tables of the same name in two stores apart. Per-node exclusions are each world's own
-  `untracked_tables` and FTS5 shadow tables.
+  `payments__tax.rates`. "Was the invoice created and was the charge taken" is one statement.
+  Writes, `ATTACH` and `DETACH` are denied on it, as they always were.
+- **`inst.change_log()`** is one list covering every node, in call order. Each record carries
+  `world`, the owning node's path, which is `main` for the root. That is what tells two tables of the
+  same name in two stores apart; the records of one call are sorted by that path, then the table,
+  then the key. Per-node exclusions are each world's own `untracked_tables` and FTS5 shadow tables.
 - **`inst.composition()`** is what this instance is running against: one record per node with
   `path`, `world`, `world_version`, `scope`, `aliases`, `schema_hash`, and `frozen_world_version` —
   the version the fixture recorded, when that is not the version installed, and `None` otherwise. It
   describes the files on disk rather than whatever the world's seal says now.
-- **Over OpenEnv**, the `state` message carries those same records under `composition`, and `null`
-  before the first `reset`, so a session can say what tree it is running against. `state` is not an
+- **`inst.state()`** is the whole document an eval grades on, and a node's path is what joins that
+  document together. `composition` is keyed by path. `fixture` holds one `file_sha256` per path. A
+  log record's `world` names one ([state.md](state.md)).
+- **Over OpenEnv**, the `state` message carries that same document, with `composition` `null` before
+  the first `reset`, so a session can say what tree it is running against. `state` is not an
   observation, and nothing agent-facing carries any of it.
 
 ## Typed access
@@ -604,6 +623,7 @@ payments = seahaven.World(
     name="payments",
     version="1.0.0",
     schema="CREATE TABLE charges (id TEXT PRIMARY KEY, amount INTEGER NOT NULL) STRICT;",
+    state_format="seahaven.state/1",
 )
 
 
@@ -616,7 +636,10 @@ def create_charge(ctx: seahaven.Ctx, amount: int) -> Charge:
 
 
 company = seahaven.World(
-    name="company", version="0.1.0", schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;"
+    name="company",
+    version="0.1.0",
+    schema="CREATE TABLE staff (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
 )
 company.add_world(payments, name="payments", tool_prefix="pay_")
 
@@ -688,9 +711,10 @@ Eight codes, all of them for mistakes a composite makes silently.
   findings and nothing else, so the count appears where it is actionable, which is `SH504` at the
   bound. In process the count is `len(world.composition().nodes)`, and per instance
   `inst.composition()`.
-- **An idle composite instance is one file, one connection and one session per node.** Cost scales
-  with the tree, and the design target — hundreds of concurrent instances with minute-long lifetimes
-  — holds for a small number of nodes. The benchmark measures one node per instance and reads as a
+- **An idle composite instance is one file and one connection per node.** A session is opened per
+  node per call and closed with the call, so an idle instance holds none. Cost scales with the
+  tree, and the design target — hundreds of concurrent instances with minute-long lifetimes —
+  holds for a small number of nodes. The benchmark measures one node per instance and reads as a
   per-node floor.
 - **Sealing costs a walk of the tree,** on the first use after any registration anywhere in the
   process. The invalidation is global, because a world cannot be told what added it. Steady state is

@@ -8,6 +8,7 @@ exercises it: `tests/test_pytest_plugin.py` through `pytester`, and
 ProjectTracker's own suite.
 """
 
+import copy
 import sys
 import tempfile
 import threading
@@ -168,6 +169,7 @@ def build_world(
     """
     options.setdefault("fixtures_dir", tmp_path / "fixtures")
     options.setdefault("work_dir", tmp_path / "work")
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(name, version, schema, **options)
     register_test_tools(world)
     return world
@@ -226,6 +228,7 @@ def composable_world(
     version".
     """
     own = f"CREATE TABLE {name}_rows (id TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;"
+    options.setdefault("state_format", "seahaven.state/1")
     world = World(name, version, own + extra_schema, **options)
 
     @world.tool(name=f"{name}_write")
@@ -261,6 +264,27 @@ def world(tmp_path: Path) -> World:
 @pytest.fixture
 def instance(world: World) -> Iterator[Instance]:
     """A blank instance of that world, destroyed when the test ends."""
+    with world.instance(None, now=INSTANT_ISO) as live:
+        yield live
+
+
+@pytest.fixture
+def emporium_instance(tmp_path: Path) -> Iterator[Instance]:
+    """A blank instance of the committed composite world, on its own directory.
+
+    Four nodes from three worlds: `main`, `payments`, `payments_eu` and `shop`
+    (`tests/worlds/README.md`). Imported here and not at the top because the
+    path it is found on is the one this module sets up above.
+
+    Do not use this fixture from a module that declares
+    `pytestmark = pytest.mark.usefixtures("isolated_imports")`: that fixture
+    purges a world imported during a test, and `emporium.world` has to stay the
+    same object for the whole run because node identity is object identity.
+    """
+    import emporium
+
+    world = copy.copy(emporium.world)
+    world.work_dir = tmp_path / "work"
     with world.instance(None, now=INSTANT_ISO) as live:
         yield live
 

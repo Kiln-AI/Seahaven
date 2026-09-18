@@ -107,9 +107,9 @@ def test_the_schema_tool_writes_nothing_and_takes_no_arguments(
 ) -> None:
     listing = next(tool for tool in instance.tools() if tool["name"] == "describe_schema")
     assert listing["input_schema"]["properties"] == {}
-    assert instance.changes() == []
+    assert instance.change_log() == []
     instance.call("describe_schema")
-    assert instance.changes() == []
+    assert instance.change_log() == []
 
 
 @pytest.mark.seahaven(fixture=AGENCY)

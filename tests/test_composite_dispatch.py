@@ -25,7 +25,10 @@ from seahaven.instances import Instance
 from seahaven.world import World
 from tests.conftest import INSTANT_ISO, WAIT, Boom, Caller, composable_world
 
-pytestmark = pytest.mark.usefixtures("isolated_imports")
+pytestmark = [
+    pytest.mark.usefixtures("isolated_imports"),
+    pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated"),
+]
 
 
 def rooted(name: str, tmp_path: Path) -> World:

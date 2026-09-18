@@ -34,17 +34,29 @@ from openenv.core.env_server.types import ConcurrencyConfig
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from seahaven.openenv.client import SeahavenClient
-from seahaven.openenv.env import SeahavenEnv, SeahavenObservation, SeahavenState
+from seahaven.openenv.env import (
+    FileRef,
+    FixtureRef,
+    NodeRef,
+    SeahavenEnv,
+    SeahavenObservation,
+    SeahavenState,
+    WorldRef,
+)
 from seahaven.world import World
 
 __all__ = [
     "CallToolAction",
+    "FileRef",
+    "FixtureRef",
     "ListToolsAction",
     "ListToolsObservation",
+    "NodeRef",
     "SeahavenClient",
     "SeahavenEnv",
     "SeahavenObservation",
     "SeahavenState",
+    "WorldRef",
     "app",
 ]
 
@@ -446,10 +458,11 @@ def app(
 ) -> FastAPI:
     """The ASGI app serving one world: one session per instance, many sessions.
 
-    `include_control_tools` makes `controller_run_sql` and `controller_changes`
-    callable over the wire. They are never listed either way; the flag is for a
-    harness that drives the world itself, and a server an agent talks to should
-    not have it.
+    `include_control_tools` makes `controller_run_sql` callable over the wire. It
+    is never listed either way; the flag is for a harness that drives the world
+    itself, and a server an agent talks to should not have it. The tool is
+    deprecated -- the `state` message is what an eval reads now -- and a call of
+    it warns in the server's process.
 
     OpenEnv's plain-HTTP `/reset`, `/step` and `/state` are replaced by a route
     that refuses them, because upstream cannot hold an episode over HTTP and
