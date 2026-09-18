@@ -44,16 +44,16 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
-from fastapi import WebSocketDisconnect
+from fastapi import WebSocket
+from fastapi.routing import APIWebSocketRoute
 from openenv import GenericEnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from openenv.core.utils import convert_to_ws_url
-from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosedOK
 
-from seahaven.openenv import SeahavenClient, _SwallowWebSocketDisconnect
-from seahaven.openenv.env import SeahavenObservation
+from seahaven.openenv import _MCP_ROUTE, SeahavenClient, _refusing_mcp_websocket
+from seahaven.openenv.env import SeahavenObservation, SeahavenState
 from tests.serving import serving
 
 pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
@@ -68,6 +68,11 @@ SESSIONS = 500
 # How long a connection that has a slot is given to prove it is not being
 # refused. A refusal arrives immediately; this only bounds the quiet case.
 UNSOLICITED_TIMEOUT = 2.0
+
+# How long the server is given to write its answer into a peer that has already
+# gone. The write is on the server's own task, so the client returning proves
+# nothing about it; this only bounds the quiet case.
+WRITE_INTO_A_DEAD_PEER = 1.0
 
 # The idle timeout the reaper test serves with, and how long it waits for the
 # sweep. OpenEnv checks every `max(timeout / 4, 5.0)` seconds, so the wait is
@@ -251,12 +256,10 @@ def test_a_world_bug_reaches_the_client_as_an_error_frame(tmp_path: Path) -> Non
 
 # `functional_spec.md` §9's confirmation step, and the gate this project's
 # implementation plan put at this phase. Subclass fields travel over the
-# websocket state message while the HTTP `GET /state` route strips them
-# (huggingface/OpenEnv#1155, cited from `env.py`), and nothing above
-# `SeahavenState` works unless that holds for a document carrying nested models,
-# a composition keyed by node path and an arbitrarily deep `state`. So it is
-# driven over a real socket, to the typed client and to the stock one, rather
-# than assumed.
+# websocket state message, and nothing above `SeahavenState` works unless that
+# holds for a document carrying nested models, a composition keyed by node path
+# and an arbitrarily deep `state`. So it is driven over a real socket, to the
+# typed client and to the stock one, rather than assumed.
 
 SCHEMA = json.loads((Path(__file__).parent / "state_v1.schema.json").read_text())
 
@@ -529,6 +532,9 @@ def test_the_http_episode_routes_refuse_rather_than_answer_a_throwaway_environme
             assert refusal["details"]["route"] == f"{verb} {path}"
             assert refusal["details"]["use_instead"] == "/ws"
             assert refusal["details"]["upstream"]["regression"] == "86a222d"
+            assert refusal["details"]["upstream"]["package"] == (
+                "openenv >=0.5.0,<0.6 (verified against 0.5.0)"
+            )
             assert "/ws" in refusal["message"]
             assert "SeahavenClient" in refusal["message"]
 
@@ -785,13 +791,26 @@ def test_the_served_schema_publishes_the_observation_with_its_descriptions(
     with no description at all. This is the half of the rule that needs a
     server: the text really does reach a client. The other half -- that *every*
     field either model declares has a description in the first place -- is
-    `test_every_declared_field_publishes_a_description`, in process, because
-    `/schema` answers `State.model_json_schema()` and never sees
-    `SeahavenState`.
+    `test_every_declared_field_publishes_a_description`, in process.
+
+    The state half is here because it only started being true with openenv
+    0.5.0: `create_app` takes a `state_cls` now, so the route answers the real
+    state model rather than OpenEnv's bare `State`
+    (huggingface/OpenEnv#1155). A bump that dropped the argument would publish a
+    state document that no Seahaven world ever answers, and nothing else reads
+    this endpoint.
     """
     with serving(world) as url, urllib.request.urlopen(url + "/schema") as response:
         schema = json.loads(response.read())
     assert schema["action"]["title"] == "CallToolAction"
+    state = schema["state"]
+    assert state["title"] == "SeahavenState"
+    assert set(SeahavenState.model_fields) <= set(state["properties"])
+    assert {
+        name: state["properties"][name].get("description") for name in SeahavenState.__annotations__
+    } == {
+        name: SeahavenState.model_fields[name].description for name in SeahavenState.__annotations__
+    }
     observation = schema["observation"]
     assert observation["title"] == "SeahavenObservation"
     properties = observation["properties"]
@@ -805,6 +824,31 @@ def test_the_served_schema_publishes_the_observation_with_its_descriptions(
     assert {name: properties[name]["description"] for name in declared} == {
         name: SeahavenObservation.model_fields[name].description for name in declared
     }
+
+
+# --- the web interface -----------------------------------------------------
+
+
+def test_the_world_is_whole_with_the_web_interface_on(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ENABLE_WEB_INTERFACE=true` is the mode every pushed world runs in.
+
+    `openenv push` writes `ENV ENABLE_WEB_INTERFACE=true` into the Dockerfile it
+    builds, so a hub world is served by `create_app_with_web_interface` and never
+    by the plain `create_app` every other test here exercises. It is a different
+    branch: it mounts Gradio at `/web`, and the arguments `app()` passes have to
+    reach the server through it. Nothing else in this suite runs it.
+    """
+    monkeypatch.setenv("ENABLE_WEB_INTERFACE", "true")
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        assert _request(url + "/web/metadata")[0] == 200
+        # The refusals are added to the app `app()` answers, whichever branch
+        # built it, and the published state class has to survive the same trip.
+        assert _request(url + "/state")[0] == 501
+        assert _request(url + "/schema")[1]["state"]["title"] == "SeahavenState"
+        env.reset()
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
 # --- the idle reaper -------------------------------------------------------
@@ -976,25 +1020,21 @@ def _errors(records: list[logging.LogRecord]) -> list[str]:
     return [record.getMessage() for record in records if record.levelno >= logging.ERROR]
 
 
-def test_a_session_that_ends_normally_leaves_nothing_in_the_error_log(
-    world: World, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A clean disconnect is silent, and both halves of that are asserted.
+def test_a_session_that_ends_normally_leaves_nothing_in_the_error_log(world: World) -> None:
+    """A clean disconnect is silent, on the log an operator greps.
 
-    Nothing on `uvicorn.error` is the operator's half: a session that ended
-    normally must not look like a failure in the log they grep when something
-    real goes wrong. Nothing from `seahaven.openenv` is the client's half: the
-    middleware absorbs a disconnect that escapes OpenEnv's handler and says so at
-    debug level, so silence there means the client waited for the server rather
-    than that something quietly cleaned up after it.
+    A session that ended normally must not look like a failure. Seahaven carried
+    a client-side override and an ASGI middleware to buy this under openenv
+    0.4.2, whose `/ws` handler closed the connection in a `finally` guarded by
+    `except RuntimeError` and so logged `ERROR: Exception in ASGI application`
+    for every normal close. openenv 0.5.0 catches `WebSocketDisconnect` there as
+    well (`http_server.py` lines 1290 and 1767), both workarounds are gone, and
+    this test is what says upstream really does hold the line now.
     """
-    caplog.set_level(logging.DEBUG, logger="seahaven.openenv")
     with _watched(world) as (url, records), SeahavenClient(base_url=url) as env:
         env.reset()
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
     assert _errors(records) == []
-    absorbed = [record for record in caplog.records if record.name == "seahaven.openenv"]
-    assert [record.getMessage() for record in absorbed] == []
 
 
 def test_a_peer_that_vanishes_is_not_logged_as_a_server_error(world: World) -> None:
@@ -1015,36 +1055,70 @@ def test_a_peer_that_vanishes_is_not_logged_as_a_server_error(world: World) -> N
     assert _errors(records) == []
 
 
-def test_the_middleware_absorbs_only_a_disconnected_websocket() -> None:
-    """Narrow on purpose: this scope, this exception, nothing else.
+def test_a_peer_that_leaves_mid_refusal_is_not_logged_as_a_server_error(world: World) -> None:
+    """`ws /mcp` is Seahaven's own handler, so its own close has to be guarded.
 
-    A `WebSocketDisconnect` reaching the top of a websocket connection means the
-    peer went away, which no server can act on. Anything else out of a handler is
-    a real failure and has to stay loud, and an HTTP request is not this
-    middleware's business at all.
+    The refusal writes one frame and closes. A peer that hangs up between its
+    request and that answer leaves starlette raising `WebSocketDisconnect` out of
+    `send_text`, which is the peer's business and not the server's -- unguarded
+    it costs an `ERROR: Exception in ASGI application` traceback per abandoned
+    connection. Upstream's guard on its own `/ws` handler does not reach this
+    one, because this one replaced upstream's.
     """
 
-    async def raise_through(error: Exception, scope_type: str) -> None:
-        async def failing(scope: Scope, receive: Receive, send: Send) -> None:
-            raise error
+    async def ask_and_vanish(url: str) -> None:
+        sock = await ws_connect(convert_to_ws_url(url) + "/mcp", proxy=None)
+        await sock.send(json.dumps(_mcp_request("tools/list")))
+        # Hung up without reading the answer, which is what a harness that dies
+        # and a client that gave up both look like from here.
+        await sock.close()
 
-        await _SwallowWebSocketDisconnect(failing)(
-            {"type": scope_type, "path": "/ws"}, _unused_receive, _unused_send
+    with _watched(world) as (url, records):
+        asyncio.run(ask_and_vanish(url))
+        time.sleep(WRITE_INTO_A_DEAD_PEER)
+    assert _errors(records) == []
+
+
+def test_the_mcp_refusal_absorbs_a_dead_peer_and_nothing_else() -> None:
+    """The guard itself, without the race the served test depends on.
+
+    `test_a_peer_that_leaves_mid_refusal_is_not_logged_as_a_server_error` needs
+    the peer's socket to be gone before the handler writes, which is a race it
+    wins today and cannot be made to win for ever. This drives the same handler
+    with a send that fails on purpose, so the guard is asserted rather than
+    raced for -- and asserted to be narrow: a real failure still escapes.
+    """
+
+    async def never_called(websocket: WebSocket) -> None:
+        raise AssertionError("the replaced handler is never called")
+
+    refuse = _refusing_mcp_websocket(
+        APIWebSocketRoute(_MCP_ROUTE, never_called, name="mcp")
+    ).endpoint
+
+    def dead_peer(failure: Exception) -> WebSocket:
+        frames = iter(
+            [
+                {"type": "websocket.connect"},
+                {"type": "websocket.receive", "text": json.dumps(_mcp_request("tools/list"))},
+            ]
         )
 
-    asyncio.run(raise_through(WebSocketDisconnect(code=1006), "websocket"))
-    with pytest.raises(WebSocketDisconnect):
-        asyncio.run(raise_through(WebSocketDisconnect(code=1006), "http"))
-    with pytest.raises(RuntimeError, match="the world is on fire"):
-        asyncio.run(raise_through(RuntimeError("the world is on fire"), "websocket"))
+        async def receive() -> MutableMapping[str, Any]:
+            return next(frames)
 
+        async def send(message: MutableMapping[str, Any]) -> None:
+            if message["type"] == "websocket.accept":
+                return
+            raise failure
 
-async def _unused_receive() -> MutableMapping[str, Any]:
-    raise AssertionError("the stub app never reads the connection")
+        return WebSocket({"type": "websocket", "path": _MCP_ROUTE}, receive, send)
 
-
-async def _unused_send(message: MutableMapping[str, Any]) -> None:
-    raise AssertionError("the stub app never writes to the connection")
+    # An `OSError` on the write is what starlette turns into the
+    # `WebSocketDisconnect` a vanished peer raises.
+    asyncio.run(refuse(dead_peer(OSError("the peer went away"))))
+    with pytest.raises(ValueError, match="the world is on fire"):
+        asyncio.run(refuse(dead_peer(ValueError("the world is on fire"))))
 
 
 def _request(url: str, *, method: str = "GET", data: bytes | None = None) -> tuple[int, Any]:

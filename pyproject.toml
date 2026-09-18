@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-serve = ["openenv>=0.4.2,<0.5"]
+serve = ["openenv>=0.5.0,<0.6"]
 
 [project.scripts]
 seahaven = "seahaven.cli:main"

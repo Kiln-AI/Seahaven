@@ -12,15 +12,8 @@ asynchronous code from the same method; writing them in terms of the public
 `step()` would have answered `step`'s dual-mode wrapper instead of the
 observation, so the sketch in the component document is spelled out here rather
 than copied.
-
-It also closes more politely than the base client does, which is a fix and not a
-convenience: `_disconnect_async` below says why, and what it costs to override a
-private method to get it.
 """
 
-import asyncio
-import json
-from contextlib import suppress
 from typing import Any, Self
 
 from openenv.core.client_types import StepResult
@@ -31,11 +24,6 @@ from openenv.core.env_server.types import Observation
 from seahaven.openenv.env import SeahavenObservation, SeahavenState
 
 __all__ = ["SeahavenClient"]
-
-# How long a disconnect waits for the server to hang up before closing this end
-# anyway. A healthy server answers in about a millisecond; the bound is here so
-# that one which has stopped answering cannot hold an eval's shutdown open.
-CLOSE_TIMEOUT = 5.0
 
 
 class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, SeahavenState]):
@@ -120,45 +108,6 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         """The same narrowing for `async with`."""
         await super().__aenter__()
         return self
-
-    async def _disconnect_async(self) -> None:
-        """Ask the server to close, and wait for it to, before closing this end.
-
-        The base client sends `{"type": "close"}` and closes the socket in the
-        same breath. The server does not get to finish: its `/ws` handler
-        destroys the session first -- an `await`, so it yields -- and by the time
-        it calls `close()` uvicorn has already seen the client's CLOSE frame and
-        torn the transport down. That `close()` raises `WebSocketDisconnect`,
-        which the handler's `except RuntimeError` does not catch, so every
-        session that ends normally leaves an `ERROR: Exception in ASGI
-        application` traceback in the server's log -- the log an operator greps
-        when something is actually wrong. Waiting for the server to hang up
-        first makes it a 1000/1000 handshake and no log line at all.
-
-        This overrides a private method, verified against **openenv 0.4.2**. The
-        name, the shape of the close frame, and `close()`/`__exit__`/`__aexit__`
-        all reaching `_disconnect_async` are OpenEnv's internals and not its API.
-        An upgrade that renames the method, or stops routing disconnects through
-        it, would leave this override quietly unused -- so `test_client.py`
-        asserts the base class still has the method this one replaces, and fails
-        loudly when it does not. What is at stake if it ever slips through is
-        noise in a log, never a disconnect that does not happen: `super()` below
-        closes the socket either way.
-        """
-        ws = self._ws
-        if ws is not None and self._ws_loop is asyncio.get_running_loop():
-            # The loop check is the base client's own `same_loop` guard: a client
-            # disconnected from a loop other than the one it connected on must
-            # not touch the socket, which belongs to a loop that may be dead.
-            with suppress(Exception):
-                await ws.send(json.dumps({"type": "close"}))
-                await asyncio.wait_for(ws.wait_closed(), timeout=CLOSE_TIMEOUT)
-        # `super()` still runs, and still sends a close frame of its own: against
-        # a server that has already closed, that send fails and is swallowed
-        # there, and against one that never answered the socket is closed exactly
-        # as it was before. It is also what clears `_ws` and `_ws_loop`, so the
-        # teardown itself stays OpenEnv's.
-        await super()._disconnect_async()
 
     def _step_payload(self, action: CallToolAction | ListToolsAction) -> dict[str, Any]:
         return action.model_dump()

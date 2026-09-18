@@ -77,8 +77,8 @@ class SeahavenObservation(CallToolObservation):
     It subclasses OpenEnv's `CallToolObservation` rather than `Observation` so
     that upstream's MCP `tools/call` path, which checks for that type, keeps
     working. `/mcp` itself is refused, but a `{"type": "mcp"}` frame on a `/ws`
-    connection reaches the same check (`http_server.py` line 985 in openenv
-    0.4.2), which answers an internal error to anything that is not one. That
+    connection reaches the same check (`http_server.py` line 1020 in openenv
+    0.5.0), which answers an internal error to anything that is not one. That
     check is on the step path only; `reset` has its own handler and no check.
 
     `error` is a tool's own error: data the agent reads, which never closes the
@@ -201,16 +201,12 @@ class SeahavenState(State):
     # Descriptions for the same reason the observation's fields have them: the
     # two fields this class *inherits* arrive described by OpenEnv, and the ones
     # declared here with nothing said about them would be the round-1 and
-    # round-2 finding a third time, one class over. They do not reach a client:
-    # `GET /schema` answers `State.model_json_schema()` and `GET /state` is
-    # annotated `response_model=State`, so OpenEnv never publishes a subclass's
-    # fields either way -- filed upstream as
-    # https://github.com/huggingface/OpenEnv/issues/1155 (open against 0.4.2;
-    # `main` is unchanged). TODO: when a release carrying that fix is the floor,
-    # these descriptions reach a client and this note can go. `SeahavenState`
-    # still describes itself, because the model is the thing that is wrong or
-    # right about its own fields, and the day upstream publishes the real state
-    # model these are already correct.
+    # round-2 finding a third time, one class over. They reach a client because
+    # `app()` passes this class to `create_app` as `state_cls`, which openenv
+    # 0.5.0 added and which is what closed
+    # https://github.com/huggingface/OpenEnv/issues/1155; under 0.4.2 `GET
+    # /schema` answered `State.model_json_schema()` for every environment and no
+    # subclass's fields were published at all.
     #
     # Declared in `functional_spec.md` §3.1's order, less `episode_id`, which the
     # base carries. A field the document always writes is required here; the five
