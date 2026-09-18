@@ -57,13 +57,13 @@ const TOOLS = [
           description: "Only return issues in this status. Omit for every status.",
           enum: ["todo", "in_progress", "blocked", "done"],
         },
+        // The shape pydantic emits for `limit: int | None = 20`: the branch
+        // carries the type and the wrapper carries every hint.
         limit: {
-          type: "integer",
+          anyOf: [{ type: "integer", minimum: 1, maximum: 100 }, { type: "null" }],
           title: "Limit",
           description: "How many issues to return.",
           default: 20,
-          minimum: 1,
-          maximum: 100,
         },
         include_closed: {
           type: "boolean",

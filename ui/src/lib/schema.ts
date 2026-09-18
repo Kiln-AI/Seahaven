@@ -39,7 +39,14 @@ function withoutRef(schema: JsonSchema): JsonSchema {
   return rest
 }
 
-/** `anyOf: [T, null]` is how pydantic spells an optional field. Unwrap it to T. */
+/**
+ * `anyOf: [T, null]` is how pydantic spells an optional field. Unwrap it to T.
+ *
+ * The branch carries the type and nothing else: `title`, `default` and
+ * `description` sit on the wrapper, so an argument written `limit: int | None =
+ * 20` publishes its default one level above the `integer` it defaults to.
+ * Keeping only the branch would drop every hint the field has.
+ */
 function unwrapNullable(schema: JsonSchema, root: JsonSchema): JsonSchema {
   const branches = schema.anyOf ?? schema.oneOf
   if (!Array.isArray(branches)) return schema
@@ -47,7 +54,8 @@ function unwrapNullable(schema: JsonSchema, root: JsonSchema): JsonSchema {
     .map((branch) => deref(branch, root))
     .filter((branch) => branch.type !== "null")
   if (real.length !== 1) return schema
-  return { ...real[0], description: schema.description ?? real[0].description }
+  const { anyOf: _anyOf, oneOf: _oneOf, ...wrapper } = schema
+  return { ...real[0], ...wrapper }
 }
 
 function typeOf(schema: JsonSchema): string {

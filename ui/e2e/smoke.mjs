@@ -74,6 +74,21 @@ await page.waitForTimeout(600)
 await shot(page, "tools-empty")
 check(await page.getByText("5 tools").first().isVisible(), "the tool list did not load")
 
+// --- an optional argument keeps the hints its wrapper carries ---------------
+//
+// `search_issues.limit` is spelled `int | None = 20`, so pydantic puts the type
+// on the `anyOf` branch and the title, description and default on the wrapper.
+// Reading only the branch loses all three.
+
+check(
+  (await page.getByLabel("Limit").inputValue()) === "20",
+  "an optional argument lost the default its wrapper carries",
+)
+check(
+  await page.getByText("How many issues to return.").isVisible(),
+  "an optional argument lost the description its wrapper carries",
+)
+
 // --- a tool call, through the generated form --------------------------------
 
 await page.getByRole("button", { name: /Choose a tool|search_issues/ }).first().click()
