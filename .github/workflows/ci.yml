@@ -83,9 +83,8 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Types
-        run: npx tsc --noEmit
-
+      # `npm run build` is `tsc --noEmit && vite build`, so the types are
+      # checked here and a type error fails the job before anything is built.
       - name: Build
         run: npm run build
 
