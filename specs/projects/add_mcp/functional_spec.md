@@ -441,7 +441,8 @@ world already in a tree reseals on next use.
 **The filter in `openenv/env.py` goes away.** A world that was not told to have control tools has no
 `controller_run_sql` in its registry, so `Instance._target` raises `UnknownTool` on its own, with
 the same message the wire already produced. `worlds/projecttracker/tests/test_openenv.py` asserts
-that message today and must keep passing unchanged: that test is the proof the wire behaviour did not
+that message today and must keep passing unchanged: that test is the proof the wire behaviour did
+not
 move.
 
 ### 15.3 Why the opt-in is on the world and not on the instance
