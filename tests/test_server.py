@@ -1157,14 +1157,14 @@ def test_the_console_is_served_from_the_same_origin_as_the_socket(world: World) 
     assert "/console" not in schema[1]["paths"]
 
 
-def test_an_install_without_the_built_page_says_how_to_build_it(
+def test_an_install_without_the_built_page_says_the_console_is_not_enabled(
     world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A source checkout that never ran the build still serves everything else.
 
     The page is a build artefact copied into the package, so it can be missing.
-    The answer is a 501 that names the two commands, rather than a stack trace
-    or an empty 200, and the rest of the server is untouched.
+    The answer is a 501 saying the console is not enabled here, rather than a
+    stack trace or an empty 200, and the rest of the server is untouched.
     """
     monkeypatch.setattr("seahaven.openenv.CONSOLE_FILE", tmp_path / "not-built" / "index.html")
     with serving(world) as url, SeahavenClient(base_url=url) as env:
@@ -1177,7 +1177,10 @@ def test_an_install_without_the_built_page_says_how_to_build_it(
         env.reset()
         rows = env.call("rows", sql="SELECT 1 AS n").result
     assert status == 501
-    assert b"npm run build" in page
+    assert b"No web console in this build" in page
+    # A reader of this page is not the person who builds the console, so it
+    # carries no build commands to run.
+    assert b"npm" not in page and b"dist/index.html" not in page
     assert rows == [{"n": 1}]
 
 

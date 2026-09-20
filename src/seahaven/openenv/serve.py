@@ -13,9 +13,6 @@ Scaling out is more processes behind a load balancer with connection affinity,
 which is the operator's business; hosting is out of Seahaven's scope.
 """
 
-import logging
-from typing import Any
-
 import uvicorn
 
 from seahaven.instances import default_concurrency, set_concurrency
@@ -49,23 +46,6 @@ def console_url(host: str, port: int) -> str:
     return f"http://{reachable}:{port}{CONSOLE_PATH}"
 
 
-class _AnnouncingServer(uvicorn.Server):
-    """A uvicorn server that names the console once it is actually listening.
-
-    `Server.startup` binds the socket and logs "Uvicorn running on ...", so
-    announcing after it means the line appears under that one and only for a
-    server that started. Printing before `run` would announce a console that a
-    failed bind never serves.
-    """
-
-    announce: str = ""
-
-    async def startup(self, sockets: list[Any] | None = None) -> None:
-        await super().startup(sockets=sockets)
-        if self.announce:
-            logging.getLogger("uvicorn.error").info(self.announce)
-
-
 def serve(
     world: World,
     *,
@@ -85,37 +65,41 @@ def serve(
     a container's CPU affinity) and `0` removes it. It is set before the app is
     built, so it is in force for the first call the server takes.
 
-    `console` serves the web console at `/console` and prints its address once
-    the server is listening. `False` leaves both out.
+    `console` serves the web console at `/console` and prints its address just
+    before the server starts. `False` leaves both out.
 
     `session_timeout` is seconds of idleness before OpenEnv reaps a session, or
     `None` for no reaper; the CLI's `--session-timeout 0` is spelled `None`
     here, because that is what OpenEnv wants and a `0` it would refuse.
     """
     set_concurrency(default_concurrency() if concurrency is None else concurrency)
-    server = _AnnouncingServer(
-        uvicorn.Config(
-            app(
-                world,
-                include_control_tools=include_control_tools,
-                max_concurrent_envs=max_concurrent_envs,
-                session_timeout=session_timeout,
-                console=console,
-            ),
-            host=host,
-            port=port,
-            # One process, said twice. `Server.run()` has no supervisor and
-            # cannot fork, so this is already true; `workers=1` is what the
-            # number means to anything that reads the config, including a
-            # `uvicorn.run` that reaches this file again. The app is an object
-            # rather than an import string for the same reason from the other
-            # side: uvicorn refuses to fork workers for an app it cannot
-            # re-import, and a session's instance would not survive that import
-            # anyway.
-            workers=1,
-            log_level=LOG_LEVEL,
-        )
+    served = app(
+        world,
+        include_control_tools=include_control_tools,
+        max_concurrent_envs=max_concurrent_envs,
+        session_timeout=session_timeout,
+        console=console,
     )
     if console:
-        server.announce = f"Web console available at {console_url(host, port)}"
-    server.run()
+        # `print` and not `logging`: uvicorn calls `configure_logging()` from
+        # inside `uvicorn.run`, so until then the root logger has no handler
+        # and sits at WARNING, and an `info` call here is dropped. The line
+        # therefore lands above uvicorn's own startup output and before the
+        # socket is bound, which is what "will be available" allows for.
+        # `flush=True` because stdout is block-buffered when it is not a
+        # terminal, and a server that then runs until it is killed would hold
+        # the line in that buffer and never print it.
+        print(f"Starting. Web console will be available at {console_url(host, port)}", flush=True)
+    uvicorn.run(
+        served,
+        host=host,
+        port=port,
+        # One process, always. `workers` left unset is read from
+        # `WEB_CONCURRENCY`, and `uvicorn.run` exits with STARTUP_FAILURE for a
+        # `workers > 1` it cannot re-import -- an app object is not an import
+        # string -- so this argument is what keeps that environment variable
+        # from stopping the server. The app is an object rather than an import
+        # string because a session's instance would not survive that import.
+        workers=1,
+        log_level=LOG_LEVEL,
+    )
