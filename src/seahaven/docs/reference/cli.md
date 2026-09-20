@@ -245,7 +245,7 @@ The document takes five keys and no others: `"fixture"`, `"seed"`, `"now"`, `"st
 is served, rather than reaching the client as a `TypeError` once it has connected:
 
 ```
---reset-options does not take "user_id"; world.instance() takes "fixture", "now", "seed", "startup" and "state_format", and a world's own startup keywords go inside "startup": --reset-options '{"fixture": "small_startup", "startup": {"user_id": "u_12"}}'
+--reset-options does not take "user_id"; --reset-options takes "fixture", "now", "seed", "startup" and "state_format", and a world's own startup keywords go inside "startup": --reset-options '{"fixture": "small_startup", "startup": {"user_id": "u_12"}}'
 ```
 
 There is no `--state-format`. The state document is not published over MCP, so the format it would
@@ -259,8 +259,8 @@ the one key of its own that it refuses rather than passes:
 --reset-options does not take "control_tools": seahaven mcp publishes the world's own tools and nothing else, and nothing reaching an MCP client may run SQL against the world
 ```
 
-An instance this command makes is therefore made without control tools, so a control tool's name is
-an unknown tool on it, in the words any name the world does not have earns.
+An instance this command makes therefore has no control tools, and a `tools/call` naming a control
+tool is answered as an unknown tool, in the words any name the world does not have earns.
 
 **No `--seed` means a random seed**, not the constant `world.instance()` falls back to. The command
 picks an integer, uses it, and writes it to stderr, so a run can be asked for again:
@@ -276,8 +276,8 @@ integer, a `--world` that is not `module:attr`, and the mixing above.
 
 Everything that needs the world is checked once the client has connected, and reaches it as a
 JSON-RPC error: an import that fails, a fixture that does not exist, a startup keyword no startup
-hook names, a startup hook that raises, and the two values `world.instance()` refuses itself:
-`--now` given together with a fixture, and a `--seed` that is negative or does not fit in 8 bytes. A
+hook names, a startup hook that raises, and a value `world.instance()` refuses itself, such as
+`--now` given together with a fixture, or a `--seed` that is negative or does not fit in 8 bytes. A
 process that could not make its instance answers that error and then exits 1.
 
 Read [../serving_and_openenv.md](../serving_and_openenv.md#serving-one-world-to-an-mcp-client) for

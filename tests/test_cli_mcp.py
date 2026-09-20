@@ -276,7 +276,7 @@ def test_a_key_world_instance_does_not_take_is_refused(
 
     assert (result.code, calls) == (1, [])
     assert result.err.strip() == (
-        '--reset-options does not take "region"; world.instance() takes "fixture", "now", '
+        '--reset-options does not take "region"; --reset-options takes "fixture", "now", '
         '"seed", "startup" and "state_format", and a world\'s own startup keywords go inside '
         '"startup": --reset-options \'{"fixture": "small_startup", "startup": '
         '{"user_id": "u_12"}}\''

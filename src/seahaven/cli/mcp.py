@@ -70,6 +70,8 @@ WITHHELD = "control_tools"
 # The keys a `--reset-options` object may name. Read off the signature of
 # `world.instance()` rather than written out, so a keyword argument the
 # framework adds is one this command takes without an edit here.
+# `tests/test_cli_mcp.py` pins the five names, so a parameter added to
+# `world.instance()` fails a test rather than reaching an MCP client unreviewed.
 RESET_OPTION_KEYS = frozenset(
     name
     for name, parameter in inspect.signature(World.instance).parameters.items()
@@ -297,7 +299,7 @@ def _check_keys(given: _Given, document: dict[str, Any]) -> None:
     named = _english([f'"{key}"' for key in unknown])
     takes = _english([f'"{key}"' for key in sorted(RESET_OPTION_KEYS)])
     raise CliError(
-        f"{given.spelling} does not take {named}; world.instance() takes {takes}, and a "
+        f"{given.spelling} does not take {named}; {given.spelling} takes {takes}, and a "
         f'world\'s own startup keywords go inside "startup": {_STARTUP_EXAMPLE}'
     )
 
