@@ -43,9 +43,9 @@ def test_the_client_defaults_when_reset_does_not_name_one(instance: seahaven.Ins
     assert _log(instance)[0]["client"] == seahaven_xmlrpc.UNKNOWN_CLIENT
 
 
-@pytest.mark.seahaven(fixture=None, now=NOW, xmlrpc_client="acme-crm/2.4")
-def test_the_client_comes_from_the_reset_argument(instance: seahaven.Instance) -> None:
-    """§21 point 3: a `reset()` keyword argument reaching an extension's startup hook.
+@pytest.mark.seahaven(fixture=None, now=NOW, startup={"xmlrpc_client": "acme-crm/2.4"})
+def test_the_client_comes_from_the_startup_keyword(instance: seahaven.Instance) -> None:
+    """§21 point 3: a startup keyword reaching an extension's startup hook.
 
     The marker's keywords are `world.instance(...)`'s, which are `reset`'s over
     OpenEnv, so this is the same path an eval takes to say which client it is

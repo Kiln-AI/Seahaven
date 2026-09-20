@@ -118,14 +118,14 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call it; there is nothing to decorate |
 | `world.state_format(name)` | register a state format of this world's own, as a decorator. The name is `<family>/<major>` and may not begin with `seahaven.` |
 | `world.resolve_state_format(name)` | the formatter a name answers to: a built-in, or one this world registered. Asked of the root of an instance and of nothing else |
-| `world.instance(fixture=None, *, seed=None, now=None, state_format=None, control_tools=False, **startup_kwargs)` | make an instance; a context manager. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance |
+| `world.instance(fixture=None, *, seed=None, now=None, state_format=None, control_tools=False, startup=None)` | make an instance; a context manager. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance. `startup` is the world's own keywords, passed to the startup hooks that name them |
 | `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
 | `world.tools_by_fn` | the registry by the function each tool was built from, multi-valued because one function may be registered as two tools. This world's own tools only, contributed or not. The control tool is not in it |
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |
-| `world.accepted_startup_kwargs` | every keyword some hook names |
+| `world.accepted_startup_kwargs` | every startup keyword some hook names |
 | `world.added_worlds` | what `add_world` recorded, in registration order. Read-only |
 | `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
 | `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir`, `world.pinned_state_format` | as given, plus the hash of the normalised schema |
@@ -143,7 +143,7 @@ Registration validates immediately and raises `WorldBug`; the full list of what 
 | `tool_prefix` | prepended to every contributed tool name | none |
 | `tool_allow_list` | only these tools are contributed to the agent's surface, named as the added world contributes them: after any prefix applied inside its own subtree, before this `tool_prefix` | all |
 | `tool_block_list` | every tool but these. Mutually exclusive with the allow list | none |
-| `startup` | keyword arguments bound to that node's startup hooks, not overridable by a `reset()` keyword of the same name | none |
+| `startup` | keyword arguments bound to that node's startup hooks, not overridable by a caller's startup keyword of the same name | none |
 
 What is checked at the call is what the two `World` objects know: the name, the lists, the scope
 name, the `startup` keywords against the added world's own hooks, and the absence of a cycle.
@@ -576,8 +576,8 @@ See [../serving_and_openenv.md](../serving_and_openenv.md) and [../state.md](../
 
 Installing `seahaven` activates the plugin. It adds two fixtures, `world` (session-scoped) and
 `instance` (one per test); one marker, `@pytest.mark.seahaven(fixture, seed=None, now=None,
-**startup_kwargs)`; and one option, `--seahaven-world module:attr`. See
-[../testing.md](../testing.md).
+state_format=None, control_tools=False, startup=None)`; and one option,
+`--seahaven-world module:attr`. See [../testing.md](../testing.md).
 
 ## The concurrency gate
 

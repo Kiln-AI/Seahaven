@@ -7,6 +7,7 @@ same behaviour arrives over a real socket.
 """
 
 import copy
+import inspect
 import json
 import logging
 import re
@@ -192,7 +193,7 @@ def test_reset_passes_the_seed_through(env: SeahavenEnv) -> None:
     assert again.call("mint") == minted
 
 
-def test_reset_passes_startup_kwargs_to_the_hooks(tmp_path: Path) -> None:
+def test_reset_passes_the_startup_keywords_to_the_hooks(tmp_path: Path) -> None:
     world = build_world(tmp_path)
     seen: list[str] = []
 
@@ -200,15 +201,15 @@ def test_reset_passes_startup_kwargs_to_the_hooks(tmp_path: Path) -> None:
     def seed_notes(ctx: Ctx, *, tenant: str = "acme") -> None:
         seen.append(tenant)
 
-    SeahavenEnv(world, include_control_tools=False).reset(tenant="globex")
+    SeahavenEnv(world, include_control_tools=False).reset(startup={"tenant": "globex"})
     assert seen == ["globex"]
 
 
-def test_an_unknown_startup_kwarg_raises_before_any_directory_exists(
+def test_an_unknown_startup_keyword_raises_before_any_directory_exists(
     env: SeahavenEnv, tmp_path: Path
 ) -> None:
-    with pytest.raises(WorldBug, match=r"unknown reset argument\(s\): \['nonsense'\]"):
-        env.reset(nonsense=1)
+    with pytest.raises(WorldBug, match=r"unknown startup keyword\(s\): \['nonsense'\]"):
+        env.reset(startup={"nonsense": 1})
     assert env.instance is None
     work = tmp_path / "work"
     assert not work.exists() or list(work.iterdir()) == []
@@ -221,7 +222,7 @@ def test_a_failed_reset_leaves_the_session_as_a_fresh_one(env: SeahavenEnv) -> N
     first = env.instance
     assert first is not None
     with pytest.raises(WorldBug):
-        env.reset(nonsense=1)
+        env.reset(startup={"nonsense": 1})
     assert env.instance is None
     assert not first.dir.exists()
     state = env.state
@@ -230,6 +231,60 @@ def test_a_failed_reset_leaves_the_session_as_a_fresh_one(env: SeahavenEnv) -> N
     # And the session is still usable: another reset is all it takes.
     env.reset(episode_id="second")
     assert env.state.episode_id == "second"
+
+
+RESET_PARAMETERS = (
+    "self",
+    "seed",
+    "episode_id",
+    "fixture",
+    "now",
+    "state_format",
+    "control_tools",
+    "startup",
+)
+
+
+def test_reset_takes_exactly_the_parameters_a_client_may_send() -> None:
+    """This signature is the reset wire schema, and it is pinned on purpose.
+
+    OpenEnv publishes no schema for a reset message. Its server introspects this
+    method and forwards every key the signature names, so a parameter added here
+    is a key any client may set -- and `world.instance` gaining a parameter does
+    not, by itself, put it on the wire. If this fails because you added one to
+    `reset`, decide whether a client should be able to send it and then update
+    this list; if it fails because you removed one, a client that sends it will
+    have the key dropped from now on.
+    """
+    parameters = inspect.signature(SeahavenEnv.reset).parameters
+    assert tuple(parameters) == RESET_PARAMETERS
+    # A `**kwargs` of any name sets OpenEnv's `has_kwargs`, which forwards every
+    # key the client sent, and the names above would not change.
+    assert all(
+        parameter.kind is not inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
+def test_a_startup_keyword_named_like_a_framework_parameter_stays_the_worlds(
+    tmp_path: Path,
+) -> None:
+    """`startup={"seed": ...}` is the world's `seed`, and the instance's own is untouched."""
+    world = build_world(tmp_path)
+    seen: list[Any] = []
+
+    @world.instance_startup
+    def remember(ctx: Ctx, *, seed: Any = None) -> None:
+        """Name the framework's own parameter, which a hook is now free to do."""
+        seen.append(seed)
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset(seed=7, startup={"seed": "not-an-int"})
+    instance = env.instance
+
+    assert seen == ["not-an-int"]
+    assert instance is not None
+    assert instance.caller_seed == 7
+    assert env.state.seed == 7
 
 
 def test_reset_keeps_the_episode_id_it_is_given_and_mints_one_otherwise(env: SeahavenEnv) -> None:
@@ -740,7 +795,7 @@ def test_an_unknown_state_format_refuses_the_reset_and_leaves_the_session_fresh(
 
 
 def test_the_state_format_never_reaches_a_startup_hook(tmp_path: Path) -> None:
-    """A reserved reset keyword, like `fixture`, `seed` and `now`."""
+    """A framework parameter, like `fixture`, `seed` and `now`: not the world's namespace."""
     world = build_world(tmp_path)
     seen: list[dict[str, Any]] = []
 
@@ -750,7 +805,7 @@ def test_the_state_format_never_reaches_a_startup_hook(tmp_path: Path) -> None:
         seen.append(kwargs)
 
     env = SeahavenEnv(world, include_control_tools=False)
-    env.reset(state_format="seahaven.state+last_step/1", tenant="globex")
+    env.reset(state_format="seahaven.state+last_step/1", startup={"tenant": "globex"})
     assert seen == [{"tenant": "globex"}]
     assert env.state.startup == {"tenant": "globex"}
 
@@ -848,9 +903,9 @@ DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
         "seed": "The seed `reset` was given, or null if it was given none.",
         "now": "The instance's clock as an ISO-8601 instant, or null before the first reset.",
         "startup": (
-            "The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as "
-            "JSON when the instance was created: a hook receives the caller's value and this "
-            "carries its JSON rendering. Empty when there were none, null before any reset."
+            "The world's own startup keywords -- reset's `startup` -- rendered as JSON when "
+            "the instance was created: a hook receives the caller's value and this carries its "
+            "JSON rendering. Empty when there were none, null before any reset."
         ),
         "call_count": (
             "How many calls have been dispatched to the instance. Not `step_count`, which also "

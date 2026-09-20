@@ -3,9 +3,9 @@
 `remember_client` is the extension's hook, registered by this world -- the
 framework has no idea it exists, and `functional_spec.md` §21 point 3 is exactly
 this: an extension exports a startup hook, the world registers it, and the
-`reset()` keyword arguments it names reach it.
+startup keywords it names reach it.
 
-    world.instance("empty", xmlrpc_client="acme-crm/2.4")
+    world.instance("empty", startup={"xmlrpc_client": "acme-crm/2.4"})
 """
 
 import seahaven_xmlrpc

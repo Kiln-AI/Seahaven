@@ -79,9 +79,6 @@ RESERVED_TOOL_NAMES = frozenset({"close", "reset", "state", "step"})
 # instance calls it only when it was made with `control_tools=True`.
 CONTROL_TOOL_NAMES = frozenset({"controller_run_sql"})
 
-# `reset`'s own arguments, which a startup hook therefore cannot take.
-RESET_ARGUMENTS = frozenset({"control_tools", "fixture", "now", "seed", "state_format"})
-
 FIXTURES_DIRNAME = "fixtures"
 SQL_SUFFIX = ".sql"
 
@@ -105,7 +102,7 @@ class RegisteredStartupHook:
 
     Callable, so `world.startup_hooks` is a sequence of hooks rather than a
     sequence of records about them; `accepts` and `takes_var_kwargs` are what
-    instance creation reads to give each hook the `reset` arguments it asked for
+    instance creation reads to give each hook the startup keywords it asked for
     and no others.
     """
 
@@ -494,7 +491,7 @@ class World:
         now: str | datetime | None = None,
         state_format: str | None = None,
         control_tools: bool = False,
-        **startup_kwargs: Any,
+        startup: Mapping[str, Any] | None = None,
     ) -> Instance:
         """Make a live instance: a private copy of a fixture, or a blank one.
 
@@ -504,9 +501,10 @@ class World:
         `control_tools=True` makes the framework's own tools -- the deprecated
         `controller_run_sql` -- callable on this instance; without it they are
         not callable at all, and their names answer `UnknownTool` like any name
-        the world does not have. Everything else keyword is passed to the startup
-        hooks that named it. The instance is a context manager and leaving the
-        block destroys it.
+        the world does not have. `startup` is the world's own namespace: every
+        keyword in it is passed to the startup hooks that named it, and a
+        keyword no hook names is refused. The instance is a context manager and
+        leaving the block destroys it.
 
         Never from inside a tool call: a handler that wants another world reaches
         it through `ctx.worlds`, and a world that made its own instance would be
@@ -523,7 +521,7 @@ class World:
             now=now,
             state_format=state_format,
             control_tools=control_tools,
-            startup_kwargs=startup_kwargs,
+            startup=startup,
         )
 
     def fixtures(self) -> list[Fixture]:
@@ -1125,7 +1123,13 @@ def _check_middleware_shape(obj: Middleware) -> None:
 
 
 def _as_startup_hook(obj: StartupHook) -> RegisteredStartupHook:
-    """Record what `reset` arguments a hook accepts, refusing a shape that cannot work."""
+    """Record what startup keywords a hook accepts, refusing a shape that cannot work.
+
+    Any keyword name is allowed, including `seed` and every other name the
+    framework's own parameter list holds: startup keywords arrive in their own
+    dict (`world.instance(..., startup={...})`), so a hook keyword and a
+    framework parameter cannot collide.
+    """
     try:
         parameters = list(inspect.signature(obj).parameters.values())
     except (TypeError, ValueError) as error:
@@ -1139,12 +1143,6 @@ def _as_startup_hook(obj: StartupHook) -> RegisteredStartupHook:
             f"an instance startup hook takes the context as its only positional parameter and "
             f"everything else by keyword: {obj!r}"
         )
-    for parameter in parameters[1:]:
-        if parameter.name in RESET_ARGUMENTS:
-            raise WorldBug(
-                f"an instance startup hook cannot take {parameter.name!r}: it is reset's own "
-                f"argument ({', '.join(sorted(RESET_ARGUMENTS))})"
-            )
     return RegisteredStartupHook(
         fn=obj,
         accepts=frozenset(p.name for p in parameters if p.kind is inspect.Parameter.KEYWORD_ONLY),

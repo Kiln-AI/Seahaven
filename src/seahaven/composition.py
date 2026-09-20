@@ -719,9 +719,9 @@ def _by_fn(tools: Mapping[str, Contributed]) -> dict[Callable[..., Any], tuple[C
 def _accepted_startup_kwargs(nodes: Mapping[NodeKey, Node]) -> frozenset[str] | None:
     """Every keyword some startup hook in the tree names, or `None` if one takes `**kwargs`.
 
-    `reset`'s broadcast rule as a set: a keyword beyond `fixture`, `seed` and `now`
+    `reset`'s broadcast rule as a set: a keyword a caller passes in `startup=`
     reaches every hook in the tree that names it, so the union is what an unknown
-    argument is checked against.
+    keyword is checked against.
     """
     accepted: set[str] = set()
     for node in nodes.values():

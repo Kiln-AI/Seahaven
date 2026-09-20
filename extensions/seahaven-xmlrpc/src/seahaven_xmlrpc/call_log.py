@@ -11,10 +11,10 @@ is what makes this example exercise two more of the seams `functional_spec.md`
   and frozen into every fixture. That is the cost the contract names: adding this
   fragment changes the world's schema hash, and every fixture of that world has
   to be regenerated.
-* **Instance startup and `reset()` keyword arguments** (§21 point 3).
-  `remember_client` is a hook the world registers; the `xmlrpc_client=` an eval
-  passes to `world.instance(...)` or to `reset` over OpenEnv reaches it there,
-  and the log records which client drove each call.
+* **Instance startup and startup keywords** (§21 point 3).
+  `remember_client` is a hook the world registers; the `xmlrpc_client` an eval
+  passes in `startup=` to `world.instance(...)` or to `reset` over OpenEnv reaches
+  it there, and the log records which client drove each call.
 
 The log is written inside the call's transaction, so a call that faults rolls its
 row back with everything else it did. That is the honest behaviour: the trail is
@@ -64,7 +64,8 @@ def remember_client(ctx: seahaven.Ctx, *, xmlrpc_client: str = UNKNOWN_CLIENT) -
     """Instance startup: record which client drives this instance.
 
     Registered by the world, `world.instance_startup(remember_client)`, and read
-    from `reset`: `world.instance("empty", xmlrpc_client="acme-crm/2.4")`. The
+    from a startup keyword:
+    `world.instance("empty", startup={"xmlrpc_client": "acme-crm/2.4"})`. The
     default is what an eval that does not care gets, so the column is never null
     and a world need not pass anything.
     """

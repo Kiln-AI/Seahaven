@@ -419,7 +419,7 @@ SCHEMA = json.loads((Path(__file__).parent / "state_v1.schema.json").read_text()
 # The one episode both clients drive: a fixture, a seed, a named episode, a
 # startup keyword and one write, so no envelope field below is left at its
 # default.
-EPISODE: dict[str, Any] = {"seed": 7, "episode_id": "ep-1", "tenant": "globex"}
+EPISODE: dict[str, Any] = {"seed": 7, "episode_id": "ep-1", "startup": {"tenant": "globex"}}
 WRITE = CallToolAction(tool_name="execute", arguments={"sql": insert("n1")})
 
 
@@ -578,10 +578,12 @@ def test_two_sessions_are_independent(world: World) -> None:
         assert first.state().episode_id != second.state().episode_id
 
 
-def test_an_unknown_reset_kwarg_is_an_error_frame_and_the_session_survives(world: World) -> None:
+def test_an_unknown_startup_keyword_is_an_error_frame_and_the_session_survives(
+    world: World,
+) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
-        with pytest.raises(RuntimeError, match=r"unknown reset argument\(s\)"):
-            env.reset(nonsense=1)
+        with pytest.raises(RuntimeError, match=r"unknown startup keyword\(s\)"):
+            env.reset(startup={"nonsense": 1})
         reset = env.reset(now=INSTANT_ISO)
         assert reset.observation.metadata["now"] == INSTANT_ISO
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
@@ -595,6 +597,64 @@ def test_a_second_reset_over_the_wire_starts_from_the_fixture_again(world: World
         assert len(ids(env.call("rows", sql="SELECT id FROM notes"))) == 2
         env.reset(fixture=fixture_id)
         assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n0"]
+
+
+# --- the startup namespace over the wire -----------------------------------
+
+
+def test_a_startup_keyword_reaches_its_hook_over_the_wire(tmp_path: Path) -> None:
+    """The keyword travels inside `startup`, and the hook reads it as it always did."""
+    world = build_world(tmp_path)
+
+    @world.instance_startup
+    def remember(ctx: Ctx, *, tenant: str = "acme") -> None:
+        ctx.state["tenant"] = tenant
+
+    @world.tool
+    def whose(ctx: Ctx) -> dict[str, str]:
+        """Answer what the hook was given, so the wire can be read from outside."""
+        return {"tenant": ctx.state["tenant"]}
+
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(startup={"tenant": "globex"})
+        assert env.call("whose").result == {"tenant": "globex"}
+        assert env.state().startup == {"tenant": "globex"}
+
+
+def test_a_startup_keyword_sent_flat_reaches_no_hook(tmp_path: Path) -> None:
+    """The reset message's top level is the framework's namespace, and only its own.
+
+    OpenEnv has no reset schema: its server forwards whatever
+    `SeahavenEnv.reset`'s signature accepts. Removing `**kwargs` from that
+    signature is what makes a flat key a key the server drops, rather than one
+    handed to a hook that happens to name it.
+    """
+    world = build_world(tmp_path)
+
+    @world.instance_startup
+    def remember(ctx: Ctx, *, tenant: str = "acme") -> None:
+        ctx.state["tenant"] = tenant
+
+    @world.tool
+    def whose(ctx: Ctx) -> dict[str, str]:
+        """Answer what the hook was given, so the wire can be read from outside."""
+        return {"tenant": ctx.state["tenant"]}
+
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(tenant="globex")
+        assert env.call("whose").result == {"tenant": "acme"}
+        assert env.state().startup == {}
+
+
+def test_a_startup_that_is_not_a_dict_is_an_error_frame_and_the_session_survives(
+    world: World,
+) -> None:
+    """`startup` is client-controlled, so its shape is refused in Seahaven's own words."""
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        with pytest.raises(RuntimeError, match="startup= takes a dict"):
+            env.reset(startup="oops")
+        assert env.reset(now=INSTANT_ISO).observation.metadata["now"] == INSTANT_ISO
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
 # --- the control tool ------------------------------------------------------
