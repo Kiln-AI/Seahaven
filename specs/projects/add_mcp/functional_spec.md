@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Functional Spec: Add MCP
@@ -368,127 +368,79 @@ client, and calls the world's tools from a chat with no other setup. Writes are 
 read in the same conversation sees them. Closing the client destroys the instance and its copy of
 the fixture. Nothing the client shows them names Seahaven.
 
-## 14. Assumptions to verify before the architecture is written
+## 14. Verified against `mcp` 2.2.0
 
-Research was skipped for this project, so these are stated from knowledge of the SDK and the
-protocol rather than from a source read today. Each one must be checked against the installed
-`mcp` package at the start of the architecture step. **A requirement in this spec stands whether or
-not the assumption holds; only the mechanism changes.**
+Research was skipped for this project, so §14 originally listed the SDK facts this spec was written
+against as assumptions. They were then checked by installing `mcp` 2.2.0 and reading the package.
+All six hold, two of them more strongly than assumed. `architecture.md` names the API this resolves
+to; what follows is the answer to each question the spec depended on.
 
-1. **The lower-level server API.** `mcp` 2.0 removed the bundled FastMCP and rebuilt the low-level
-   server; handlers are understood to be `(ctx, params) -> result`. The exact import path and
-   handler signature must be read from the installed package.
-2. **A hook at `initialize`.** §5.2 needs somewhere to create the instance during the handshake,
-   and §6 needs a session identity to key it on. If the SDK exposes neither, the architecture finds
-   another way to satisfy both; the instance is still created during `initialize` and still keyed by
-   session.
-3. **stdout diversion.** The v2 release notes say a stdio server keeps stray prints off the wire by
-   diverting stdout to stderr while serving. If it does not, or does not cover a subprocess or a C
-   extension writing to fd 1, §8 is satisfied at the file-descriptor level instead. Test 5 decides
-   this, not the release notes.
-4. **Synchronous handlers.** The v2 notes say sync tool functions run on worker threads rather than
-   blocking the event loop. `Instance.call` is synchronous and blocking, and if the SDK does not do
-   this, the architecture moves the call to a thread itself.
-5. **`structuredContent` without an `outputSchema`.** §5.4 returns one and publishes no output
-   schema. If the negotiated revision requires the schema, or a client rejects the pairing, the text
-   block is the whole result and `structuredContent` is dropped.
-6. **Protocol revision.** `mcp` 2.x speaks the 2026-07-28 revision and still serves 2025-era
-   clients. The version range in §9 assumes the SDK negotiates this; nothing in this spec pins a
-   revision itself.
+| Question | Answer |
+|---|---|
+| The lower-level server API | `mcp.server.lowlevel.Server(name, *, version, instructions, lifespan, on_list_tools=..., on_call_tool=...)`. Handlers are async, `(ctx, params) -> result`, passed as constructor arguments. |
+| A hook at `initialize` | `initialize` is reserved — the runner owns the handshake and registering a handler for it raises. `Server.middleware` observes and can **veto** it: a middleware that raises before `call_next(ctx)` fails the handshake. That is where the instance is created. |
+| A session identity to key on | `ServerRequestContext` carries `session`, `lifespan_context`, `protocol_version`, `method`, `params` and `request_id`. The session object is the map key §6 asks for. |
+| stdout | Stronger than assumed. `stdio_server()` claims the file descriptors: while serving, **fd 0 points at the null device and fd 1 at stderr**, so stray output from handlers *and from child processes* misses the wire, and both are restored on exit. §8 needs no work of its own. |
+| Synchronous handlers | Not free at this layer. The high-level `MCPServer` runs sync tool functions on worker threads; the lower-level `Server` takes async handlers, so `Instance.call` is moved to a thread by this project. |
+| `structuredContent` without an `outputSchema` | Safe. The SDK validates `structured_content` against an output schema only when the tool declares one; a tool with no `outputSchema` is never checked, and the failure case is the reverse — declaring a schema and sending no structured content. |
+
+Two spellings follow from the types rather than from this spec. `types.Tool` names its field
+`input_schema` and serialises it as `inputSchema`, so §5.3's rename is the model's, not ours; and
+`CallToolResult` carries `content`, `structured_content` and `is_error`, aliased to
+`structuredContent` and `isError`.
+
+A JSON-RPC error is raised as `MCPError(code, message, data)`, and `data` is where the framework's
+`{code, message, details}` triple goes — the same placement `seahaven.openenv` already uses when it
+refuses `/mcp`.
 
 ## 15. Dependency: control tools become opt-in in core
 
 **This change is expected to land separately, before or alongside this project.** It is not part of
 this project's phases. It is written down here because `seahaven mcp` depends on it, and because
-this is where the need for it was found; whoever picks it up owns the design below or replaces it.
-
-`seahaven mcp` must not let an agent call `controller_run_sql`. Today that would take a filter in
-the MCP server, because the framework registers the tool everywhere. The fix belongs in core
-instead, where it removes a special case from the OpenEnv layer as well as sparing this one.
-
-**If it has not landed when this project is implemented**, `seahaven mcp` refuses control tool
-names itself, exactly as `openenv/env.py` does today — `UnknownTool` before dispatch, in the same
-words as a name the world does not have — and the filter is deleted when the core change arrives.
-That interim is four lines and one test; it is not a reason to block, and it is not a reason to
-design the MCP server around the tool being present.
+this is where the need for it was found. The prompt that hands it to another agent is
+`control_tools_task.md`, beside this file.
 
 ### 15.1 What is true today
 
-`World.__init__` registers `control.TOOLS` on **every** world, before anything the world registers
-(`world.py`). `Instance.tools()` filters control tools out of the listing, but `Instance._target`
-falls back to the root's own registry for them, so `instance.call("controller_run_sql", sql=...)`
-works on any world in process. The only gate is at the wire: `openenv/env.py` raises `UnknownTool`
-for a control tool name unless the server was started with `include_control_tools`.
+`World.__init__` registers `control.TOOLS` on every world, and `Instance._target` falls back to the
+root's own registry for a control tool, so `instance.call("controller_run_sql", sql=...)` works on
+any instance of any world, in process, with nothing to turn it on. `Instance.tools()` filters
+control tools out of the listing, so they are hidden — but hidden is not off. The only real gate is
+at the wire, in `openenv/env.py`, which raises `UnknownTool` unless the server was started with
+`include_control_tools`.
 
 ### 15.2 What changes
 
-**`World.__init__` registers no control tools.** They are registered only when a world is explicitly
-told to have them, through one new public verb:
+The Python interface for running a world grows a keyword-only parameter, default false:
 
 ```py
-world.enable_control_tools()
+world.instance(fixture, *, control_tools: bool = False, ...)
 ```
 
-Idempotent, and a registration verb like `world.tool(...)`: it bumps the composition epoch, so a
-world already in a tree reseals on next use.
+An instance created without it cannot call a control tool by any path — by name, by function
+reference, or over a wire — and the refusal is `UnknownTool`, in the same words as a name the world
+does not have. Then the callers are fixed: `SeahavenEnv.reset` passes
+`control_tools=self.include_control_tools`, the filter in `openenv/env.py` is deleted, and the
+pytest plugin's `instance` fixture takes the default.
 
-- `seahaven.openenv.serve(world, include_control_tools=True)` calls it, which makes `seahaven
-  serve --include-control-tools` the only thing that turns control tools on in a served process.
-  The flag keeps its exact meaning and its spelling.
-- A world's own tests, and an in-process eval that still uses the deprecated tool, call it directly.
-- `seahaven mcp` never calls it.
+`seahaven serve --include-control-tools` keeps its exact meaning and its exact spelling, and
+`worlds/projecttracker/tests/test_openenv.py` — which asserts the wire's refusal message today —
+must keep passing unchanged. That test is the proof the wire behaviour did not move.
 
-**The filter in `openenv/env.py` goes away.** A world that was not told to have control tools has no
-`controller_run_sql` in its registry, so `Instance._target` raises `UnknownTool` on its own, with
-the same message the wire already produced. `worlds/projecttracker/tests/test_openenv.py` asserts
-that message today and must keep passing unchanged: that test is the proof the wire behaviour did
-not
-move.
-
-### 15.3 Why the opt-in is on the world and not on the instance
+### 15.3 The hazard the change has to close
 
 `SeahavenEnv.reset(**startup_kwargs)` passes every keyword straight through to `world.instance()`.
-A per-instance `control_tools=True` would therefore be settable by any OpenEnv client, over the
-wire, for itself — which is worse than today. The opt-in is on the world, set by the process that
-serves it, before any session exists, and nothing a client sends can reach it.
+The moment `control_tools` is a named parameter of `world.instance()`, a client that sends
+`control_tools: true` in a reset message binds to it and turns control tools on for itself, over
+the wire — which is worse than today. `reset` must name `control_tools` explicitly so it can never
+fall into `**startup_kwargs`, the way `state_format` is named today and for the same reason, and
+must pass the server's own value rather than the client's.
 
-A `World(..., control_tools=False)` constructor argument was considered and rejected for the same
-kind of reason: a world is constructed by its own package at import, long before `seahaven serve`
-parses a flag, so the CLI could never turn it on.
+### 15.4 What this project needs from it
 
-### 15.4 What does not change
+One line: an instance `seahaven mcp` created can never call a control tool.
 
-- Control tools are still never listed. `Instance.tools()` keeps filtering them, so enabling them
-  makes them callable and never visible — the meaning `--include-control-tools` has today.
-- `controller_run_sql` is still deprecated and still warns on every call.
-- A world that registers the name itself without `control=True` is still refused (`world.py`), and a
-  world that contributes a control tool name through composition is still refused
-  (`composition.py`).
-- The control tool still reads through the instance's own control handle, still takes the instance
-  lock, and still bypasses the gate.
-
-### 15.5 What this breaks, and what proves it
-
-`world.tools` no longer contains `controller_run_sql` by default, and
-`instance.call("controller_run_sql", ...)` raises `UnknownTool` unless the world was told to have
-it. Three suites assert the old default and are updated with the change:
-`tests/test_control.py` (enables control tools in its fixture),
-`worlds/projecttracker/tests/test_package.py` and `worlds/projecttracker/tests/test_errors.py`.
-
-New tests:
-
-1. A plain world has no `controller_run_sql` in `world.tools`, and calling it raises `UnknownTool`.
-2. `enable_control_tools()` makes the call work, twice in a row without error the second time.
-3. An enabled world still does not list the tool in `instance.tools()`.
-4. A `reset` carrying `control_tools=True` as a startup keyword does not enable anything: it reaches
-   the startup hooks as an unknown keyword and is refused there, exactly as any other name no hook
-   declares.
-5. `serve(..., include_control_tools=True)` enables it and the wire can call it; without the flag
-   the wire gets the unchanged `UnknownTool` message.
-
-### 15.6 Docs
-
-`reference/api.md` (the new verb, and `World` no longer registering control tools),
-`reference/cli.md` (what `--include-control-tools` now does), `serving_and_openenv.md`,
-`authoring.md`, `composition.md` and `extensions.md` each say today that the control tool is on
-every world. Every one of those sentences is corrected.
+**If the change has not landed when this project is implemented**, `seahaven mcp` refuses control
+tool names itself, exactly as `openenv/env.py` does today, and the filter is deleted when the core
+change arrives. That interim is four lines and one test. The tests in §12 are written against the
+behaviour, so none of them change when the filter goes.
