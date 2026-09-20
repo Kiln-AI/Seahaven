@@ -14,7 +14,7 @@ Four phases. Each is a reviewable unit that leaves the repository green.
       SDK yet. `scripts/check_licences.py` passes on the new tree, or the phase stops and says so
       (`architecture.md` §10).
 
-- [ ] **Phase 2: The server.** `seahaven/mcp/` — `serve()`, the session map, the `initialize`
+- [x] **Phase 2: The server.** `seahaven/mcp/` — `serve()`, the session map, the `initialize`
       middleware that creates the instance, the two handlers, the wire translation and the error
       taxonomy, shutdown on EOF and on signals, and the interim control tool refusal.
       `tests/test_mcp_server.py` drives it in process through the SDK's own client. CI gains the

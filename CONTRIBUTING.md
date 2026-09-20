@@ -33,13 +33,16 @@ uv run python scripts/check_licences.py serve
 
 ```sh
 uv sync --extra mcp
+uv run python -c "import mcp.server.context, seahaven.mcp"
+uv run ty check src/seahaven/mcp tests/test_mcp_server.py
 uv run pytest
 uv run python scripts/check_licences.py mcp
 uv sync --extra serve                      # back to the everyday one
 ```
 
 The type check is split between the two environments, because `ty` resolves imports against the one
-it runs in. The line above walks everything but the MCP paths, and CI's `mcp` job checks those.
+it runs in. Each block carries its half: the first walks everything but the MCP paths, and the
+second checks exactly those.
 
 ## Guidelines
 

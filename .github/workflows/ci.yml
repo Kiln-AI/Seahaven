@@ -90,6 +90,16 @@ jobs:
       - name: Install the project
         run: uv sync --locked --extra mcp
 
+      # Both modules, because they are two different claims. The suites skip on
+      # `mcp.server.context`, which only the 2.x SDK has, so that is the
+      # predicate the job has to assert; `seahaven.mcp` is the thing this
+      # project ships, and what it happens to import is an implementation
+      # detail rather than a promise. `tests/conftest.py` holds the guard, and
+      # `tests/test_ci_workflow.py` holds this line to the same module so the
+      # two cannot drift into a green run that tested none of this.
+      - name: The mcp extra imports
+        run: uv run python -c "import mcp.server.context, seahaven.mcp"
+
       # The other half of the type check: the paths the `check` job excludes,
       # named as arguments, because only a path argument narrows what `ty`
       # walks. They arrive in phases 2 and 3 and `ty` exits 2 on a path that is

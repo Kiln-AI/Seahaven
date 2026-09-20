@@ -99,6 +99,16 @@ extend-exclude = ["specs"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+# The MCP test modules import the SDK after `tests/conftest.py`'s `mcp_sdk()`,
+# which skips them where the `mcp` extra is not installed -- the environment
+# synced for `serve` has the wrong major, so the guard has to run before the
+# import rather than beside it. Ruff exempts a literal `pytest.importorskip`
+# from E402 and not a call that wraps one, and one guard in one place is worth
+# more than the exemption.
+[tool.ruff.lint.per-file-ignores]
+"tests/test_mcp_server.py" = ["E402"]
+"tests/test_mcp_process.py" = ["E402"]
+
 [tool.ty.src]
 include = ["src", "tests", "scripts", "worlds", "extensions", "bench"]
 

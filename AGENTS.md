@@ -83,6 +83,8 @@ uv run python scripts/check_licences.py serve
 
 ```sh
 uv sync --extra mcp
+uv run python -c "import mcp.server.context, seahaven.mcp"
+uv run ty check src/seahaven/mcp tests/test_mcp_server.py
 uv run pytest                              # the framework again, on the other extra
 uv run python scripts/check_licences.py mcp
 ```
@@ -93,10 +95,10 @@ fails rather than reading the wrong tree. Run it bare to audit what is installed
 was not read.
 
 `ty` resolves imports against the environment it runs in, so the type check is split as well: the
-line above walks the whole tree except the MCP paths, and CI's `mcp` job checks those paths in the
-other environment. Copy that line rather than running `ty check` bare. A new module that imports
-the MCP SDK goes on the `mcp` side of the split, in both places `.github/workflows/ci.yml` names
-them -- `tests/test_ci_workflow.py` fails when the two lists disagree.
+line in the first block walks the whole tree except the MCP paths, and the line in the second checks
+exactly those. Copy them rather than running `ty check` bare. A new module that imports the MCP SDK
+goes on the `mcp` side of the split, in both places `.github/workflows/ci.yml` names them --
+`tests/test_ci_workflow.py` fails when the two lists disagree.
 
 The three suites are separate because a world and an extension are separate packages with their own
 pytest rootdir. `ruff format` also formats Python blocks inside Markdown, and

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import MCP_SDK_MODULE
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # The two pages that tell a person which checks to run before committing. Both
@@ -48,6 +50,10 @@ _TY_PATHS = re.compile(r"ls -d (.+?) 2>/dev/null")
 # type-checked on that side of the split.
 _IMPORTS_THE_SDK = re.compile(r"^\s*(?:from|import)\s+mcp\b", re.MULTILINE)
 _IMPORTS_OPENENV = re.compile(r"^\s*(?:from|import)\s+(?:seahaven\.)?openenv\b", re.MULTILINE)
+
+# Each job's "the extra imports" step, which is one `python -c` naming the
+# modules that have to import there.
+_IMPORT_ASSERTION = re.compile(r'uv run python -c "import ([^"]+)"')
 
 pytestmark = pytest.mark.skipif(
     not WORKFLOW.is_file(), reason="the workflow file needs the checkout"
@@ -100,8 +106,8 @@ def test_what_one_job_drops_from_the_type_check_the_other_takes() -> None:
 def test_the_command_lists_tell_a_person_to_run_the_type_check_ci_runs() -> None:
     """A bare `ty check` is neither half of the split, and fails on the other's paths.
 
-    The `mcp` job's half is not asked for here: it names paths that do not exist
-    yet, and a command list is a list of commands a person can run today.
+    The `mcp` job's half is asserted by the test below, against the paths that
+    exist today.
     """
     workflow = WORKFLOW.read_text(encoding="utf-8")
     [command] = [
@@ -113,6 +119,26 @@ def test_the_command_lists_tell_a_person_to_run_the_type_check_ci_runs() -> None
     for page in COMMAND_LISTS:
         written = {line.strip() for line in page.read_text(encoding="utf-8").splitlines()}
         assert command in written, f"{page.name} does not carry `{command}`"
+
+
+def test_the_command_lists_carry_the_mcp_half_for_the_paths_that_exist() -> None:
+    """The other half of the split, held to the workflow the same way.
+
+    The `mcp` job runs its paths through `ls` because one of them arrives in a
+    later phase, and a command list is a list of commands a person can run
+    today -- so what the two pages carry is the paths that exist, and this test
+    is what notices when a new one arrives and the pages are not updated.
+    """
+    existing = [path for path in ty_split()["mcp takes"] if (REPO_ROOT / path).exists()]
+
+    assert existing, "the mcp job names no path that exists; this test is asking the wrong question"
+    for page in COMMAND_LISTS:
+        [written] = [
+            line.strip()
+            for line in page.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("uv run ty check src/")
+        ]
+        assert written.removeprefix("uv run ty check ").split() == existing, page.name
 
 
 def test_a_module_that_imports_the_mcp_sdk_is_on_the_mcp_side_of_the_split() -> None:
@@ -142,3 +168,28 @@ def test_a_module_that_imports_openenv_is_not_on_the_mcp_side_of_the_split() -> 
     assert importers, "no file imports openenv; this test is asking the wrong question"
     for path in importers:
         assert not on_the_mcp_side(path, mcp_paths), f"{path} imports openenv"
+
+
+def import_assertions() -> list[list[str]]:
+    """The modules each job's import assertion names, one list per job."""
+    found = [
+        [module.strip() for module in named.split(",")]
+        for named in _IMPORT_ASSERTION.findall(WORKFLOW.read_text(encoding="utf-8"))
+    ]
+    assert found, "no job asserts that its extra imports; this test is asking the wrong question"
+    return found
+
+
+def test_the_mcp_job_asserts_the_module_the_suites_skip_on() -> None:
+    """The job's claim and the guard's have to be the same claim.
+
+    `tests/conftest.py`'s `mcp_sdk()` skips on `mcp.server.context`, which only
+    the 2.x SDK has, while `seahaven.mcp` is this project's own package, whose
+    imports are free to change. A job that asserted the package alone would rest
+    on that detail instead of on the predicate, and could go green in an
+    environment where every MCP test skipped -- the reasoning
+    `tests/test_cli_serve.py` already records for `seahaven.openenv`.
+    """
+    [asserted] = [named for named in import_assertions() if "seahaven.mcp" in named]
+
+    assert MCP_SDK_MODULE in asserted
