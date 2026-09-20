@@ -26,7 +26,7 @@ Four phases. Each is a reviewable unit that leaves the repository green.
       `tests/test_cli_mcp.py` for the resolution, `tests/test_mcp_process.py` for the real entry
       point as a subprocess.
 
-- [ ] **Phase 4: The docs.** The `seahaven mcp` section in `serving_and_openenv.md`, the rewrite of
+- [x] **Phase 4: The docs.** The `seahaven mcp` section in `serving_and_openenv.md`, the rewrite of
       "Seahaven will not add MCP support until the standard supports stateful servers" and the note
       that this command is not the road for an eval, `reference/cli.md` for the subcommand and every
       flag and variable, and `README.md`. No new page, so `tests/test_docs.py`'s `PAGES` is

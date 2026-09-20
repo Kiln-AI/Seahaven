@@ -247,10 +247,11 @@ def _with_a_seed(reset_options: dict[str, Any]) -> Options:
 
     This is deliberately *not* the framework's default. Omitting `seed=` from
     `world.instance()` gives `ids.DEFAULT_CALLER_SEED`, a constant, so the same
-    fixture replays the same ids and the same clock on every launch. That is
-    right for a test and wrong here: a user relaunches their MCP client all day
-    and expects a world that moved on, not one that reset to the same ids
-    (`functional_spec.md` §4).
+    fixture replays the same ids on every launch. That is right for a test and
+    wrong here: a user relaunches their MCP client all day and expects a world
+    that moved on, not one that reset to the same ids (`functional_spec.md` §4).
+    The clock is not part of this either way: it is the fixture's own `now`, or
+    wall time for a blank instance, and no seed moves it.
 
     A `"seed"` key inside a `--reset-options` object counts as given, whatever
     its value, so a caller who deliberately passes `{"seed": null}` gets the

@@ -11,8 +11,11 @@ wire. Seahaven took that standard rather than inventing a protocol, which means 
 any OpenEnv client can drive a Seahaven world, and a harness written in TypeScript, Go or Rust needs
 a WebSocket and a JSON encoder rather than a Seahaven port.
 
-A world is driven either in process through `world.instance(...)`, or over the WebSocket endpoint
-`/ws`. There is no third way and no Seahaven-specific remote API to learn.
+An eval or an RL harness drives a world in process through `world.instance(...)`, or over the
+WebSocket endpoint `/ws`. A harness has no third transport and no Seahaven-specific remote API to
+learn. A person working against a world by hand has a third command,
+[`seahaven mcp`](#serving-one-world-to-an-mcp-client), which puts one world in front of one
+[MCP](https://modelcontextprotocol.io) client such as an editor or a chat client.
 
 | Section | What it covers |
 |---|---|
@@ -28,6 +31,7 @@ A world is driven either in process through `world.instance(...)`, or over the W
 | [Running it in production](#running-it-in-production) | Reaping, disconnects, and scaling out |
 | [Publishing to a hub](#publishing-to-a-hub) | `seahaven new --hub`, and what does not work yet |
 | [Evaluating with Kiln](#evaluating-with-kiln) | Where the scenario and the grader belong |
+| [Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) | `seahaven mcp`, and who it is for |
 | [Known problems in OpenEnv](#known-problems-in-openenv) | Routes Seahaven refuses, and why |
 
 ## Running the server
@@ -582,6 +586,149 @@ against that eval. Same world, same fixture, as many scenarios as the job needs.
 
 Seahaven is built by the Kiln AI team.
 
+## Serving one world to an MCP client
+
+`seahaven mcp` puts one world behind an MCP server on stdio, so an editor, a chat client or an agent
+framework that speaks MCP can call the world's tools. The process holds one instance for its whole
+life and drives the world in process. It publishes the world's tools and a server instruction string
+the world's author wrote, and nothing else. What a client sees is the product the world clones, and
+nothing on that connection is about Seahaven.
+
+The tool list is the world's own, each name and description byte for byte. The instruction string is
+written with `World(mcp_server_instructions=...)`, which
+[authoring.md](authoring.md#instructions-for-an-mcp-client) covers; a world that sets none gets its
+own name and description instead. Some clients prefix the server name onto every tool name, as
+`mcp__notes__add_note`, which is a reason to keep a world's tool names short.
+
+**This is not the road for an eval or an RL run.** One process serves one client and one episode,
+and there is no reset. A harness that needs thousands of rollouts uses `/ws` and `SeahavenClient`,
+where every session already has a private instance. `seahaven mcp` is for working against a world by
+hand: trying the tools an agent will be given, or giving one person's assistant a fake CRM to work
+in.
+
+### Install the mcp extra
+
+The server needs Seahaven's `mcp` extra, which is the official MCP Python SDK and nothing else.
+
+**The `mcp` extra and the `serve` extra cannot be installed together.** OpenEnv requires `fastmcp`
+3.x, every `fastmcp` 3.x requires version 1 of the MCP SDK, and `seahaven mcp` is written against
+version 2. An environment holds one extra or the other, and `uv` refuses a sync that asks for both.
+That costs neither audience anything, because an eval harness installs `serve` and an MCP client
+installs `mcp`. The conflict goes away when an OpenEnv release accepts `fastmcp` 4.x, which is the
+first to take version 2.
+
+The warning about [the `serve` extra](#install-the-serve-extra) applies here too. Seahaven is not
+published yet, so `pip install "seahaven[mcp]"` succeeds and installs a placeholder that holds none
+of this. Until publication, install from a checkout of the Seahaven repository, for example `uv pip
+install -e "/path/to/Seahaven[mcp]"`. Without the extra the command prints one line and exits 1:
+
+```text
+seahaven mcp needs the mcp extra: pip install "seahaven[mcp]"
+```
+
+### The command
+
+```sh
+seahaven mcp
+seahaven mcp --fixture small_startup --seed 7
+seahaven mcp --world notes.world:world --reset-options '{"fixture": "small_startup", "seed": 7}'
+```
+
+A client starts the command itself, from its configuration, and talks to it over the process's
+stdin and stdout. This is an `.mcp.json` that serves the `notes` world from its `small_startup`
+fixture:
+
+```json
+{
+  "mcpServers": {
+    "notes": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/notes", "seahaven", "mcp"],
+      "env": {"SEAHAVEN_FIXTURE": "small_startup", "SEAHAVEN_SEED": "7"}
+    }
+  }
+}
+```
+
+Every option has an environment variable except `--world`, because a client configuration passes
+`env` more comfortably than `args`. A flag beats the matching variable, silently. `--world` has no
+variable: it names the code to import, which belongs beside the command where a reader of the file
+can see it. Left out, the world is found by the convention every other command uses, from the
+directory the process starts in.
+
+`--fixture`, `--seed` and `--now` are convenience spellings of three of the keyword arguments
+`world.instance()` takes. `--reset-options` is a JSON object passed to `world.instance()` whole,
+which is how a startup hook's own keywords are reached. The two may not be combined: a command that
+gives both is refused rather than merged, because a user who has to work out which fixture wins has
+already lost. [reference/cli.md](reference/cli.md#seahaven-mcp) has every option, every variable and
+every refusal, and `seahaven mcp -h` prints them.
+
+### The seed is random unless you give one
+
+`world.instance()` with no `seed=` uses a constant, so the same fixture replays the same ids on
+every run. `seahaven mcp` does the opposite. **No seed means a random seed**, which the command
+writes to stderr as it starts:
+
+```text
+no seed was given, so this run uses --seed 1481765302
+```
+
+A user relaunches a client all day and expects a world that moved on, not one that went back to the
+same ids. Pass that number back with `--seed` to get the same run again. The client is never told
+the seed, and neither is the model.
+
+The clock is not part of this. A fixture carries its own, and a blank instance starts at wall time
+unless `--now` says otherwise, whatever the seed is.
+
+### One instance, and no reset
+
+The instance is created while the client connects, and not when the process starts. A fixture that
+does not exist, a reset option no startup hook names, or a hook that raises then reaches the client
+as an error saying what is wrong, rather than as a pipe that closed. A process that could not make
+its instance answers that error and exits 1.
+
+After that the connection keeps the one instance it has. There is no reset tool and no second
+episode, so restarting the server in your client is how you get a fresh world. The instance is
+destroyed when the client disconnects, and on `SIGINT` and `SIGTERM`; destruction takes the
+instance's working directory and its copy of the fixture with it.
+
+### What the client is never given
+
+No resources, no prompts, no control tool, and no state document. `Instance.state()`,
+`Instance.call_log()` and `Instance.change_log()` are not reachable over MCP at all.
+
+The state document is how an episode is graded. A client that exposes resources to the model would
+hand the agent its own grade, and a client that does not would still put a Seahaven-shaped object in
+front of a user who came for the emulated product. An eval reads the document over `/ws`, where the
+reader is the eval and not the agent.
+
+### When something goes wrong
+
+- **A wrong command line** is one line on stderr and exit 1, before anything is served:
+  `--reset-options` that is not a JSON object, a `--seed` that is not an integer, a `--world` that
+  is not `module:attr`, and a convenience flag given together with `--reset-options`.
+- **A world that could not be imported, or an instance that could not be made**, is answered as a
+  JSON-RPC error carrying what actually went wrong, and the process then exits 1.
+- **A tool failure** is a result with `isError` set, carrying the world's own `{code, message,
+  details}`, which the model reads and acts on.
+- **A framework error inside a call**, such as a `WorldBug`, is a JSON-RPC error reading `internal
+  error (<id>)`. Any other unhandled exception is an `isError` result carrying the fixed
+  `{"code": "internal", "message": "internal error", "details": {"id": "<id>"}}`. Either way the
+  real error and its traceback go to stderr under that id.
+
+A failed start is the one place a message is passed through unscrubbed. The person reading it wrote
+the configuration that launched the process, and nobody is being evaluated against a server that
+never started, so the client is told what actually went wrong. A misspelled fixture name arrives as
+the framework's own sentence, on one line:
+
+```text
+world 'notes' has no fixture 'small_startupp' in /path/to/notes/fixtures; freeze one, or name the directory with World(fixtures_dir=...)
+```
+
+Every log line, warning and traceback goes to stderr, as does anything a world prints. stdout
+belongs to the protocol: one stray `print` on the wire is a parse error in the client, a long way
+from its cause.
+
 ## Known problems in OpenEnv
 
 These are real and reproduced, and every one of them is OpenEnv's rather than Seahaven's. None of
@@ -628,14 +775,15 @@ has it. Drive episodes over `/ws`.
 
 ### `POST /mcp` and `ws /mcp` are refused with a JSON-RPC error
 
-**There is no MCP server here.** An OpenEnv app publishes a `/mcp` endpoint, but it is not the MCP
-protocol. It dispatches exactly four methods — `openenv/session/create`, `openenv/session/close`,
-`tools/list` and `tools/call` — and has no `initialize`, no capability negotiation, no
-notifications, no SSE, no `Mcp-Session-Id`, no resources and no prompts. An off-the-shelf MCP client
-(Claude Desktop, Cursor, the `mcp` and `fastmcp` SDKs) opens with `initialize`, gets `-32601 Method
-not found: initialize`, and never gets further. Upstream says this is deliberate and temporary: its
-RFC 003 leans on MCP's custom-transports clause, lists no SSE streaming, no server-initiated
-messages and no session management as known gaps, and plans standard Streamable HTTP later.
+**There is no MCP server in the OpenEnv app.** An OpenEnv app publishes a `/mcp` endpoint, but it is
+not the MCP protocol. It dispatches exactly four methods — `openenv/session/create`,
+`openenv/session/close`, `tools/list` and `tools/call` — and has no `initialize`, no capability
+negotiation, no notifications, no SSE, no `Mcp-Session-Id`, no resources and no prompts. An
+off-the-shelf MCP client (Claude Desktop, Cursor, the `mcp` and `fastmcp` SDKs) opens with
+`initialize`, gets `-32601 Method not found: initialize`, and never gets further. Upstream says this
+is deliberate and temporary: its RFC 003 leans on MCP's custom-transports clause, lists no SSE
+streaming, no server-initiated messages and no session management as known gaps, and plans standard
+Streamable HTTP later.
 
 Underneath that, every door on it is dead for one reason: the dialect has no `reset`, and a Seahaven
 tool call needs an instance. Left alone, `tools/list` would succeed and advertise every tool the
@@ -654,16 +802,24 @@ and then closes normally, because every method is refused, so a second frame cou
 same answer. `/mcp` stays in the published OpenAPI schema for the same reason the three paths above
 do.
 
-**Seahaven will not add MCP support until the standard supports stateful servers.** Seahaven exists
-to build stateful MCP-shaped servers, where the session is what matters: an instance is a session,
-and two sessions must not see each other's writes. Support would have to come without mutating the
-tool interface and without passing a non-standard session id alongside every call.
+**Seahaven's own MCP server is a separate command.** `seahaven mcp` speaks the real protocol over
+stdio: one client and one instance, for the life of the process.
+[Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) is the section on it. A
+user who wants a world in an editor or a chat client runs that command, and never comes through this
+endpoint.
 
-**`/ws` is the agent-facing transport, which is a deliberate divergence from OpenEnv's advice.**
-OpenEnv's own lifecycle guide says `/ws` "is not an agent-facing interface … must not be given
-directly to agents" and points agents at `/mcp` instead. Seahaven inverts that on purpose: a
-Seahaven episode needs a `reset`, the MCP dialect has no verb for one, and a transport an agent
-cannot start an episode on is not an agent-facing interface either. This is not the end of MCP
+**That command is not the road for an eval or an RL harness**, and neither is this endpoint. A
+harness needs many private instances behind one address, which is what `/ws` already is. An MCP
+endpoint that could replace it would have to hold an instance per session, without mutating the tool
+interface and without passing a non-standard session id alongside every call. The dialect behind
+`/mcp` has no session lifecycle to build that on, so `POST /mcp` and `ws /mcp` stay refused while
+that dialect is what `/mcp` speaks.
+
+**`/ws` is the agent-facing transport of the OpenEnv app, which is a deliberate divergence from
+OpenEnv's advice.** OpenEnv's own lifecycle guide says `/ws` "is not an agent-facing interface …
+must not be given directly to agents" and points agents at `/mcp` instead. Seahaven inverts that on
+purpose: a Seahaven episode needs a `reset`, the MCP dialect has no verb for one, and a transport an
+agent cannot start an episode on is not an agent-facing interface either. This is not the end of MCP
 frames — a `{"type": "mcp"}` message on a `/ws` connection reaches the same upstream handler with
 the *session's* environment, and works correctly once the session has been reset. Anything built on
 `openenv/session/create` would be thrown away the day upstream ships real Streamable HTTP; a world

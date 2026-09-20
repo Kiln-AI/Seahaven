@@ -35,6 +35,9 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   or Shopify API. Compose, reuse and share worlds.
 - **[OpenEnv](src/seahaven/docs/serving_and_openenv.md).** `seahaven serve` is an OpenEnv
   environment. Drive it with any OpenEnv client, in any language, or publish it to Hugging Face.
+- **[MCP](src/seahaven/docs/serving_and_openenv.md#serving-one-world-to-an-mcp-client).** `seahaven
+  mcp` serves one world to one MCP client over stdio, so an editor or a chat client can work against
+  the world by hand.
 
 The [docs index](src/seahaven/docs/index.md) has the full set, and `seahaven docs` prints the
 copy that ships with your install.
@@ -148,6 +151,22 @@ language, like [Kiln](https://kiln.tech).
 
 See [serving and openenv docs](src/seahaven/docs/serving_and_openenv.md) for more details: the client, the
 wire protocol, what a session is, and why a Seahaven observation carries no reward.
+
+## Use it from an MCP client
+
+`seahaven mcp` puts one world behind an MCP server on stdio: one client, one instance, for the life
+of the process. Point an editor or a chat client at it and the world's tools are there to call by
+hand, under the world's own instructions. It publishes the world's tools and nothing else, so what
+the client sees is the product the world clones.
+
+```sh
+uv run seahaven mcp --fixture big_co
+```
+
+This is for working against a world by hand, not for running an eval: a harness that needs thousands
+of private instances uses `seahaven serve`. The command needs the `mcp` extra, which cannot be
+installed beside `serve`. See the
+[serving docs](src/seahaven/docs/serving_and_openenv.md#serving-one-world-to-an-mcp-client).
 
 ## Agentic World Creation
 
