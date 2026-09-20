@@ -428,13 +428,9 @@ CONSOLE_PATH = "/console"
 CONSOLE_FILE = Path(__file__).parent / "console" / "index.html"
 
 CONSOLE_MISSING = """<!doctype html>
-<title>No web console in this install</title>
+<title>No web console in this build</title>
 <body style="font: 15px system-ui; max-width: 40rem; margin: 4rem auto">
-<h1>No web console in this install</h1>
-<p>Seahaven serves a built file that is not in this install. Build it from a
-checkout of the Seahaven repository:</p>
-<pre>cd ui &amp;&amp; npm install &amp;&amp; npm run build
-cp dist/index.html ../src/seahaven/openenv/console/index.html</pre>
+<h1>No web console in this build</h1>
 <p>Everything else on this server is unaffected: drive the world over
 <code>/ws</code>.</p>
 </body>"""
