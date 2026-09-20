@@ -600,54 +600,30 @@ Seahaven is built by the Kiln AI team.
 ## Serving one world to an MCP client
 
 `seahaven mcp` puts one world behind an MCP server on stdio, so an editor, a chat client or an agent
-framework that speaks MCP can call the world's tools. The process holds one instance for its whole
-life and drives the world in process. It publishes the world's tools and a server instruction string
-the world's author wrote, and nothing else. What a client sees is the product the world clones, and
-nothing on that connection is about Seahaven.
+framework that speaks MCP can call the world's tools. One process serves one client and holds one
+instance. It publishes the world's own tools and nothing else: no resources, no prompts, no state
+document and no control tool.
 
-The tool list is the world's own, each name and description byte for byte. The instruction string is
-written with `World(mcp_server_instructions=...)`, which
-[authoring.md](authoring.md#instructions-for-an-mcp-client) covers; a world that sets none gets its
-own name and description instead. Some clients prefix the server name onto every tool name, as
-`mcp__notes__add_note`, which is a reason to keep a world's tool names short.
+> [!WARNING]
+> The instance is ephemeral. It is made when the client connects and destroyed when the client
+> disconnects or the process stops, and every row the tools wrote goes with it. Use this command for
+> short-term experimentation, not to keep data.
 
-**This is not the road for an eval or an RL run.** One process serves one client and one episode,
-and there is no reset. A harness that needs thousands of rollouts uses `/ws` and `SeahavenClient`,
-where every session already has a private instance. `seahaven mcp` is for working against a world by
-hand: trying the tools an agent will be given, or giving one person's assistant a fake CRM to work
-in.
-
-### Install the mcp extra
-
-The server needs Seahaven's `mcp` extra, which is the official MCP Python SDK and nothing else.
-
-**The `mcp` extra and the `serve` extra cannot be installed together.** OpenEnv requires `fastmcp`
-3.x, every `fastmcp` 3.x requires version 1 of the MCP SDK, and `seahaven mcp` is written against
-version 2. An environment holds one extra or the other, and `uv` refuses a sync that asks for both.
-That costs neither audience anything, because an eval harness installs `serve` and an MCP client
-installs `mcp`. The conflict goes away when an OpenEnv release accepts `fastmcp` 4.x, which is the
-first to take version 2.
-
-The warning about [the `serve` extra](#install-the-serve-extra) applies here too. Seahaven is not
-published yet, so `pip install "seahaven[mcp]"` succeeds and installs a placeholder that holds none
-of this. Until publication, install from a checkout of the Seahaven repository, for example `uv pip
-install -e "/path/to/Seahaven[mcp]"`. Without the extra the command prints one line and exits 1:
-
-```text
-seahaven mcp needs the mcp extra: pip install "seahaven[mcp]"
-```
-
-### The command
+The command needs Seahaven's `mcp` extra, which is the official MCP Python SDK. **The `mcp` extra
+and the `serve` extra cannot be installed together**: OpenEnv requires `fastmcp` 3.x, every
+`fastmcp` 3.x requires version 1 of that SDK, and `seahaven mcp` is written against version 2. An
+eval harness installs `serve` and an MCP client installs `mcp`, so neither audience pays for the
+conflict. The warning about [the `serve` extra](#install-the-serve-extra) applies here too: until
+Seahaven is published, install it from a checkout of the Seahaven repository.
 
 ```sh
-seahaven mcp
-seahaven mcp --fixture small_startup --seed 7
-seahaven mcp --world notes.world:world --reset-options '{"fixture": "small_startup", "seed": 7}'
+uv run seahaven mcp
+uv run seahaven mcp --fixture small_startup --seed 7
 ```
 
-A client starts the command itself, from its configuration, and talks to it over the process's
-stdin and stdout. This is an `.mcp.json` that serves the `notes` world from its `small_startup`
-fixture:
+A client starts the command itself, from its configuration, and talks to the process over the
+process's stdin and stdout. This is an `.mcp.json` that serves the `notes` world from its
+`small_startup` fixture:
 
 ```json
 {
@@ -661,102 +637,12 @@ fixture:
 }
 ```
 
-Every option has an environment variable except `--world`, because a client configuration passes
-`env` more comfortably than `args`. A flag beats the matching variable, silently. `--world` has no
-variable: it names the code to import, which belongs beside the command where a reader of the file
-can see it. Left out, the world is found by the convention every other command uses, from the
-directory the process starts in.
+**This is not the road for an eval or an RL run.** There is no reset and no second episode. A
+harness that needs thousands of private instances uses `/ws` and `SeahavenClient`, where every
+session already has one.
 
-`--fixture`, `--seed` and `--now` are convenience spellings of three of the keyword arguments
-`world.instance()` takes. `--reset-options` is a JSON object of those keyword arguments, passed
-whole, and a startup hook's own keywords are reached inside `"startup"`, the same namespace
-[a reset message uses](#sessions-and-instances):
-
-```sh
-seahaven mcp --reset-options '{"fixture": "small_startup", "startup": {"user_id": "u_12"}}'
-```
-
-The convenience flags and `--reset-options` may not be combined: a command that gives both is
-refused rather than merged, because a user who has to work out which fixture wins has already lost.
-A key `world.instance()` does not take is refused as well, on the command line, so a startup keyword
-written at the top level says so before anything is served.
-[reference/cli.md](reference/cli.md#seahaven-mcp) has every option, every variable and every
-refusal, and `seahaven mcp -h` prints them.
-
-### The seed is random unless you give one
-
-`world.instance()` with no `seed=` uses a constant, so the same fixture replays the same ids on
-every run. `seahaven mcp` does the opposite. **No seed means a random seed**, which the command
-writes to stderr as it starts:
-
-```text
-no seed was given, so this run uses --seed 1481765302
-```
-
-A user relaunches a client all day and expects a world that moved on, not one that went back to the
-same ids. Pass that number back with `--seed` to get the same run again. The client is never told
-the seed, and neither is the model.
-
-The clock is not part of this. A fixture carries its own, and a blank instance starts at wall time
-unless `--now` says otherwise, whatever the seed is.
-
-### One instance, and no reset
-
-The instance is created while the client connects, and not when the process starts. A fixture that
-does not exist, a startup keyword no startup hook names, or a hook that raises then reaches the
-client as an error saying what is wrong, rather than as a pipe that closed. A process that could
-not make its instance answers that error and exits 1.
-
-After that the connection keeps the one instance it has. There is no reset tool and no second
-episode, so restarting the server in your client is how you get a fresh world. The instance is
-destroyed when the client disconnects, and on `SIGINT` and `SIGTERM`; destruction takes the
-instance's working directory and its copy of the fixture with it.
-
-### What the client is never given
-
-No resources, no prompts, no control tool, and no state document. `Instance.state()`,
-`Instance.call_log()` and `Instance.change_log()` are not reachable over MCP at all.
-
-The control tool is withheld by the instance and not by a filter of the server's.
-`world.instance()` takes `control_tools=True` to make it callable, and `seahaven mcp` never passes
-that keyword: `"control_tools"` is the one keyword argument `--reset-options` refuses rather than
-passes on. The control tool's name is therefore an unknown tool on the instance, and a `tools/call`
-naming it is answered with the words any name the world does not have earns. There is no
-`--include-control-tools` here; `serve` has that flag because a harness drives the server it
-started, and an MCP client is the thing being kept away from arbitrary SQL.
-
-The state document is how an episode is graded. A client that exposes resources to the model would
-hand the agent its own grade, and a client that does not would still put a Seahaven-shaped object in
-front of a user who came for the emulated product. An eval reads the document over `/ws`, where the
-reader is the eval and not the agent.
-
-### When something goes wrong
-
-- **A wrong command line** is one line on stderr and exit 1, before anything is served:
-  `--reset-options` that is not a JSON object, one that names a key `world.instance()` does not
-  take, a `--seed` that is not an integer, a `--world` that is not `module:attr`, and a convenience
-  flag given together with `--reset-options`.
-- **A world that could not be imported, or an instance that could not be made**, is answered as a
-  JSON-RPC error carrying what actually went wrong, and the process then exits 1.
-- **A tool failure** is a result with `isError` set, carrying the world's own `{code, message,
-  details}`, which the model reads and acts on.
-- **A framework error inside a call**, such as a `WorldBug`, is a JSON-RPC error reading `internal
-  error (<id>)`. Any other unhandled exception is an `isError` result carrying the fixed
-  `{"code": "internal", "message": "internal error", "details": {"id": "<id>"}}`. Either way the
-  real error and its traceback go to stderr under that id.
-
-A failed start is the one place a message is passed through unscrubbed. The person reading it wrote
-the configuration that launched the process, and nobody is being evaluated against a server that
-never started, so the client is told what actually went wrong. A misspelled fixture name arrives as
-the framework's own sentence, on one line:
-
-```text
-world 'notes' has no fixture 'small_startupp' in /path/to/notes/fixtures; freeze one, or name the directory with World(fixtures_dir=...)
-```
-
-Every log line, warning and traceback goes to stderr, as does anything a world prints. stdout
-belongs to the protocol: one stray `print` on the wire is a parse error in the client, a long way
-from its cause.
+[reference/cli.md](reference/cli.md#seahaven-mcp) has every option and every environment variable,
+and `uv run seahaven mcp -h` prints them.
 
 ## Known problems in OpenEnv
 
@@ -804,52 +690,19 @@ has it. Drive episodes over `/ws`.
 
 ### `POST /mcp` and `ws /mcp` are refused with a JSON-RPC error
 
-**There is no MCP server in the OpenEnv app.** An OpenEnv app publishes a `/mcp` endpoint, but it is
-not the MCP protocol. It dispatches exactly four methods — `openenv/session/create`,
-`openenv/session/close`, `tools/list` and `tools/call` — and has no `initialize`, no capability
-negotiation, no notifications, no SSE, no `Mcp-Session-Id`, no resources and no prompts. An
-off-the-shelf MCP client (Claude Desktop, Cursor, the `mcp` and `fastmcp` SDKs) opens with
-`initialize`, gets `-32601 Method not found: initialize`, and never gets further. Upstream says this
-is deliberate and temporary: its RFC 003 leans on MCP's custom-transports clause, lists no SSE
-streaming, no server-initiated messages and no session management as known gaps, and plans standard
-Streamable HTTP later.
+**OpenEnv's `/mcp` endpoint is not the MCP protocol.** It dispatches four methods of its own --
+`openenv/session/create`, `openenv/session/close`, `tools/list` and `tools/call` -- and answers
+"Method not found" to the `initialize` an MCP client opens with, so no off-the-shelf MCP client can
+speak it. The RFC behind the endpoint is open and still moving. The dialect also has no verb that
+starts an episode, and a Seahaven tool call needs an instance, so every `tools/call` on it could
+only answer `reset first`. Seahaven therefore refuses all four methods, on both transports, rather
+than advertise a tool list whose every entry fails when called.
 
-Underneath that, every door on it is dead for one reason: the dialect has no `reset`, and a Seahaven
-tool call needs an instance. Left alone, `tools/list` would succeed and advertise every tool the
-world has, and then every `tools/call` behind it would answer `reset first` — with or without an
-`openenv/session/create` session id, and over the WebSocket exactly as over `POST`. That is a
-well-formed answer about nothing, which is what the three HTTP routes above are refused for. So all
-four methods are refused, on both transports, in one statement.
+The refusal is JSON-RPC error `-32601` inside an HTTP `200`, because `openenv push` probes this
+route and passes only on a `200` whose body is JSON-RPC. `/mcp` stays in the published OpenAPI
+schema for the same reason the three paths above do.
 
-**The refusal is an HTTP `200`, not the `501` above**, because `openenv push` probes this exact
-route: `mcp_endpoint` in `openenv/cli/_validation.py` POSTs `{}` to `/mcp` and passes only on a
-`200` whose JSON body has `"jsonrpc": "2.0"`. A `501` would fail a push that has nothing wrong with
-it. The refusal therefore travels in the JSON-RPC envelope, where a JSON-RPC caller looks for it
-anyway: error code `-32601`, whose definition is "method does not exist / *is not available*", with
-the framework's `{"code", "message", "details"}` triple in `data`. `ws /mcp` answers the same frame
-and then closes normally, because every method is refused, so a second frame could only earn the
-same answer. `/mcp` stays in the published OpenAPI schema for the same reason the three paths above
-do.
-
-**Seahaven's own MCP server is a separate command.** `seahaven mcp` speaks the real protocol over
-stdio: one client and one instance, for the life of the process.
-[Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) is the section on it. A
-user who wants a world in an editor or a chat client runs that command, and never comes through this
-endpoint.
-
-**That command is not the road for an eval or an RL harness**, and neither is this endpoint. A
-harness needs many private instances behind one address, which is what `/ws` already is. An MCP
-endpoint that could replace it would have to hold an instance per session, without mutating the tool
-interface and without passing a non-standard session id alongside every call. The dialect behind
-`/mcp` has no session lifecycle to build that on, so `POST /mcp` and `ws /mcp` stay refused while
-that dialect is what `/mcp` speaks.
-
-**`/ws` is the agent-facing transport of the OpenEnv app, which is a deliberate divergence from
-OpenEnv's advice.** OpenEnv's own lifecycle guide says `/ws` "is not an agent-facing interface …
-must not be given directly to agents" and points agents at `/mcp` instead. Seahaven inverts that on
-purpose: a Seahaven episode needs a `reset`, the MCP dialect has no verb for one, and a transport an
-agent cannot start an episode on is not an agent-facing interface either. This is not the end of MCP
-frames — a `{"type": "mcp"}` message on a `/ws` connection reaches the same upstream handler with
-the *session's* environment, and works correctly once the session has been reset. Anything built on
-`openenv/session/create` would be thrown away the day upstream ships real Streamable HTTP; a world
-reached over `/ws` would not.
+**Use `seahaven mcp` to reach a world from an MCP client.** That command speaks the real protocol
+over stdio, and [Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) is the
+section on it. An eval or an RL harness uses `/ws`, which gives every session its own instance and
+carries MCP frames as `{"type": "mcp"}` messages once the session has been reset.

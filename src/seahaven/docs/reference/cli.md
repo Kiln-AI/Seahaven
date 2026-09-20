@@ -200,16 +200,24 @@ of the process. It needs the `mcp` extra; without it the command says so and exi
 | `--world module:attr` | the convention | which world to serve |
 
 ```sh
-seahaven mcp
-seahaven mcp --fixture small_startup --seed 7
-seahaven mcp --reset-options '{"fixture": "agency", "seed": 7, "startup": {"reviewer": "ada"}}'
+uv run seahaven mcp
+uv run seahaven mcp --fixture small_startup --seed 7
+uv run seahaven mcp --reset-options '{"fixture": "agency", "startup": {"reviewer": "ada"}}'
 ```
 
+`--reset-options` is the whole of what `world.instance()` is called with, and the only way to reach
+a world's own startup keywords, which go inside `"startup"`. `--fixture`, `--seed` and `--now` are
+convenience spellings of three of its keys. Giving `--reset-options` together with one of those
+three flags is refused rather than merged, and so is a key `world.instance()` does not take. An
+instance this command makes never has control tools, and `--reset-options` refuses the
+`"control_tools"` key that would ask for them.
+
+**No `--seed` means a random seed**, not the constant `world.instance()` falls back to. The command
+picks an integer, uses it, and writes it to stderr, so the same run can be asked for again.
+
 Every option except `--world` also answers to an environment variable, because an MCP client
-configuration passes `env` more comfortably than `args`. A flag beats the matching variable,
-silently: the flag is the more specific of the two, and a warning about a variable somebody set in a
-client configuration months ago would be noise on every launch. `--world` has no variable, because
-it names the code to import, which belongs beside the command in the configuration file.
+configuration passes `env` more comfortably than `args`. A flag beats the matching variable, and a
+variable set to the empty string counts as unset.
 
 | Variable | The same as |
 |---|---|
@@ -217,68 +225,6 @@ it names the code to import, which belongs beside the command in the configurati
 | `SEAHAVEN_SEED` | `--seed` |
 | `SEAHAVEN_NOW` | `--now` |
 | `SEAHAVEN_RESET_OPTIONS` | `--reset-options` |
-
-A variable set to the empty string counts as unset. A client configuration is a JSON file people
-copy and edit, and an `env` entry left as `""` there means "not this one".
-
-**`--reset-options` is the general door**, and the only one that reaches a world's own startup
-keywords: it spells the keyword arguments `world.instance()` is called with, as JSON. `--fixture`,
-`--seed` and `--now` are convenience spellings of three of those keyword arguments, because JSON
-inside an `.mcp.json` `args` array is painful to quote. Giving both is refused rather than merged,
-and the refusal names the sources actually given, in the spelling they were given in. The message is
-one line:
-
-```
---fixture cannot be combined with --reset-options; put "fixture" inside the --reset-options JSON instead: --reset-options '{"fixture": "small_startup", "seed": 7}'
-```
-
-**A world's own startup keywords go inside `"startup"`**, which is the namespace `world.instance()`
-gives them ([../serving_and_openenv.md](../serving_and_openenv.md#sessions-and-instances) covers
-that namespace):
-
-```sh
-seahaven mcp --reset-options '{"fixture": "small_startup", "startup": {"user_id": "u_12"}}'
-```
-
-The document takes five keys and no others: `"fixture"`, `"seed"`, `"now"`, `"state_format"` and
-`"startup"`. A key `world.instance()` does not take is refused on the command line, before anything
-is served, rather than reaching the client as a `TypeError` once it has connected:
-
-```
---reset-options does not take "user_id"; --reset-options takes "fixture", "now", "seed", "startup" and "state_format", and a world's own startup keywords go inside "startup": --reset-options '{"fixture": "small_startup", "startup": {"user_id": "u_12"}}'
-```
-
-There is no `--state-format`. The state document is not published over MCP, so the format it would
-be rendered in has no reader; a world that wants a different one for some other reason passes
-`state_format` through `--reset-options`. There is no `--include-control-tools` either: `serve` has
-that flag because a harness drives the server it started, and nothing reaching an MCP client may run
-SQL against the world. `world.instance()` takes a `control_tools` keyword, and `--reset-options` is
-the one key of its own that it refuses rather than passes:
-
-```
---reset-options does not take "control_tools": seahaven mcp publishes the world's own tools and nothing else, and nothing reaching an MCP client may run SQL against the world
-```
-
-An instance this command makes therefore has no control tools, and a `tools/call` naming a control
-tool is answered as an unknown tool, in the words any name the world does not have earns.
-
-**No `--seed` means a random seed**, not the constant `world.instance()` falls back to. The command
-picks an integer, uses it, and writes it to stderr, so a run can be asked for again:
-
-```
-no seed was given, so this run uses --seed 1481765302
-```
-
-These are refused before anything is served, as one line on stderr and exit 1: a `--reset-options`
-document that is not valid JSON, one that is valid JSON but not an object, one that names a key
-`world.instance()` does not take or the `"control_tools"` it withholds, a `--seed` that is not an
-integer, a `--world` that is not `module:attr`, and the mixing above.
-
-Everything that needs the world is checked once the client has connected, and reaches it as a
-JSON-RPC error: an import that fails, a fixture that does not exist, a startup keyword no startup
-hook names, a startup hook that raises, and a value `world.instance()` refuses itself, such as
-`--now` given together with a fixture, or a `--seed` that is negative or does not fit in 8 bytes. A
-process that could not make its instance answers that error and then exits 1.
 
 Read [../serving_and_openenv.md](../serving_and_openenv.md#serving-one-world-to-an-mcp-client) for
 the `.mcp.json` that launches the command, and for what a client is and is not given.
