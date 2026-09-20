@@ -99,9 +99,9 @@ Three things follow from the pin, and each of them catches an author out once:
   instance's format. The pin of a world you added is not consulted, and neither are the formats it
   registered. Every world may be a root, which is why every world carries a pin.
 - **A caller may override it per instance**, with `world.instance(state_format=...)` or
-  `reset(state_format=...)`. `state_format` is therefore a reserved reset keyword beside `fixture`,
-  `seed`, `now` and `control_tools`: a startup hook that names a parameter `state_format` is
-  refused at registration, and the keyword never reaches a hook.
+  `reset(state_format=...)`. `state_format` is the framework's own parameter, not a startup keyword,
+  so it never reaches a hook. A hook is still free to name a parameter `state_format`, because a
+  startup keyword travels in `startup=` and the two names are in different namespaces.
 - **Changing the pin changes what every eval built on the world saves**, so bump `world.version`
   when you change it. These docs recommend it; nothing enforces it.
 
@@ -290,8 +290,7 @@ when it:
 
 A middleware is refused if it is not callable with three positional arguments. A startup hook is
 refused unless the context is its one and only positional parameter — none, or two, or a `*args` is
-refused alike — and if it names a parameter `fixture`, `seed`, `now`, `state_format` or
-`control_tools`.
+refused alike. A hook may name any keyword it likes.
 
 An `add_world` is refused when its `name` is not `^[a-z][a-z0-9_]*$`, contains `__`, or is `main` or
 `temp`; when this world already adds one under that name; when `tool_allow_list` and
@@ -483,8 +482,9 @@ with world.instance() as inst:
 the connection is set up, and before the first tool call. Several may be registered — an extension
 may bring one — and they run in registration order.
 
-The hook's keyword arguments are the `reset()` arguments beyond `fixture`, `seed`, `now` and
-`state_format`. That is how a per-instance parameter reaches world code:
+The hook's keyword arguments are the world's own namespace: a caller passes them in the `startup`
+dictionary, and each hook receives the ones it names. That is how a per-instance parameter reaches
+world code:
 
 ```python
 import seahaven
@@ -510,23 +510,25 @@ def add_note(ctx: seahaven.Ctx, body: str) -> dict[str, object]:
     return {"id": ctx.ids.uuid(), "body": body, "author": ctx.state["author"]}
 
 
-with world.instance(author="ada") as inst:
+with world.instance(startup={"author": "ada"}) as inst:
     assert inst.call("add_note", body="hello")["author"] == "ada"
 
 try:
-    world.instance(auther="ada")  # a typo, caught before anything is copied
+    world.instance(startup={"auther": "ada"})  # a typo, caught before anything is copied
 except seahaven.WorldBug as error:
-    assert "unknown reset argument" in str(error)
+    assert "unknown startup keyword" in str(error)
 ```
 
 **Spell the parameters out.** A hook that takes `**kwargs` accepts everything, which switches off
-unknown-argument detection for the whole world. A misspelled `reset` argument would then silently do
+unknown-keyword detection for the whole world. A misspelled startup keyword would then silently do
 nothing, instead of failing before the instance exists.
 
-A hook may not name a parameter `fixture`, `seed`, `now`, `state_format` or `control_tools`; those
-are `reset`'s own. Hooks put what they worked out in `ctx.state`, and tools read it from there. A
-principal is application code: the world stores `user_id`, and its tools read it. Rows a hook writes
-are *not* in the change log, because no session is open while the hooks run.
+A hook may name any keyword, including `fixture`, `seed`, `now`, `state_format` and
+`control_tools`: those are parameters of `world.instance` and `reset`, and a startup keyword sits
+inside `startup=`, where it cannot collide with one. Hooks put what they worked out in `ctx.state`,
+and tools read it from there. A principal is application code: the world stores `user_id`, and its
+tools read it. Rows a hook writes are *not* in the change log, because no session is open while the
+hooks run.
 
 If a hook cannot do its job — a `user_id` naming nobody — raise `seahaven.WorldBug`. Instance
 creation then fails, and a run never starts against state that was set up wrong.

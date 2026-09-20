@@ -105,11 +105,12 @@ def test_the_tool_list_an_agent_sees_is_the_twenty_five_and_the_two_helpers() ->
         assert tool["description"], f"SH205: {tool['name']} has an empty description"
 
 
-def test_the_startup_hook_is_registered_and_takes_the_reset_argument_it_documents() -> None:
-    """`reset(user_id=...)` reaches the hook because the hook named it, and only then.
+def test_the_startup_hook_is_registered_and_takes_the_keyword_it_documents() -> None:
+    """`startup={"user_id": ...}` reaches the hook because the hook named it, and only then.
 
-    `world.instance(..., anything_else=1)` is refused by the framework, so the
-    set of `reset` arguments this world takes is exactly what its hooks spell.
+    `world.instance(..., startup={"anything_else": 1})` is refused by the
+    framework, so the set of startup keywords this world takes is exactly what
+    its hooks spell.
     """
     (hook,) = world.startup_hooks
     assert hook.fn is remember_viewer

@@ -103,9 +103,10 @@ overlapping calls on one socket would pair the wrong answer with the wrong quest
 
 - **Reset arguments cannot be a generated form.** OpenEnv publishes no schema for what an
   environment's `reset()` accepts, so the New environment dialog offers a JSON box under
-  Advanced. Worse, the server filters the payload against the signature of `reset()` and drops
-  anything that does not match without an error, so a misspelled argument is silent. A schema for
-  reset arguments is the one addition to the standard that would close this.
+  Advanced. The server filters the payload against the signature of `reset()` and drops anything
+  that does not match without an error, so a misspelled top-level key is silent. A world's own
+  startup keywords go under `startup`, where Seahaven checks them and a misspelling is refused. A
+  schema for reset arguments is the one addition to the standard that would close the rest.
 - **The leave warning cannot say why.** Every browser ignores a custom `beforeunload` message and
   shows its own generic text, so the reason lives in the page instead: the sidebar names how many
   sockets are open and what closing the tab destroys.

@@ -456,14 +456,14 @@ def test_now_passes_through(pytester: pytest.Pytester) -> None:
     pytester.runpytest().assert_outcomes(passed=1)
 
 
-def test_startup_kwargs_pass_through(pytester: pytest.Pytester) -> None:
-    """Anything the marker carries that is not `fixture` is the world's to read."""
+def test_the_startup_keywords_pass_through(pytester: pytest.Pytester) -> None:
+    """The marker's `startup=` is `world.instance`'s, and the world reads it there."""
     write_world(pytester)
     pytester.makepyfile(
         """
         import pytest
 
-        @pytest.mark.seahaven(fixture=None, tier="gold")
+        @pytest.mark.seahaven(fixture=None, startup={"tier": "gold"})
         def test_it(instance):
             assert instance.call("bodies") == ["gold"]
         """
@@ -496,7 +496,7 @@ def test_the_instance_fixture_has_no_control_tools_unless_the_marker_asks(
     pytester.runpytest().assert_outcomes(passed=2)
 
 
-def test_a_startup_kwarg_the_world_does_not_take_is_still_the_worlds_error(
+def test_a_startup_keyword_the_world_does_not_take_is_still_the_worlds_error(
     pytester: pytest.Pytester,
 ) -> None:
     """The plugin hands the marker's keywords on; it does not vet them, and a
@@ -506,14 +506,14 @@ def test_a_startup_kwarg_the_world_does_not_take_is_still_the_worlds_error(
         """
         import pytest
 
-        @pytest.mark.seahaven(fixture=None, teir="gold")
+        @pytest.mark.seahaven(fixture=None, startup={"teir": "gold"})
         def test_it(instance):
             assert instance is not None
         """
     )
     result = pytester.runpytest()
     result.assert_outcomes(errors=1)
-    result.stdout.fnmatch_lines(["*unknown reset argument*teir*"])
+    result.stdout.fnmatch_lines(["*unknown startup keyword*teir*"])
 
 
 def test_the_world_fixture_is_one_object_for_the_session(pytester: pytest.Pytester) -> None:

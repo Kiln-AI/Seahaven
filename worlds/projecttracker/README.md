@@ -55,11 +55,11 @@ with projecttracker.world.instance("small_startup") as tracker:
     tracker.call("search_issues", query="billing")  # FTS5, best match first
 ```
 
-The instance's *viewer* — who the tracker thinks is using it — is `user_id` on creation, and is the
-workspace's first admin when that is not given:
+The instance's *viewer* — who the tracker thinks is using it — is the `user_id` startup keyword
+on creation, and is the workspace's first admin when that is not given:
 
 ```python
-with projecttracker.world.instance("agency", user_id=someone) as tracker:
+with projecttracker.world.instance("agency", startup={"user_id": someone}) as tracker:
     tracker.call("add_comment", issue_id=..., body="looking at this now")
 ```
 

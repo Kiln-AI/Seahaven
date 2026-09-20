@@ -10,6 +10,11 @@ A world's test says which fixture it starts from and nothing else::
     def test_an_issue_can_be_created(instance: seahaven.Instance) -> None:
         assert instance.call("create_issue", title="x")["title"] == "x"
 
+The marker's other keywords are `world.instance(...)`'s, so a world's own startup
+keywords travel in `startup=`::
+
+    @pytest.mark.seahaven(fixture="empty", startup={"user_id": "u_12"})
+
 `world` is found the way `seahaven` finds it -- functional spec §2.2, the nearest
 `pyproject.toml` and the attribute `world` on the package its `[project] name`
 normalises to -- from pytest's rootdir, with `--seahaven-world module:attr` as the
@@ -40,8 +45,9 @@ MARKER = "seahaven"
 WORLD_OPTION = "--seahaven-world"
 
 _MARKER_SIGNATURE = (
-    f"{MARKER}(fixture, seed=None, **startup_kwargs): the fixture the `instance` fixture is "
-    "created from; fixture=None is a blank instance"
+    f"{MARKER}(fixture, seed=None, now=None, state_format=None, control_tools=False, "
+    "startup=None): the fixture the `instance` fixture is created from; fixture=None is a "
+    "blank instance"
 )
 
 _EXAMPLE = (
@@ -100,8 +106,8 @@ def instance(request: pytest.FixtureRequest, world: World) -> Iterator[Instance]
     marker = request.node.get_closest_marker(MARKER)
     if marker is None:
         pytest.fail(f"the `instance` fixture needs a marker: {_EXAMPLE}", pytrace=False)
-    fixture, startup_kwargs = _fixture_and_kwargs(marker)
-    with world.instance(fixture, **startup_kwargs) as live:
+    fixture, arguments = _fixture_and_arguments(marker)
+    with world.instance(fixture, **arguments) as live:
         yield live
 
 
@@ -126,12 +132,13 @@ def _refuse_two_markers_on_one_node(item: pytest.Item) -> None:
             )
 
 
-def _fixture_and_kwargs(marker: pytest.Mark) -> tuple[str | None, dict[str, Any]]:
+def _fixture_and_arguments(marker: pytest.Mark) -> tuple[str | None, dict[str, Any]]:
     """The fixture the marker names, and everything else it passes to the world.
 
-    `seed`, `now` and a world's own startup kwargs are whatever is left after
-    `fixture` is taken out: the plugin does not enumerate them, because startup
-    kwargs are the world's and it cannot.
+    `seed`, `now` and `startup` are whatever is left after `fixture` is taken
+    out: the plugin does not enumerate `world.instance`'s parameters, so a
+    marker reaches whichever ones the installed Seahaven has, and a name that is
+    not one of them fails in the call.
     """
     if len(marker.args) > 1:
         pytest.fail(

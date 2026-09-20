@@ -623,7 +623,7 @@ def test_a_tool_registered_later_joins_the_registry(world: World) -> None:
     assert registered(world) == ["echo", "late"]
 
 
-def test_startup_hooks_record_the_reset_arguments_they_accept(world: World) -> None:
+def test_startup_hooks_record_the_startup_keywords_they_accept(world: World) -> None:
     @world.instance_startup
     def principal(ctx: Ctx, *, user_id: str | None = None, tenant: str = "t") -> None:
         return None
@@ -652,17 +652,19 @@ def test_a_startup_hook_is_callable_as_registered(world: World, ctx: Ctx) -> Non
     assert seen == {"user_id": "u_1", "ctx": ctx}
 
 
-def test_a_world_with_no_startup_hooks_accepts_no_reset_arguments(world: World) -> None:
+def test_a_world_with_no_startup_hooks_accepts_no_startup_keywords(world: World) -> None:
     assert world.accepted_startup_kwargs == frozenset()
 
 
 @pytest.mark.parametrize("name", ["fixture", "seed", "now", "state_format", "control_tools"])
-def test_a_startup_hook_cannot_take_resets_own_arguments(world: World, name: str) -> None:
+def test_a_startup_hook_may_take_a_framework_parameters_name(world: World, name: str) -> None:
+    """Startup keywords have their own namespace, so no name is spent by the framework."""
     namespace: dict[str, Any] = {}
     exec(f"def startup(ctx, *, {name}=None): pass", namespace)
 
-    with pytest.raises(WorldBug, match="reset's own"):
-        world.instance_startup(namespace["startup"])
+    world.instance_startup(namespace["startup"])
+
+    assert world.accepted_startup_kwargs == {name}
 
 
 def test_a_startup_hook_takes_the_context_and_nothing_else_positionally(world: World) -> None:

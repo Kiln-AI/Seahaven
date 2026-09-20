@@ -331,7 +331,7 @@ def test_a_bound_keyword_is_not_overridable_by_a_reset_keyword(tmp_path: Path) -
     host.add_world(child, name="child", startup={"region": "eu"})
     host.add_world(other, name="other")
 
-    with host.instance(None, region="jp"):
+    with host.instance(None, startup={"region": "jp"}):
         pass
 
     assert seen == {"host": "jp", "child": "eu", "other": "jp"}
@@ -344,7 +344,7 @@ def test_a_reset_keyword_only_an_added_worlds_hook_names_is_accepted(tmp_path: P
     host.add_world(child, name="child")
     regional(child, seen)
 
-    with host.instance(None, region="jp"):
+    with host.instance(None, startup={"region": "jp"}):
         pass
 
     assert seen == {"child": "jp"}
@@ -356,8 +356,8 @@ def test_a_keyword_no_hook_in_the_tree_names_is_refused_before_anything_is_made(
     host = rooted("host", tmp_path)
     host.add_world(composable_world("child"), name="child")
 
-    with pytest.raises(WorldBug, match=r"unknown reset argument\(s\): \['region'\]"):
-        host.instance(None, region="jp")
+    with pytest.raises(WorldBug, match=r"unknown startup keyword\(s\): \['region'\]"):
+        host.instance(None, startup={"region": "jp"})
 
     assert _no_instance_dirs(tmp_path / "work")
 
@@ -384,7 +384,7 @@ def test_a_root_hook_seeds_a_child_before_that_childs_own_hooks_run(tmp_path: Pa
         seen["state"] = ctx.state.get("owner")
         seen["rows"] = ctx.db.rows("SELECT value FROM child_rows")
 
-    with host.instance(None, principal="ana") as live:
+    with host.instance(None, startup={"principal": "ana"}) as live:
         assert seen == {"state": "ana", "rows": [{"value": "ana"}]}
         # Committed with every other node's transaction, and starting state
         # rather than a change the agent made.

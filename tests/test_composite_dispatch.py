@@ -185,12 +185,12 @@ def test_a_host_gate_reads_its_own_state_and_the_owner_writes_its_own_store(
             ctx.db.execute("INSERT INTO host_rows VALUES (?, ?)", call.name, call.node)
         return next_(ctx, call)
 
-    with host.instance(None, principal="ana") as live:
+    with host.instance(None, startup={"principal": "ana"}) as live:
         live.call("leaf_write", value="x")
         assert live.call("host_read") == ["leaf"]
         assert live.call("leaf_read") == ["x"]
 
-    with host.instance(None, principal="bo") as live, pytest.raises(Boom):
+    with host.instance(None, startup={"principal": "bo"}) as live, pytest.raises(Boom):
         live.call("leaf_write", value="x")
 
 

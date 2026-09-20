@@ -2,9 +2,10 @@
 
 A real tracker's API knows who the token belongs to, and every write it makes is
 attributed to that person without the caller saying so. This world spells that as
-a startup hook: `world.instance("agency", user_id=...)` -- or `reset(user_id=...)`
-over OpenEnv -- names the person the session is driving the tracker as, and every
-tool that writes falls back to them when the call passed no `actor_id`.
+a startup hook: `world.instance("agency", startup={"user_id": ...})` -- or
+`reset(startup={"user_id": ...})` over OpenEnv -- names the person the session is
+driving the tracker as, and every tool that writes falls back to them when the
+call passed no `actor_id`.
 
 `actor_id` on the call is still there, and wins, because an eval that wants two
 people writing in one episode should not need two instances to do it.
@@ -40,7 +41,7 @@ def remember_viewer(ctx: seahaven.Ctx, *, user_id: str | None = None) -> None:
         return
     if ctx.db.one("SELECT id FROM users WHERE id = ?", user_id) is None:
         raise seahaven.WorldBug(
-            f"reset(user_id={user_id!r}) names nobody in this workspace; pass the id of a user "
+            f"startup user_id={user_id!r} names nobody in this workspace; pass the id of a user "
             f"the fixture has, or omit it to drive the tracker as its first admin"
         )
     ctx.state["viewer_id"] = user_id
