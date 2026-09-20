@@ -113,20 +113,35 @@ gate does not apply in process, so this command owns the lock.
   JSON-RPC errors for framework and protocol failures, which is the same split `SeahavenClient.call`
   already makes.
 - Return `structuredContent` beside the text block. Seahaven tools answer JSON objects.
-- Publish `Instance.state()` as an MCP **resource** (`seahaven://state`), not a tool. MCP has
-  resources and OpenEnv's dialect does not. This keeps the grading document out of the agent's tool
-  list.
+- **No resources, and no state.** The server publishes tools and nothing else. `Instance.state()`
+  is the grading document, and a client that exposes resources to the model would hand the agent
+  its own grade; a client that does not would still put a Seahaven-shaped object in front of a user
+  who came for the emulated product. Neither is wanted, so the state document is not reachable over
+  MCP at all. `seahaven://state`, `seahaven://call-log` and the composition report are all dropped.
 - Do not publish `reset` as a tool. An agent that can reset can erase its own episode.
 
-## Open questions for the functional spec
+## The server looks like the server it clones
 
-- **Which MCP SDK,** and what it costs. Check the dependency tree before committing, since keeping
-  the install small is half the reason for not reusing `serve`.
-- **Tool name constraints.** Some MCP clients restrict the character set or the length of a tool
-  name, and some prefix them with the server name. Check Seahaven's tool names against the
-  strictest client we care about, and decide whether `seahaven check` should lint for it.
-- **More resources.** `seahaven://call-log` and the composition report are candidates. Keep the
-  first release small.
+A Seahaven world emulates a real product's tool surface. Over MCP it should be indistinguishable
+from that product's own MCP server: the tools, their schemas, their errors, and a server
+instruction string the world's author writes. Nothing on this surface is about Seahaven -- no
+fixture, no seed, no state document, no reset, no control tool, no framework-shaped resource. A
+world author who is cloning a real MCP server reads that server's instructions and sets
+`mcp_server_instructions` on their `World` to match.
+
+That rule is what settles the questions the overview opened, and it decides the ones that come
+later: when a feature would make the server legible as Seahaven rather than as the product, it does
+not ship here.
+
+## Answered while speccing
+
+- **Which MCP SDK.** The official `mcp` package, 2.x, on its lower-level server API, pinned
+  `>=2.2,<3`. `fastmcp` (PrefectHQ) depends on `mcp` anyway and adds composition, proxying and
+  OpenAPI generation that this command has no use for.
+- **Tool name constraints.** Seahaven already refuses a tool name outside
+  `^[A-Za-z0-9_-]{1,128}$` (`composition.TOOL_NAME`), which is the same rule the strict clients
+  publish. No new lint.
+- **More resources.** None, per the rule above.
 
 ## Non-goals
 
@@ -163,8 +178,8 @@ gate does not apply in process, so this command owns the lock.
 - `src/seahaven/docs/serving_and_openenv.md`: rewrite "Seahaven will not add MCP support until the
   standard supports stateful servers". The `/mcp` refusal stays and keeps its reasoning; what
   changes is that there is now an answer for a user who wants an MCP client.
-- A new page, or a section of the serving page, for `seahaven mcp`. `tests/test_docs.py` holds the
-  page list, so a new page means updating that list and every link.
+- A section of the serving page for `seahaven mcp`, not a new page: what the command is, the
+  `.mcp.json` it goes in, and a pointer to `seahaven mcp -h` for the flags.
 - `src/seahaven/docs/reference/cli.md`: the new subcommand and every flag.
 - `README.md`: MCP belongs in the first description of what a world can do.
 
@@ -173,4 +188,4 @@ gate does not apply in process, so this command owns the lock.
 A user installs the world and the `mcp` extra, adds ten lines to `.mcp.json`, restarts their MCP
 client, and calls the world's tools from a chat with no other setup. Writes are writes: the next
 read in the same conversation sees them. Closing the client destroys the instance and its copy of
-the fixture.
+the fixture. Nothing the client shows them names Seahaven.
