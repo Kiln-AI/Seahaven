@@ -26,7 +26,7 @@ def test_the_entry_point_is_declared() -> None:
     assert data["project"]["scripts"] == {"seahaven": "seahaven.cli:main"}
 
 
-@pytest.mark.parametrize("name", ["new", "check", "docs", "fixture", "serve"])
+@pytest.mark.parametrize("name", ["new", "check", "docs", "fixture", "serve", "mcp"])
 def test_every_subcommand_the_spec_names_is_there(name: str) -> None:
     with pytest.raises(SystemExit) as raised:
         build_parser().parse_args([name, "--help"])

@@ -10,11 +10,13 @@ imports no OpenEnv, and serving a single session through the OpenEnv server
 would cost uvicorn, a WebSocket to ourselves and the whole session manager for
 one instance.
 
-**stdout needs no work of ours.** `stdio_server()` claims the file descriptors
-while serving: fd 0 points at the null device and fd 1 at stderr, restored on
-exit. A world's `print`, a C extension writing to fd 1 and a child process the
-world spawns all miss the wire, which is stronger than a redirection of ours
-would be.
+**stdout is claimed by the transport, and this module owes it one flush.**
+`stdio_server()` claims the file descriptors while serving: fd 0 points at the
+null device and fd 1 at stderr, restored on exit. A world's `print`, a C
+extension writing to fd 1 and a child process the world spawns all miss the
+wire, which is stronger than a redirection of ours would be. What the claim
+cannot reach is Python's own buffer for `sys.stdout`, which outlives it, so this
+module empties that buffer before the claim ends (`_flush_what_the_world_printed`).
 """
 
 import logging
@@ -87,21 +89,44 @@ async def _serve(
         tasks.start_soon(_stop_on_signal, sessions, state)
         tasks.start_soon(_stop_after_fatal, sessions, state, fatal_grace)
         async with stdio_server() as (read, write):
-            # Inside the claim on the file descriptors, and not before it:
-            # resolving the world imports the world's package, and a package
-            # that prints while it is imported would write to the wire.
-            server = build_server(
-                world,
-                reset_options=reset_options,
-                sessions=sessions,
-                state=state,
-                key=connection,
-            )
-            await server.run(read, write, server.create_initialization_options())
+            try:
+                # Inside the claim on the file descriptors, and not before it:
+                # resolving the world imports the world's package, and a package
+                # that prints while it is imported would write to the wire.
+                server = build_server(
+                    world,
+                    reset_options=reset_options,
+                    sessions=sessions,
+                    state=state,
+                    key=connection,
+                )
+                await server.run(read, write, server.create_initialization_options())
+            finally:
+                _flush_what_the_world_printed()
         # The read stream ended: the client disconnected, and the two tasks
         # above have nothing left to wait for.
         tasks.cancel_scope.cancel()
     return _exit_code(state)
+
+
+def _flush_what_the_world_printed() -> None:
+    """Empty Python's own stdout buffer while fd 1 still points at stderr.
+
+    `stdio_server` claims the file descriptors and restores them as it exits,
+    but the `sys.stdout` object survives both: a world's `print` sits in that
+    buffer until something flushes it, and a buffered process flushes it at
+    interpreter exit -- after the restore, so onto the wire. The client reads
+    the world's prose as a frame and reports a parse error with nothing to
+    point at. A process whose stdout is a terminal or is unbuffered never had
+    anything in the buffer, and flushes nothing here.
+
+    A failure is logged and dropped: this runs on the way out of the serve
+    loop, where an exception of its own would replace whatever ended the loop.
+    """
+    try:
+        sys.stdout.flush()
+    except Exception:
+        _log.debug("could not flush stdout before the protocol's claim on it ended", exc_info=True)
 
 
 async def _stop_on_signal(sessions: Sessions, state: State) -> None:

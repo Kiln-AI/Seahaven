@@ -20,7 +20,7 @@ Four phases. Each is a reviewable unit that leaves the repository green.
       `tests/test_mcp_server.py` drives it in process through the SDK's own client. CI gains the
       `import seahaven.mcp` assertion beside the one for `seahaven.openenv`.
 
-- [ ] **Phase 3: The command.** `seahaven/cli/mcp.py` — the parser, `resolve_options` and every
+- [x] **Phase 3: The command.** `seahaven/cli/mcp.py` — the parser, `resolve_options` and every
       refusal, the environment variables, the random seed and its stderr line, the missing-extra
       message; registration in `build_parser` and the module docstring that counts the subcommands.
       `tests/test_cli_mcp.py` for the resolution, `tests/test_mcp_process.py` for the real entry
