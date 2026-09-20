@@ -105,8 +105,8 @@ world, and a user who provokes one is looking at their own command line or their
 
 Argparse's own usage errors keep their exit code of 2.
 
-Everything that needs the world is checked later, inside `initialize` (§5.2): an import that fails, a
-fixture that does not exist, a reset option no hook names, a startup hook that raises.
+Everything that needs the world is checked later, inside `initialize` (§5.2): an import that
+fails, a fixture that does not exist, a reset option no hook names, a startup hook that raises.
 
 ## 3. Server identity and instructions
 
@@ -365,8 +365,8 @@ not the assumption holds; only the mechanism changes.**
 1. **The lower-level server API.** `mcp` 2.0 removed the bundled FastMCP and rebuilt the low-level
    server; handlers are understood to be `(ctx, params) -> result`. The exact import path and
    handler signature must be read from the installed package.
-2. **A hook at `initialize`.** §5.2 needs somewhere to create the instance during the handshake, and
-   §6 needs a session identity to key it on. If the SDK exposes neither, the architecture finds
+2. **A hook at `initialize`.** §5.2 needs somewhere to create the instance during the handshake,
+   and §6 needs a session identity to key it on. If the SDK exposes neither, the architecture finds
    another way to satisfy both; the instance is still created during `initialize` and still keyed by
    session.
 3. **stdout diversion.** The v2 release notes say a stdio server keeps stray prints off the wire by
