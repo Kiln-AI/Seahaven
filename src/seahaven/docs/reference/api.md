@@ -118,7 +118,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call it; there is nothing to decorate |
 | `world.state_format(name)` | register a state format of this world's own, as a decorator. The name is `<family>/<major>` and may not begin with `seahaven.` |
 | `world.resolve_state_format(name)` | the formatter a name answers to: a built-in, or one this world registered. Asked of the root of an instance and of nothing else |
-| `world.instance(fixture=None, *, seed=None, now=None, state_format=None, **startup_kwargs)` | make an instance; a context manager. `state_format` answers in another of this world's formats, in place of the pin |
+| `world.instance(fixture=None, *, seed=None, now=None, state_format=None, control_tools=False, **startup_kwargs)` | make an instance; a context manager. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance |
 | `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
@@ -182,9 +182,16 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
 | `inst.id`, `inst.fixture`, `inst.seed` | the instance id, the fixture id (or `None`), the derived seed bytes |
 | `inst.state_format` | the format `inst.state()` answers in, fixed for the instance's life |
+| `inst.control_tools` | whether the framework's own control tool is callable on this instance, fixed for the instance's life |
 | `inst.clock`, `inst.world`, `inst.state_path` | the clock, the world, and the instance's own database file |
 
 The tool name is positional-only, so a world may have a tool argument called `name`.
+
+The framework's own control tool is registered on every world and callable only on an instance made
+with `control_tools=True`. On every other instance its name raises `UnknownTool`, in the same words
+a name the world does not have raises, and no instance lists it either way. The tool is deprecated:
+read `inst.state()` instead. Over a server, `serve --include-control-tools` is what makes each
+session's instance one that can call it, and [cli.md](cli.md) names the tool.
 
 ## `Ctx`
 

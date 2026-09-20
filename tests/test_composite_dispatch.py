@@ -657,7 +657,7 @@ def live(tmp_path: Path) -> Any:
     """A blank instance of the committed composite world, on its own directory."""
     world = copy.copy(emporium.world)
     world.work_dir = tmp_path / "work"
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    with world.instance(None, now=INSTANT_ISO, control_tools=True) as instance:
         yield instance
 
 

@@ -409,6 +409,33 @@ def test_a_control_tool_is_callable_with_the_flag(world: World) -> None:
     assert [record["table"] for record in logged] == ["notes"]
 
 
+def test_a_reset_that_asks_for_control_tools_does_not_get_them(env: SeahavenEnv) -> None:
+    """The flag is the operator's. A client that sends the keyword binds a named
+    parameter nothing reads, so it never reaches a hook and never turns the
+    framework's own tools on.
+    """
+    env.reset(control_tools=True)
+
+    assert env.instance is not None
+    assert env.instance.control_tools is False
+    assert env.instance.startup == {}
+    assert call(env, "controller_run_sql", sql=CONTROL_SQL).seahaven_error == {
+        "code": "unknown_tool",
+        "message": "unknown tool: controller_run_sql",
+        "details": {"name": "controller_run_sql"},
+    }
+
+
+def test_a_reset_that_asks_for_no_control_tools_does_not_take_them_away(world: World) -> None:
+    """The other direction of the same rule: the server's value, not the client's."""
+    env = SeahavenEnv(world, include_control_tools=True)
+    env.reset(control_tools=False)
+
+    assert env.instance is not None
+    assert env.instance.control_tools is True
+    assert call(env, "controller_run_sql", sql=CONTROL_SQL).error is None
+
+
 @pytest.mark.parametrize("name", ["controller_nonsense", "controller_changes"])
 def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World, name: str) -> None:
     """The flag admits the control tool and nothing else.

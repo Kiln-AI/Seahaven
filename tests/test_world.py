@@ -656,7 +656,7 @@ def test_a_world_with_no_startup_hooks_accepts_no_reset_arguments(world: World) 
     assert world.accepted_startup_kwargs == frozenset()
 
 
-@pytest.mark.parametrize("name", ["fixture", "seed", "now"])
+@pytest.mark.parametrize("name", ["fixture", "seed", "now", "state_format", "control_tools"])
 def test_a_startup_hook_cannot_take_resets_own_arguments(world: World, name: str) -> None:
     namespace: dict[str, Any] = {}
     exec(f"def startup(ctx, *, {name}=None): pass", namespace)

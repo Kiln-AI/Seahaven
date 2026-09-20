@@ -33,7 +33,7 @@ def live(tmp_path: Path) -> Iterator[Instance]:
     """A blank instance of the committed composite world, with one order settled."""
     world = copy.copy(emporium.world)
     world.work_dir = tmp_path / "work"
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    with world.instance(None, now=INSTANT_ISO, control_tools=True) as instance:
         instance.call("settle_order", total=250)
         yield instance
 

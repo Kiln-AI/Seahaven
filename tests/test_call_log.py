@@ -100,14 +100,16 @@ def test_a_record_says_which_class_its_error_was(instance: Instance) -> None:
     assert accident.to_dict()["error"] == "internal error"
 
 
-def test_a_refused_name_a_control_tool_and_a_listing_are_not_entries(instance: Instance) -> None:
+def test_a_refused_name_a_control_tool_and_a_listing_are_not_entries(
+    control_instance: Instance,
+) -> None:
     with pytest.raises(UnknownTool):
-        instance.call("no_such_tool")
-    instance.call("controller_run_sql", sql="SELECT 1")
-    instance.tools()
+        control_instance.call("no_such_tool")
+    control_instance.call("controller_run_sql", sql="SELECT 1")
+    control_instance.tools()
 
-    assert instance.call_log() == []
-    assert instance.call_count == 0
+    assert control_instance.call_log() == []
+    assert control_instance.call_count == 0
 
 
 def test_a_function_the_typed_call_cannot_resolve_is_not_an_entry(instance: Instance) -> None:

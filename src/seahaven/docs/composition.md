@@ -176,8 +176,9 @@ Three rules fall out of that:
   collision is a seal error, never resolved silently.
 - A prefixed name must still be a valid tool name (`^[A-Za-z0-9_-]{1,128}$`), so a `tool_prefix` of
   `"payments."` is refused rather than published.
-- Control tools are never contributed. Every world has them, but a call by that name resolves on the
-  root's own registry, and the root's cover every node.
+- Control tools are never contributed. Every world registers them, but a call by that name resolves
+  on the root's own registry, and only on an instance made with `control_tools=True`. The root's
+  control tools cover every node.
 
 **A prefix does not rewrite description text.** If an added world's descriptions cross-reference its
 own tools — "call `create_customer` first" — a prefix leaves those mentions naming something the

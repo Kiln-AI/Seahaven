@@ -100,8 +100,8 @@ Three things follow from the pin, and each of them catches an author out once:
   registered. Every world may be a root, which is why every world carries a pin.
 - **A caller may override it per instance**, with `world.instance(state_format=...)` or
   `reset(state_format=...)`. `state_format` is therefore a reserved reset keyword beside `fixture`,
-  `seed` and `now`: a startup hook that names a parameter `state_format` is refused at registration,
-  and the keyword never reaches a hook.
+  `seed`, `now` and `control_tools`: a startup hook that names a parameter `state_format` is
+  refused at registration, and the keyword never reaches a hook.
 - **Changing the pin changes what every eval built on the world saves**, so bump `world.version`
   when you change it. These docs recommend it; nothing enforces it.
 
@@ -290,7 +290,8 @@ when it:
 
 A middleware is refused if it is not callable with three positional arguments. A startup hook is
 refused unless the context is its one and only positional parameter — none, or two, or a `*args` is
-refused alike — and if it names a parameter `fixture`, `seed`, `now` or `state_format`.
+refused alike — and if it names a parameter `fixture`, `seed`, `now`, `state_format` or
+`control_tools`.
 
 An `add_world` is refused when its `name` is not `^[a-z][a-z0-9_]*$`, contains `__`, or is `main` or
 `temp`; when this world already adds one under that name; when `tool_allow_list` and
@@ -522,10 +523,10 @@ except seahaven.WorldBug as error:
 unknown-argument detection for the whole world. A misspelled `reset` argument would then silently do
 nothing, instead of failing before the instance exists.
 
-A hook may not name a parameter `fixture`, `seed`, `now` or `state_format`; those are `reset`'s
-own. Hooks put what they worked out in `ctx.state`, and tools read it from there. A principal is
-application code: the world stores `user_id`, and its tools read it. Rows a hook writes are *not*
-in the change log, because no session is open while the hooks run.
+A hook may not name a parameter `fixture`, `seed`, `now`, `state_format` or `control_tools`; those
+are `reset`'s own. Hooks put what they worked out in `ctx.state`, and tools read it from there. A
+principal is application code: the world stores `user_id`, and its tools read it. Rows a hook writes
+are *not* in the change log, because no session is open while the hooks run.
 
 If a hook cannot do its job — a `user_id` naming nobody — raise `seahaven.WorldBug`. Instance
 creation then fails, and a run never starts against state that was set up wrong.

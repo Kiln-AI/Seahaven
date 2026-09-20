@@ -395,7 +395,7 @@ def test_tools_never_lists_a_control_tool(world: World) -> None:
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         assert "peek" not in {tool["name"] for tool in instance.tools()}
         assert instance.call("peek") == {"seen": 1}
 
@@ -519,7 +519,7 @@ def test_a_control_tool_bypasses_the_chain(world: World) -> None:
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         assert instance.call("peek") == {"peeked": True}
         instance.call("now")
 
@@ -533,7 +533,7 @@ def test_a_control_tool_validates_its_arguments(world: World) -> None:
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         assert instance.call("peek", limit=3) == {"limit": 3}
         with pytest.raises(ArgumentError):
             instance.call("peek", limit="three")
@@ -559,7 +559,7 @@ def test_a_control_tool_is_called_with_exactly_the_validated_arguments(world: Wo
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         # The wire name reaches the parameter it aliases, and the default the
         # tool declared reaches it too.
         assert instance.call("peek", max=7) == {"limit": 7}
@@ -583,7 +583,10 @@ def test_a_control_tools_result_is_held_to_the_rules_every_result_is(
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance, pytest.raises(WorldBug, match=refusal):
+    with (
+        world.instance(None, control_tools=True) as instance,
+        pytest.raises(WorldBug, match=refusal),
+    ):
         instance.call("peek")
 
 
@@ -605,7 +608,7 @@ def test_a_control_tool_may_read_the_instance_it_is_called_on(world: World) -> N
 
     world.tool(control_tool(peek_rows))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         add(instance, "n1")
 
         assert instance.call("peek_rows", sql="SELECT id FROM notes") == [{"id": "n1"}]
@@ -791,7 +794,7 @@ def test_a_control_tool_passes_an_exhausted_gate(tmp_path: Path) -> None:
     world.tool(control_tool(peek))
 
     set_concurrency(1)
-    with world.instance(None) as first, world.instance(None) as second:
+    with world.instance(None) as first, world.instance(None, control_tools=True) as second:
         caller = Caller(lambda: first.call("slow"))
         caller.start()
         assert inside.wait(WAIT)

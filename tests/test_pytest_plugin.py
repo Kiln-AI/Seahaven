@@ -471,6 +471,31 @@ def test_startup_kwargs_pass_through(pytester: pytest.Pytester) -> None:
     pytester.runpytest().assert_outcomes(passed=1)
 
 
+def test_the_instance_fixture_has_no_control_tools_unless_the_marker_asks(
+    pytester: pytest.Pytester,
+) -> None:
+    """The fixture takes `world.instance`'s own default, which is off."""
+    write_world(pytester)
+    pytester.makepyfile(
+        """
+        import pytest
+
+        from seahaven.errors import UnknownTool
+
+        @pytest.mark.seahaven(fixture=None)
+        def test_off_by_default(instance):
+            with pytest.raises(UnknownTool, match="unknown tool: controller_run_sql"):
+                instance.call("controller_run_sql", sql="SELECT 1")
+
+        @pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+        @pytest.mark.seahaven(fixture=None, control_tools=True)
+        def test_a_world_that_asks_for_them_gets_them(instance):
+            assert instance.call("controller_run_sql", sql="SELECT 1")["rows"] == [[1]]
+        """
+    )
+    pytester.runpytest().assert_outcomes(passed=2)
+
+
 def test_a_startup_kwarg_the_world_does_not_take_is_still_the_worlds_error(
     pytester: pytest.Pytester,
 ) -> None:

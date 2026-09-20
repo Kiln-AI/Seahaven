@@ -215,3 +215,11 @@ def test_the_control_tool_is_not_on_the_list_an_agent_reads(
 ) -> None:
     assert "controller_run_sql" in world.tools
     assert "controller_run_sql" not in {tool["name"] for tool in instance.tools()}
+
+
+def test_the_control_tool_is_not_callable_on_an_instance_that_did_not_ask_for_it(
+    instance: seahaven.Instance,
+) -> None:
+    """Registered on the world, callable on nothing that did not ask: the default is off."""
+    with pytest.raises(seahaven.UnknownTool, match="unknown tool: controller_run_sql"):
+        instance.call("controller_run_sql", sql="SELECT 1")
