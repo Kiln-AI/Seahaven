@@ -202,21 +202,15 @@ whose text block carries the `{code, message, details}` triple, so the model can
 recover. This is the same split `SeahavenClient.call` already makes. JSON-RPC errors are reserved
 for framework and protocol failures.
 
-**Control tools are refused as unknown names.** This is not belt and braces. `controller_run_sql`
-is registered on **every** world (`control.py`), and `Instance._target` falls back to the root's own
-registry for a control tool, so `instance.call("controller_run_sql", sql=...)` works on any world in
-process. There is no flag to leave unset: `--include-control-tools` lives on the OpenEnv app, which
-decides whether the name reaches `Instance.call` at all, and this command is the layer that owes
-the same decision. A server that forwarded `tools/call` straight through would let any agent that
-guesses the name read every table directly, around the tool surface it is being evaluated against
-— and `controller_run_sql` is not a name the cloned product has.
+**Control tools need no special case here**, because §15 takes them off every world by default.
+`seahaven mcp` never enables them, so `controller_run_sql` is not in the registry `Instance.call`
+resolves against, and a `tools/call` naming it gets `UnknownTool` from the framework — the same
+answer as any other name the world does not have.
 
-The call is read-only (the control tool runs on an inspection handle), so nothing can be corrupted
-this way. Reading is the whole of the problem.
-
-A `tools/call` naming a control tool is answered with `UnknownTool` before dispatch, in the same
-words as a name the world does not have. Whether a server has a control tool available is not
-something an agent gets to learn by calling.
+That is a change to core, specified in §15, and it is expected to land separately. Until it does,
+this command filters the name itself, the way `openenv/env.py` does today. Either way the
+observable behaviour of `seahaven mcp` is the one stated above, and the tests in §12 do not change
+when the filter is deleted.
 
 ### 5.5 Error taxonomy
 
@@ -348,7 +342,9 @@ this project has a history of defects that passed a unit test and failed on the 
 2. Writes are writes: a write tool, then a read tool in the same session sees it.
 3. A tool that raises `ToolError` gives `isError: true` and the `{code, message, details}` triple,
    not a JSON-RPC error.
-4. `controller_run_sql` is answered as an unknown tool.
+4. `controller_run_sql` is answered as an unknown tool. This test is written against the
+   behaviour, not the mechanism, so it passes whether the refusal comes from §15's core change or
+   from the interim filter.
 5. A world whose startup hook and whose tool both `print` to stdout: every frame still parses.
 6. A bad fixture name: the client receives a JSON-RPC error naming the fixture, and the process
    exits non-zero.
@@ -399,3 +395,99 @@ not the assumption holds; only the mechanism changes.**
 6. **Protocol revision.** `mcp` 2.x speaks the 2026-07-28 revision and still serves 2025-era
    clients. The version range in §9 assumes the SDK negotiates this; nothing in this spec pins a
    revision itself.
+
+## 15. Dependency: control tools become opt-in in core
+
+**This change is expected to land separately, before or alongside this project.** It is not part of
+this project's phases. It is written down here because `seahaven mcp` depends on it, and because
+this is where the need for it was found; whoever picks it up owns the design below or replaces it.
+
+`seahaven mcp` must not let an agent call `controller_run_sql`. Today that would take a filter in
+the MCP server, because the framework registers the tool everywhere. The fix belongs in core
+instead, where it removes a special case from the OpenEnv layer as well as sparing this one.
+
+**If it has not landed when this project is implemented**, `seahaven mcp` refuses control tool
+names itself, exactly as `openenv/env.py` does today — `UnknownTool` before dispatch, in the same
+words as a name the world does not have — and the filter is deleted when the core change arrives.
+That interim is four lines and one test; it is not a reason to block, and it is not a reason to
+design the MCP server around the tool being present.
+
+### 15.1 What is true today
+
+`World.__init__` registers `control.TOOLS` on **every** world, before anything the world registers
+(`world.py`). `Instance.tools()` filters control tools out of the listing, but `Instance._target`
+falls back to the root's own registry for them, so `instance.call("controller_run_sql", sql=...)`
+works on any world in process. The only gate is at the wire: `openenv/env.py` raises `UnknownTool`
+for a control tool name unless the server was started with `include_control_tools`.
+
+### 15.2 What changes
+
+**`World.__init__` registers no control tools.** They are registered only when a world is explicitly
+told to have them, through one new public verb:
+
+```py
+world.enable_control_tools()
+```
+
+Idempotent, and a registration verb like `world.tool(...)`: it bumps the composition epoch, so a
+world already in a tree reseals on next use.
+
+- `seahaven.openenv.serve(world, include_control_tools=True)` calls it, which makes `seahaven
+  serve --include-control-tools` the only thing that turns control tools on in a served process.
+  The flag keeps its exact meaning and its spelling.
+- A world's own tests, and an in-process eval that still uses the deprecated tool, call it directly.
+- `seahaven mcp` never calls it.
+
+**The filter in `openenv/env.py` goes away.** A world that was not told to have control tools has no
+`controller_run_sql` in its registry, so `Instance._target` raises `UnknownTool` on its own, with
+the same message the wire already produced. `worlds/projecttracker/tests/test_openenv.py` asserts that
+message today and must keep passing unchanged: that test is the proof the wire behaviour did not
+move.
+
+### 15.3 Why the opt-in is on the world and not on the instance
+
+`SeahavenEnv.reset(**startup_kwargs)` passes every keyword straight through to `world.instance()`.
+A per-instance `control_tools=True` would therefore be settable by any OpenEnv client, over the
+wire, for itself — which is worse than today. The opt-in is on the world, set by the process that
+serves it, before any session exists, and nothing a client sends can reach it.
+
+A `World(..., control_tools=False)` constructor argument was considered and rejected for the same
+kind of reason: a world is constructed by its own package at import, long before `seahaven serve`
+parses a flag, so the CLI could never turn it on.
+
+### 15.4 What does not change
+
+- Control tools are still never listed. `Instance.tools()` keeps filtering them, so enabling them
+  makes them callable and never visible — the meaning `--include-control-tools` has today.
+- `controller_run_sql` is still deprecated and still warns on every call.
+- A world that registers the name itself without `control=True` is still refused (`world.py`), and a
+  world that contributes a control tool name through composition is still refused
+  (`composition.py`).
+- The control tool still reads through the instance's own control handle, still takes the instance
+  lock, and still bypasses the gate.
+
+### 15.5 What this breaks, and what proves it
+
+`world.tools` no longer contains `controller_run_sql` by default, and
+`instance.call("controller_run_sql", ...)` raises `UnknownTool` unless the world was told to have
+it. Three suites assert the old default and are updated with the change:
+`tests/test_control.py` (enables control tools in its fixture),
+`worlds/projecttracker/tests/test_package.py` and `worlds/projecttracker/tests/test_errors.py`.
+
+New tests:
+
+1. A plain world has no `controller_run_sql` in `world.tools`, and calling it raises `UnknownTool`.
+2. `enable_control_tools()` makes the call work, twice in a row without error the second time.
+3. An enabled world still does not list the tool in `instance.tools()`.
+4. A `reset` carrying `control_tools=True` as a startup keyword does not enable anything: it reaches
+   the startup hooks as an unknown keyword and is refused there, exactly as any other name no hook
+   declares.
+5. `serve(..., include_control_tools=True)` enables it and the wire can call it; without the flag
+   the wire gets the unchanged `UnknownTool` message.
+
+### 15.6 Docs
+
+`reference/api.md` (the new verb, and `World` no longer registering control tools),
+`reference/cli.md` (what `--include-control-tools` now does), `serving_and_openenv.md`,
+`authoring.md`, `composition.md` and `extensions.md` each say today that the control tool is on
+every world. Every one of those sentences is corrected.
