@@ -188,21 +188,25 @@ gate is unfair whenever it binds, and the default is not exempt.
 ## `seahaven mcp`
 
 Serves this world to one MCP client over stdio: one world, one instance, one episode, for the life
-of the process. It needs the `mcp` extra; without it the command says so and exits 1. The `mcp` and
-`serve` extras cannot be installed together, so an environment holds one or the other.
+of the process. Run it from the world's own directory, as `uv run --extra mcp seahaven mcp`: the
+`mcp` extra is the MCP SDK, it cannot be installed beside the `serve` extra, and without it the
+command says so and exits 1.
 
-| Option | Default | What it does |
-|---|---|---|
-| `--fixture NAME` | a blank instance | the fixture the instance starts from |
-| `--seed N` | a random seed, written to stderr | the caller seed, an integer; the framework refuses a negative one, and one that does not fit in 8 bytes |
-| `--now ISO` | wall time at creation | the clock a blank instance starts at; the framework refuses it together with a fixture |
-| `--reset-options JSON` | none | a JSON object of the keyword arguments `world.instance()` is called with; not allowed with `--fixture`, `--seed` or `--now` |
-| `--world module:attr` | the convention | which world to serve |
+| Option | Variable | Default | What it does |
+|---|---|---|---|
+| `--fixture NAME` | `SEAHAVEN_FIXTURE` | a blank instance | the fixture the instance starts from |
+| `--seed N` | `SEAHAVEN_SEED` | a random seed, written to stderr | the caller seed, an integer; the framework refuses a negative one, and one that does not fit in 8 bytes |
+| `--now ISO` | `SEAHAVEN_NOW` | wall time at creation | the clock a blank instance starts at; the framework refuses it together with a fixture |
+| `--reset-options JSON` | `SEAHAVEN_RESET_OPTIONS` | none | a JSON object of the keyword arguments `world.instance()` is called with; not allowed with `--fixture`, `--seed` or `--now` |
+| `--world module:attr` | no variable | the convention | which world to serve |
+
+A variable is how an MCP client configuration passes an option, in its `env` block. A flag beats
+its variable, and a variable set to the empty string counts as unset.
 
 ```sh
-uv run seahaven mcp
-uv run seahaven mcp --fixture small_startup --seed 7
-uv run seahaven mcp --reset-options '{"fixture": "agency", "startup": {"reviewer": "ada"}}'
+uv run --extra mcp seahaven mcp
+uv run --extra mcp seahaven mcp --fixture small_startup --seed 7
+uv run --extra mcp seahaven mcp --reset-options '{"startup": {"reviewer": "ada"}}'
 ```
 
 `--reset-options` is the whole of what `world.instance()` is called with, and the only way to reach
@@ -214,17 +218,6 @@ instance this command makes never has control tools, and `--reset-options` refus
 
 **No `--seed` means a random seed**, not the constant `world.instance()` falls back to. The command
 picks an integer, uses it, and writes it to stderr, so the same run can be asked for again.
-
-Every option except `--world` also answers to an environment variable, because an MCP client
-configuration passes `env` more comfortably than `args`. A flag beats the matching variable, and a
-variable set to the empty string counts as unset.
-
-| Variable | The same as |
-|---|---|
-| `SEAHAVEN_FIXTURE` | `--fixture` |
-| `SEAHAVEN_SEED` | `--seed` |
-| `SEAHAVEN_NOW` | `--now` |
-| `SEAHAVEN_RESET_OPTIONS` | `--reset-options` |
 
 Read [../serving_and_openenv.md](../serving_and_openenv.md#serving-one-world-to-an-mcp-client) for
 the `.mcp.json` that launches the command, and for what a client is and is not given.

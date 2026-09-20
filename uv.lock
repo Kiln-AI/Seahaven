@@ -1401,6 +1401,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+mcp = [
+    { name = "seahaven", extra = ["mcp"], marker = "extra == 'extra-8-seahaven-mcp'" },
+]
 serve = [
     { name = "seahaven", extra = ["serve"], marker = "extra == 'extra-8-seahaven-serve'" },
 ]
@@ -1408,9 +1411,10 @@ serve = [
 [package.metadata]
 requires-dist = [
     { name = "seahaven", editable = "." },
+    { name = "seahaven", extras = ["mcp"], marker = "extra == 'mcp'", editable = "." },
     { name = "seahaven", extras = ["serve"], marker = "extra == 'serve'", editable = "." },
 ]
-provides-extras = ["serve"]
+provides-extras = ["serve", "mcp"]
 
 [[package]]
 name = "py-key-value-aio"

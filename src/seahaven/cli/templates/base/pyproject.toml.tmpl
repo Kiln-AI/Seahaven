@@ -16,8 +16,20 @@ dependencies = ["$seahaven_requirement"]
 
 # The server and its client. Left out of the default install because openenv's
 # own dependency tree is large, and a world used in process never needs it.
+#
+# Each line re-exports one of the framework's extras, because `uv sync --extra
+# serve` in this directory resolves against this package's extras and not
+# seahaven's. `serve` and `mcp` cannot be installed together: openenv pins the
+# MCP SDK a major version below the one `seahaven mcp` is written against.
 [project.optional-dependencies]
 serve = ["seahaven[serve]"]
+mcp = ["seahaven[mcp]"]
+
+# Saying the two extras conflict is what keeps `uv lock` solvable: without this
+# table uv has to satisfy both at once, which no version of openenv and the MCP
+# SDK allows, and the lock fails rather than the install.
+[tool.uv]
+conflicts = [[{ extra = "serve" }, { extra = "mcp" }]]
 
 # Spelled out rather than left to the backend's default, because the module is
 # this world's name normalised the way `seahaven new` normalises it, which is not

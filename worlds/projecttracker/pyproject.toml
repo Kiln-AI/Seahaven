@@ -20,8 +20,16 @@ authors = [{ name = "Steve Cosman" }]
 # takes whatever `seahaven` the workspace has.
 dependencies = ["seahaven"]
 
+# Each line re-exports one of the framework's extras, because `uv sync --extra
+# serve` in this directory resolves against this package's extras and not
+# seahaven's. `serve` and `mcp` cannot be installed together: openenv pins the
+# MCP SDK a major version below the one `seahaven mcp` is written against. A
+# world outside this repository also declares that conflict itself, which is
+# what `seahaven new` writes; this one is a workspace member, so the root
+# `pyproject.toml`'s declaration already covers it.
 [project.optional-dependencies]
 serve = ["seahaven[serve]"]
+mcp = ["seahaven[mcp]"]
 
 [tool.uv.sources]
 seahaven = { workspace = true }

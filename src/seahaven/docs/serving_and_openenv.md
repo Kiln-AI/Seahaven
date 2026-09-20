@@ -609,33 +609,30 @@ document and no control tool.
 > disconnects or the process stops, and every row the tools wrote goes with it. Use this command for
 > short-term experimentation, not to keep data.
 
-The command needs Seahaven's `mcp` extra, which is the official MCP Python SDK. **The `mcp` extra
-and the `serve` extra cannot be installed together**: OpenEnv requires `fastmcp` 3.x, every
-`fastmcp` 3.x requires version 1 of that SDK, and `seahaven mcp` is written against version 2. An
-eval harness installs `serve` and an MCP client installs `mcp`, so neither audience pays for the
-conflict. The warning about [the `serve` extra](#install-the-serve-extra) applies here too: until
-Seahaven is published, install it from a checkout of the Seahaven repository.
+Two steps run a world in a client:
 
-```sh
-uv run seahaven mcp
-uv run seahaven mcp --fixture small_startup --seed 7
-```
-
-A client starts the command itself, from its configuration, and talks to the process over the
-process's stdin and stdout. This is an `.mcp.json` that serves the `notes` world from its
-`small_startup` fixture:
+1. `uv run --extra mcp seahaven mcp`, in the world's own directory, which is where the command
+   looks for the world. `--extra mcp` installs the MCP support into that project's `.venv`, so the
+   first run changes the environment, and `seahaven new` writes the `mcp = ["seahaven[mcp]"]` line
+   it needs. An environment holds the `mcp` extra or the `serve` extra and never both, and until
+   Seahaven is published both come from a checkout ([the `serve` extra](#install-the-serve-extra)
+   says how). The process then waits for a client, so Ctrl-C ends a run started by hand.
+2. Give a client that same command. The `.mcp.json` below is the whole configuration:
 
 ```json
 {
   "mcpServers": {
-    "notes": {
+    "project-tracker": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/notes", "seahaven", "mcp"],
-      "env": {"SEAHAVEN_FIXTURE": "small_startup", "SEAHAVEN_SEED": "7"}
+      "args": ["run", "--extra", "mcp", "seahaven", "mcp"]
     }
   }
 }
 ```
+
+A client starts the command in a directory of its own choosing, which is often not the world's, so
+add `"--directory", "/path/to/the/world"` to `args` before `"seahaven"` unless you know otherwise.
+Options of the command go in `args` after `"mcp"`, or in an `env` block.
 
 **This is not the road for an eval or an RL run.** There is no reset and no second episode. A
 harness that needs thousands of private instances uses `/ws` and `SeahavenClient`, where every

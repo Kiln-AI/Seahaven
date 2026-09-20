@@ -77,7 +77,7 @@ _SEAHAVEN_NAME = re.compile(r"\bseahaven((?:\.[A-Za-z_][A-Za-z0-9_]*)+)")
 # What a command line may carry in front of `seahaven` and still be a documented
 # invocation of it: the runner this repository uses, and its own options.
 _RUNNER_WORDS = frozenset({"uv", "run", "--no-sync", "--locked", "--frozen"})
-_RUNNER_OPTIONS_WITH_VALUES = frozenset({"--project", "--directory", "--python"})
+_RUNNER_OPTIONS_WITH_VALUES = frozenset({"--project", "--directory", "--python", "--extra"})
 
 
 @dataclass(frozen=True)
