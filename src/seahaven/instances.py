@@ -289,6 +289,7 @@ class Instance:
         caller_seed: int | None,
         fixture_files: Mapping[str, str] | None,
         startup: Mapping[str, Any],
+        control_tools: bool,
     ) -> None:
         self.id = id
         self.fixture = fixture
@@ -311,13 +312,17 @@ class Instance:
         # included; `None` for a blank instance. With `composition()` this is a
         # reader's lookup for the state the episode started from.
         self.fixture_files = dict(fixture_files) if fixture_files is not None else None
-        # The reset keywords beyond `fixture`, `seed`, `now` and `state_format`,
-        # already JSON-able: serialised at creation, so a keyword no document
-        # could carry is refused there rather than at `state()` time.
+        # The reset keywords beyond `fixture`, `seed`, `now`, `state_format` and
+        # `control_tools`, already JSON-able: serialised at creation, so a keyword
+        # no document could carry is refused there rather than at `state()` time.
         self.startup = dict(startup)
         # The format this instance answers in, fixed for its life, and the
         # formatter the root resolved it to when the instance was made.
         self.state_format = state_format
+        # Whether the framework's own tools are callable on this instance, fixed
+        # for its life. False and a control tool is a name this instance does not
+        # have (`_target`).
+        self.control_tools = control_tools
         self._formatter = formatter
         # The thread running a formatter on this instance, or `None`. A thread
         # id rather than a flag because `call` asks before taking the gate: only
@@ -637,9 +642,12 @@ class Instance:
         # own registry is where they are. Every other name the root registers is
         # in that list already.
         registered = self.world.tools.get(name)
-        if registered is None or not registered.control:
+        if registered is None or not registered.control or not self.control_tools:
             # An agent naming a tool that does not exist reads the answer: it is
-            # a tool error, not a framework one.
+            # a tool error, not a framework one. An instance made without
+            # `control_tools=True` answers a control tool's name in those same
+            # words: whether the name exists at all is not something a caller
+            # gets to learn by calling it.
             raise UnknownTool(name)
         return _Target(name, registered, composition.root)
 
@@ -985,6 +993,7 @@ class InstanceManager:
         now: str | datetime | None = None,
         state_format: str | None = None,
         episode_id: str | None = None,
+        control_tools: bool = False,
         startup_kwargs: Mapping[str, Any] | None = None,
     ) -> Instance:
         """Materialise an instance from a fixture, or from the world's DDL.
@@ -999,6 +1008,10 @@ class InstanceManager:
         of the root world's pin, and `episode_id` the id every document of the
         episode reports; over OpenEnv `reset` mints one before the instance
         exists, and in process the instance id is it.
+
+        `control_tools` makes the framework's own tools callable on this
+        instance. Off unless the caller asks: they are the harness's way in, and
+        an instance that did not ask for them refuses their names as unknown.
         """
         world = self._world
         kwargs = startup_kwargs or {}
@@ -1065,6 +1078,7 @@ class InstanceManager:
                 caller_seed=seed,
                 fixture_files=_fixture_files(fixture),
                 startup=startup,
+                control_tools=control_tools,
             )
             # One activation for the whole of creation, so a root hook's handles
             # stay live across every hook that runs after it.

@@ -80,7 +80,7 @@ def seed(instance: Instance) -> None:
 @pytest.fixture
 def searching(tmp_path: Path) -> Any:
     world = searching_world(tmp_path)
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         seed(instance)
         yield instance
 

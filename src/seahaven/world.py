@@ -75,11 +75,12 @@ RESERVED_TOOL_NAMES = frozenset({"close", "reset", "state", "step"})
 
 # The framework's own tool (`control.py`). It is registered on every world,
 # bypasses the chain and is never listed; a world registering its name is refused
-# whether or not it is registered yet.
+# whether or not it is registered yet. Registration is not permission: an
+# instance calls it only when it was made with `control_tools=True`.
 CONTROL_TOOL_NAMES = frozenset({"controller_run_sql"})
 
 # `reset`'s own arguments, which a startup hook therefore cannot take.
-RESET_ARGUMENTS = frozenset({"fixture", "now", "seed", "state_format"})
+RESET_ARGUMENTS = frozenset({"control_tools", "fixture", "now", "seed", "state_format"})
 
 FIXTURES_DIRNAME = "fixtures"
 SQL_SUFFIX = ".sql"
@@ -187,9 +188,10 @@ class World:
         self._manager: InstanceManager | None = None
         self._manager_lock = threading.Lock()
         # The framework's own tool, on every world and before anything the world
-        # registers: `Instance.call` reaches it through the registry like any
-        # tool, `Instance.tools()` filters it out of the listing, and a world
-        # that registers its name is refused by `_add`.
+        # registers: an instance made with `control_tools=True` reaches it
+        # through the registry like any tool, `Instance.tools()` filters it out
+        # of the listing, and a world that registers its name is refused by
+        # `_add`.
         for tool in control.TOOLS:
             # A world nobody holds yet cannot be in anyone's tree, so registering
             # the framework's own tool on it invalidates no sealed
@@ -491,15 +493,20 @@ class World:
         seed: int | None = None,
         now: str | datetime | None = None,
         state_format: str | None = None,
+        control_tools: bool = False,
         **startup_kwargs: Any,
     ) -> Instance:
         """Make a live instance: a private copy of a fixture, or a blank one.
 
         `now` sets a blank instance's clock and is refused with a fixture, which
         carries its own. `state_format` answers in another of this world's
-        formats for this instance alone, in place of the world's pin. Everything
-        else keyword is passed to the startup hooks that named it. The instance
-        is a context manager and leaving the block destroys it.
+        formats for this instance alone, in place of the world's pin.
+        `control_tools=True` makes the framework's own tools -- the deprecated
+        `controller_run_sql` -- callable on this instance; without it they are
+        not callable at all, and their names answer `UnknownTool` like any name
+        the world does not have. Everything else keyword is passed to the startup
+        hooks that named it. The instance is a context manager and leaving the
+        block destroys it.
 
         Never from inside a tool call: a handler that wants another world reaches
         it through `ctx.worlds`, and a world that made its own instance would be
@@ -515,6 +522,7 @@ class World:
             seed=seed,
             now=now,
             state_format=state_format,
+            control_tools=control_tools,
             startup_kwargs=startup_kwargs,
         )
 

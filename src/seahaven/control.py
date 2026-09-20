@@ -6,6 +6,12 @@ world's error handler, the per-call transaction and the concurrency gate. An eva
 asking what an instance holds wants the real answer and the real message, and it
 must not have to wait behind the agent's queue to get one.
 
+Registration is not permission. Only an instance made with
+`world.instance(..., control_tools=True)` can call one; on every other instance
+the name answers `UnknownTool`, in the words any name the world does not have
+earns. The registration is what lets `World._add` keep refusing a world that
+tries to register the name itself.
+
 It is deprecated: `inst.state()` is what an eval reads now, and every call
 through here warns. It is a thin wrapper -- a read-only handle on the instance is
 what it reads through -- and it writes no SQL of its own. It covers a composite

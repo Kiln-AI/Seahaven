@@ -76,7 +76,7 @@ every format, built in or your own.
 | `episode_id` | Over a server, the session's episode id: the one `reset` was given, or the one it minted. In process an instance is an episode, so it is the instance id |
 | `seed` | The `seed=` the caller gave, or `null`. Not the derived per-instance seed |
 | `now` | The instance's frozen clock as an ISO-8601 instant, the same string `inst.clock.iso()` answers |
-| `startup` | The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as JSON at instance creation. A hook receives the value the caller passed; the document carries that value's JSON rendering, so a `datetime` or a model is text or an object here. Empty when there were none |
+| `startup` | The reset keywords beyond `fixture`, `seed`, `now`, `state_format` and `control_tools`, rendered as JSON at instance creation. A hook receives the value the caller passed; the document carries that value's JSON rendering, so a `datetime` or a model is text or an object here. Empty when there were none |
 | `call_count` | How many calls have been dispatched to the instance. The last call's ordinal is one less. Over a server this is **not** `step_count`, which counts tool listings as well |
 | `state` | The formatter's output, and the only part of the document `format` describes |
 
@@ -338,8 +338,9 @@ assert [
 ]
 ```
 
-`state_format` is a reserved reset keyword, beside `fixture`, `seed` and `now`: a startup hook that
-names a parameter `state_format` is refused at registration, and the keyword never reaches a hook.
+`state_format` is a reserved reset keyword, beside `fixture`, `seed`, `now` and `control_tools`: a
+startup hook that names a parameter `state_format` is refused at registration, and the keyword never
+reaches a hook.
 
 When a bad name is caught depends on what is wrong with it. A name that is not spelled
 `<family>/<major>` is refused at `World(...)`, and so is a `seahaven.` name the framework does not

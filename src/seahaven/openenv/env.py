@@ -48,12 +48,11 @@ from seahaven.errors import (
     INTERNAL_ERROR_MESSAGE,
     SeahavenError,
     ToolError,
-    UnknownTool,
     WorldBug,
 )
 from seahaven.instances import Instance
 from seahaven.state import document
-from seahaven.world import CONTROL_TOOL_NAMES, World
+from seahaven.world import World
 
 __all__ = [
     "FileRef",
@@ -344,6 +343,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         fixture: str | None = None,
         now: str | None = None,
         state_format: str | None = None,
+        control_tools: Any = None,
         **startup_kwargs: Any,
     ) -> Observation:
         """Start an episode: a fresh instance, and the session's previous one gone.
@@ -366,6 +366,12 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         set: everything here is passed straight through, including any startup
         keyword. `state_format` is keyword-only and named, like `fixture`, `seed`
         and `now`, so it can never fall into `**startup_kwargs` and reach a hook.
+
+        `control_tools` is named for that reason and for one more: the instance
+        takes the server's own `include_control_tools` and never the client's
+        word. A reset message carrying `control_tools` binds here, where it is
+        read by nothing, rather than turning the framework's own tools on for
+        whoever asked.
 
         The old instance is destroyed *before* the new one is made, so the
         session never holds two at once. A creation that then fails leaves the
@@ -391,6 +397,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
             now=now,
             state_format=state_format,
             episode_id=episode_id or str(uuid.uuid4()),
+            control_tools=self.include_control_tools,
             startup_kwargs=startup_kwargs,
         )
         self._instance = instance
@@ -416,9 +423,10 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         whatever `include_control_tools` says -- the flag makes them *callable*,
         never advertised.
 
-        A `CallToolAction` needs an instance, and naming a control tool without
-        the flag is refused as `UnknownTool` before dispatch, in the same words an
-        unregistered name earns: an agent must not be able to tell the two apart.
+        A `CallToolAction` needs an instance, and naming a control tool on a
+        session the flag did not start is refused by the instance as
+        `UnknownTool`, in the same words an unregistered name earns: an agent
+        must not be able to tell the two apart.
 
         `timeout_s` is accepted and ignored. Seahaven does not bound a call, and a
         bound that silently did nothing would be worse than none.
@@ -534,11 +542,6 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         # count that did not means it failed before it reached the world.
         dispatched_before = instance.call_count
         try:
-            if name in CONTROL_TOOL_NAMES and not self.include_control_tools:
-                # Before dispatch, and in the same words as a name the world does
-                # not have: whether this server was started with the flag is not
-                # something an agent gets to learn by calling.
-                raise UnknownTool(name)
             # `Instance.call` answers with the object the tool returned, so that
             # a host tool handed a model is handed a model (architecture section
             # 8.4); this is the layer that owes the wire its rendering. A world's

@@ -618,6 +618,20 @@ def test_the_control_tool_is_callable_with_the_flag_and_never_listed(world: Worl
         assert [(record["table"], record["op"]) for record in logged] == [("notes", "insert")]
 
 
+def test_a_reset_that_asks_for_control_tools_over_the_wire_does_not_get_them(
+    world: World,
+) -> None:
+    """The flag is the operator's, and a client sending the keyword is not the operator."""
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(control_tools=True)
+        observation = env.call("controller_run_sql", sql="SELECT 1")
+        assert observation.seahaven_error == {
+            "code": "unknown_tool",
+            "message": "unknown tool: controller_run_sql",
+            "details": {"name": "controller_run_sql"},
+        }
+
+
 def test_the_control_tool_is_unknown_without_the_flag(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         env.reset()

@@ -75,7 +75,7 @@ seahaven serve --host 127.0.0.1 --port 9000
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
 | `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the deprecated control tool callable over the wire; [reference/cli.md](reference/cli.md) names it |
+| `--include-control-tools` | off | make each session's instance one that can call the deprecated control tool; without the flag the name is an unknown tool. [reference/cli.md](reference/cli.md) names it |
 | `--no-console` | off | do not serve the web console at `/console` |
 | `--world module:attr` | the convention | which world to serve |
 
@@ -308,7 +308,7 @@ envelope field of the document is a typed field on the model:
 | `fixture` | `FixtureRef \| None` | the fixture's `id`, and `nodes` keyed by the same path; `null` for a blank instance |
 | `episode_id`, `now` | `str \| None` | the episode id `reset` was given or minted, and the instance clock |
 | `seed` | `int \| None` | the seed `reset` was given |
-| `startup` | `dict[str, Any] \| None` | the reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as JSON at instance creation |
+| `startup` | `dict[str, Any] \| None` | the reset keywords beyond `fixture`, `seed`, `now`, `state_format` and `control_tools`, rendered as JSON at instance creation |
 | `call_count` | `int` | how many calls were dispatched |
 | `state` | `dict[str, Any]` | the formatter's output, left untyped because its shape is the format's |
 | `step_count` | `int` | OpenEnv's count of everything the session asked for, tool listings included. Not `call_count` |
