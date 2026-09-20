@@ -33,6 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 serve = ["openenv>=0.5.0,<0.6"]
+mcp = ["mcp>=2.2,<3"]
 
 [project.scripts]
 seahaven = "seahaven.cli:main"
@@ -61,6 +62,17 @@ dev = [
     "seahaven-xmlrpc",
     "ty>=0.0.1a21",
 ]
+
+# `serve` and `mcp` cannot be installed together, and saying so here is what
+# keeps `uv lock` solvable. `openenv` requires `fastmcp>=3,<4`, every `fastmcp`
+# 3.x requires `mcp>=1.24,<2`, and `seahaven.mcp` is written against the 2.x
+# lower-level server API, which 1.x does not have. Declaring the conflict locks
+# both majors -- 1.30 under `serve`, 2.2 under `mcp` -- and refuses a sync that
+# asks for both. The conflict dissolves when an `openenv` release accepts
+# `fastmcp` 4.x, which is the first to take `mcp` 2.x; the extras can then be
+# synced together again and this table goes.
+[tool.uv]
+conflicts = [[{ extra = "serve" }, { extra = "mcp" }]]
 
 [tool.uv.workspace]
 members = ["worlds/*", "extensions/*"]

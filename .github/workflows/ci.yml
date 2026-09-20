@@ -19,7 +19,10 @@ jobs:
 
       # `--extra serve` installs OpenEnv, which the `seahaven.openenv` module and
       # its tests need. Without it the type check and the transport tests would
-      # be skipped here and run nowhere.
+      # be skipped here and run nowhere. `--extra mcp` cannot join it: the two
+      # extras are declared as conflicting in `pyproject.toml`, because OpenEnv
+      # pins the MCP SDK to 1.x and `seahaven.mcp` needs 2.x. The `mcp` job
+      # below is that extra's environment.
       - name: Install the project
         run: uv sync --locked --extra serve
 
@@ -36,8 +39,14 @@ jobs:
       - name: Lint
         run: uv run ruff check
 
+      # `ty` resolves imports against the environment it runs in, so neither
+      # environment can check the whole tree: `seahaven.mcp` does not resolve
+      # here, and `seahaven.openenv` does not resolve in the `mcp` job. The two
+      # jobs split the tree between them -- what this run excludes is exactly
+      # what the other one includes -- and `tests/test_ci_workflow.py` reads
+      # both lines out of this file and fails when a path falls between them.
       - name: Types
-        run: uv run ty check
+        run: uv run ty check -c 'src.exclude=["src/seahaven/mcp", "tests/test_mcp_server.py", "tests/test_mcp_process.py"]'
 
       - name: Tests
         run: uv run pytest
@@ -55,11 +64,51 @@ jobs:
         run: uv run pytest extensions/seahaven-xmlrpc
 
       # Seahaven is vendored into other people's products: nothing it installs
-      # at runtime is copyleft. The gate covers every extra the project declares,
-      # so it has to run in the environment the `--extra serve` sync above built
-      # -- an extra whose licences cannot be read is not cleared, it fails.
+      # at runtime is copyleft. The gate is named the extra this job synced, and
+      # reads the base closure plus that extra -- an extra whose licences cannot
+      # be read is not cleared, it fails. Every declared extra is named by one
+      # job or another, which `tests/test_licence_check.py` asserts against this
+      # file.
       - name: Dependency licences
-        run: uv run python scripts/check_licences.py
+        run: uv run python scripts/check_licences.py serve
+
+  # The second environment. `serve` and `mcp` are conflicting extras and no
+  # environment can hold both, so the MCP extra gets a job of its own: the same
+  # framework suite, which skips what needs OpenEnv, and the licence gate for
+  # the tree this extra ships.
+  mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and Python 3.14
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --locked --extra mcp
+
+      # The other half of the type check: the paths the `check` job excludes,
+      # named as arguments, because only a path argument narrows what `ty`
+      # walks. They arrive in phases 2 and 3 and `ty` exits 2 on a path that is
+      # not there yet, so the step checks the ones that exist and says so when
+      # there are none. Phase 2 then needs no edit here.
+      - name: Types
+        run: |
+          paths=$(ls -d src/seahaven/mcp tests/test_mcp_server.py tests/test_mcp_process.py 2>/dev/null || true)
+          if [ -z "$paths" ]; then
+            echo "nothing on the mcp side of the split yet"
+          else
+            uv run ty check $paths
+          fi
+
+      - name: Tests
+        run: uv run pytest
+
+      - name: Dependency licences
+        run: uv run python scripts/check_licences.py mcp
 
   # The web console is a separate toolchain in `ui/`, and what ships is the
   # built file vendored at `src/seahaven/openenv/console/index.html`. Without

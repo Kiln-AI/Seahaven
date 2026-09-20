@@ -397,6 +397,34 @@ def test_the_description_is_kept_as_given_and_carried_by_a_copy(tmp_path: Path) 
     )
 
 
+def test_the_mcp_server_instructions_are_kept_as_given_and_carried_by_a_copy(
+    tmp_path: Path,
+) -> None:
+    """The MCP `instructions` string, verbatim, and `None` when it is not given.
+
+    A free string like `description`, and unvalidated for the same reason. A
+    blank string is accepted here and falls back where the server builds the
+    instructions, which is where the fallback is pinned.
+    """
+    world = World(
+        "w",
+        "1.0.0",
+        SCHEMA,
+        fixtures_dir=tmp_path,
+        state_format=PIN,
+        mcp_server_instructions="  Search before you write.  ",
+    )
+
+    assert world.mcp_server_instructions == "  Search before you write.  "
+    assert copy.copy(world).mcp_server_instructions == "  Search before you write.  "
+    bare = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
+    assert bare.mcp_server_instructions is None
+    blank = World(
+        "w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN, mcp_server_instructions=""
+    )
+    assert blank.mcp_server_instructions == ""
+
+
 def test_the_registry_is_ordered_and_read_only(world: World) -> None:
     world.tool(echo)
 

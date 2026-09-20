@@ -127,6 +127,7 @@ class World:
         *,
         state_format: str | None = None,
         description: str | None = None,
+        mcp_server_instructions: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
@@ -153,6 +154,13 @@ class World:
         # nothing for a rule to protect. `None` -- and, at publication, a string
         # that is blank -- means the fallback, `Seahaven world <name>`.
         self.description = description
+        # The MCP `instructions` string, returned verbatim by `seahaven mcp` and
+        # read by nothing else in the framework. A free string, unvalidated for
+        # the same reason as `description`: it is the author's own prose, and it
+        # never becomes a path, a filename or an identifier. `None` -- and a
+        # string that is blank -- means the server builds a default from the
+        # world's name and description instead.
+        self.mcp_server_instructions = mcp_server_instructions
         self.fixtures_dir = (
             Path(fixtures_dir)
             if fixtures_dir is not None

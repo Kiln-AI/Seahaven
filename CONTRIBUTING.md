@@ -22,12 +22,24 @@ CI runs these, and all of them must pass before you open a pull request:
 ```sh
 uv run ruff format --check
 uv run ruff check
-uv run ty check
+uv run ty check -c 'src.exclude=["src/seahaven/mcp", "tests/test_mcp_server.py", "tests/test_mcp_process.py"]'
 uv run pytest                              # the framework
 uv run pytest worlds/projecttracker        # the reference world
 uv run pytest extensions/seahaven-xmlrpc   # the example extension
-uv run python scripts/check_licences.py
+uv run python scripts/check_licences.py serve
 ```
+
+`serve` and `mcp` are conflicting extras, so the second environment is a second run:
+
+```sh
+uv sync --extra mcp
+uv run pytest
+uv run python scripts/check_licences.py mcp
+uv sync --extra serve                      # back to the everyday one
+```
+
+The type check is split between the two environments, because `ty` resolves imports against the one
+it runs in. The line above walks everything but the MCP paths, and CI's `mcp` job checks those.
 
 ## Guidelines
 

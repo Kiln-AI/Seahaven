@@ -259,15 +259,66 @@ four lines go, and no test changes.
 ```toml
 [project.optional-dependencies]
 mcp = ["mcp>=2.2,<3"]
+
+[tool.uv]
+conflicts = [[{ extra = "serve" }, { extra = "mcp" }]]
 ```
 
-`uv.lock` is regenerated. `scripts/check_licences.py` covers every declared extra and runs in CI in
-the environment the sync built, so the workflow's `uv sync --locked --extra serve` becomes
-`--extra serve --extra mcp`; otherwise the new tree is never licence-checked. `mcp` is MIT and
-`mcp-types` is MIT; the rest of the tree is checked by the script rather than by assertion here, and
-a copyleft transitive dependency stops the extra rather than being worked around.
+`uv.lock` is regenerated and carries both majors of `mcp`: 1.30 under `serve`, 2.2 under `mcp`.
+The conflict is `functional_spec.md` §9 — `openenv` pins `fastmcp` 3.x, which pins `mcp` 1.x —
+and it decides the shape of CI. **Two jobs, two environments:**
 
-CI asserts the extra imports, beside the line that does it for `serve`:
+| Job | Syncs | Runs |
+|---|---|---|
+| `check` | `--extra serve` | everything it runs today, the type check minus this project's paths, and `check_licences.py serve` |
+| `mcp` | `--extra mcp` | the type check of this project's paths, `uv run pytest`, `import seahaven.mcp`, `check_licences.py mcp` |
+
+**The type check is split by path, and the two halves are a partition.** `ty` resolves imports
+against the environment it runs in, so neither environment can check the whole tree: `seahaven.mcp`
+does not resolve where `serve` is synced, and `seahaven.openenv` does not resolve where `mcp` is.
+Three paths are this project's — `src/seahaven/mcp`, `tests/test_mcp_server.py` and
+`tests/test_mcp_process.py` — and each job names them, once to drop them and once to take them.
+
+The `check` job, and the line a person runs, drops them with a configuration override:
+
+```sh
+uv run ty check -c 'src.exclude=["src/seahaven/mcp", "tests/test_mcp_server.py", "tests/test_mcp_process.py"]'
+```
+
+The `mcp` job takes them as **path arguments**, which is the only thing that narrows what `ty`
+walks: `-c 'src.include=[...]'` does not, and a job that used it would silently check the whole tree
+and fail on OpenEnv's imports. `ty` exits 2 on a path that does not exist, and these arrive in
+phases 2 and 3, so the step checks the ones that are there:
+
+```sh
+paths=$(ls -d src/seahaven/mcp tests/test_mcp_server.py tests/test_mcp_process.py 2>/dev/null || true)
+if [ -z "$paths" ]; then echo "nothing on the mcp side of the split yet"; else uv run ty check $paths; fi
+```
+
+Both lines ship in phase 1, so phases 2 and 3 add their files and are type-checked with no edit to
+the workflow. `tests/test_cli_mcp.py` is in neither list: it imports no SDK, so the `check` job
+checks it with everything else, and it runs in both environments.
+
+A path dropped from one job without being taken by the other is checked by nobody, and `ty` reports
+no such gap — both jobs pass and the file is never read. `tests/test_ci_workflow.py` reads both
+lines out of the workflow and is what fails instead: the two lists must name the same paths, a file
+that imports the SDK must be on the `mcp` side, a file that imports OpenEnv must not be, and
+`AGENTS.md` and `CONTRIBUTING.md` must carry the line a person runs. A phase that adds a module
+importing the SDK adds its path to both lists, or that test fails.
+
+`scripts/check_licences.py` is told which extras to audit, because one environment can no longer
+read both trees. Named, it is strict: an extra whose requirements this environment does not meet
+fails rather than being read. That check is on the version and not only on the distribution name,
+because `serve` brings a distribution called `mcp` and a name-only check would clear 1.30 and report
+the `mcp` extra as audited. Run bare, it audits what is installed and names what it could not read,
+which is the developer's run. `tests/test_licence_check.py` asserts that every declared extra is
+named by some job in the workflow file, so an extra added without a job is caught.
+
+`mcp` is MIT and `mcp-types` is MIT; the rest of the tree is checked by the script rather than by
+assertion here, and a copyleft transitive dependency stops the extra rather than being worked
+around.
+
+The `mcp` job asserts the extra imports, the way `check` does for `serve`:
 
 ```yaml
 - name: The mcp extra imports
@@ -277,6 +328,25 @@ CI asserts the extra imports, beside the line that does it for `serve`:
 That line exists because the tests below skip when the extra is absent, and an installed extra that
 skips quietly is a green run that tested none of this — the reasoning `tests/test_cli_serve.py`
 already records for `seahaven.openenv`.
+
+**The skip guard is version-aware, and `pytest.importorskip("mcp")` is not enough.** An environment
+synced for `serve` has `mcp` 1.30 installed transitively, so a bare import guard does not skip
+there: it imports the wrong major and the tests fail on a missing attribute. Phases 2 and 3 put one
+guard in `tests/conftest.py` and use it in the two files that import the SDK —
+`tests/test_cli_mcp.py` imports none and runs in both environments:
+
+```py
+def mcp_sdk() -> ModuleType:
+    """The MCP SDK, or a skip: `serve`'s environment has 1.x, which cannot serve this."""
+    pytest.importorskip("mcp")
+    # `mcp.server.context` is where 2.x keeps `ServerRequestContext`, and 1.30
+    # has no such module. The guard asks what the SDK can do, not what its
+    # version string says.
+    return pytest.importorskip("mcp.server.context")
+```
+
+Verified both ways: `mcp.server.context` imports under the `mcp` extra and does not exist under
+`serve`'s transitive 1.30.
 
 ## 11. Tests
 
@@ -288,14 +358,14 @@ as `tests/test_cli_serve.py` replaces `openenv.serve`. Covers the whole of §3: 
 variable, flag beats variable, every mixing refusal and its message, bad JSON, a JSON document that
 is not an object, a non-integer seed, the random seed and its stderr line, and `MISSING_EXTRA`.
 
-**`tests/test_mcp_server.py`** — the SDK in process, `pytest.importorskip("mcp")`. Builds the server
-against a world from `tests/worlds/`, drives it through the SDK's own client over an in-memory
-stream pair, and covers: the tool list against `instance.tools()`, a successful call's text and
-`structuredContent`, a scalar result with no `structuredContent`, each row of the error table, the
-control tool refusal, a failed `initialize` and its unscrubbed message, `instructions_for` in its
-three forms, and the session map with two sessions open at once.
+**`tests/test_mcp_server.py`** — the SDK in process, behind §10's `mcp_sdk()` guard. Builds the
+server against a world from `tests/worlds/`, drives it through the SDK's own client over an
+in-memory stream pair, and covers: the tool list against `instance.tools()`, a successful call's
+text and `structuredContent`, a scalar result with no `structuredContent`, each row of the error
+table, the control tool refusal, a failed `initialize` and its unscrubbed message,
+`instructions_for` in its three forms, and the session map with two sessions open at once.
 
-**`tests/test_mcp_process.py`** — the real entry point, `pytest.importorskip("mcp")`. Spawns
+**`tests/test_mcp_process.py`** — the real entry point, behind §10's `mcp_sdk()` guard. Spawns
 `seahaven mcp` as a subprocess against a test world and talks to it with the SDK client over stdio,
 per `AGENTS.md`: a unit test that never left the process is not evidence here. Covers: the
 handshake,

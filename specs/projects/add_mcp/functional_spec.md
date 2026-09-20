@@ -286,9 +286,27 @@ mcp = ["mcp>=2.2,<3"]
 The official SDK, on its lower-level server API. `fastmcp` depends on `mcp` anyway and adds
 composition, proxying and OpenAPI generation this command has no use for.
 
-The extra is independent of `serve`. `seahaven mcp` imports no `openenv`, and `seahaven serve` needs
-no `mcp`. Running the OpenEnv server to hold a single session would add uvicorn, a WebSocket to
+No code is shared with `serve`: `seahaven mcp` imports no `openenv`, and `seahaven serve` needs no
+`mcp`. Running the OpenEnv server to hold a single session would add uvicorn, a WebSocket to
 ourselves, and the whole session manager for one instance.
+
+**The two extras cannot be installed together**, which phase 1 found and this paragraph records.
+`openenv` requires `fastmcp>=3,<4`, and every `fastmcp` 3.x requires `mcp>=1.24,<2`, which is the
+major before the lower-level server API of §14. `pip install "seahaven[serve,mcp]"` has no
+solution, so `pyproject.toml` declares the conflict:
+
+```toml
+[tool.uv]
+conflicts = [[{ extra = "serve" }, { extra = "mcp" }]]
+```
+
+`uv.lock` then carries both majors, one per extra, and a sync that asks for both is refused with a
+message naming them. The conflict dissolves when an `openenv` release accepts `fastmcp` 4.x, which
+is the first to take `mcp` 2.x: the declaration is deleted and nothing else changes.
+
+A user installs one extra or the other. That is no loss for either audience — an eval harness
+installs `seahaven[serve]` and an MCP client installs `seahaven[mcp]` — and it costs this
+repository a second CI environment, which `architecture.md` §10 lays out.
 
 Missing extra is one line on stderr and exit 1, checked before the world is, in the same shape
 `serve` uses:
@@ -299,7 +317,14 @@ seahaven mcp needs the mcp extra: pip install "seahaven[mcp]"
 
 `scripts/check_licences.py` is a gate on this project: `mcp` is MIT, but its transitive tree must
 pass the script as well. If anything in that tree is copyleft, the extra does not ship as specified
-and the architecture step says so rather than working around the script.
+and the architecture step says so rather than working around the script. It passes: every
+distribution the `mcp` extra brings is MIT, BSD-3-Clause, Apache-2.0, MIT-0, or `Apache-2.0 OR
+BSD-3-Clause`, which the script reads term by term.
+
+Because no environment holds both extras, the script is told which extras to audit
+(`check_licences.py mcp`), one CI job each, and the union covers every extra the project declares.
+An extra named in an environment that does not have it fails rather than reading a tree that
+happens to share a distribution name.
 
 ## 10. Where the work lands
 

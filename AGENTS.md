@@ -66,18 +66,37 @@ uv sync --extra serve
 
 ## Automated checks
 
-These are what CI runs. All of them must be clean before any commit:
+These are what CI runs. All of them must be clean before any commit. There are two environments,
+because `serve` and `mcp` are conflicting extras and no environment can hold both:
 
 ```sh
+uv sync --extra serve
 uv run python -c "import seahaven.openenv"
 uv run ruff format --check
 uv run ruff check
-uv run ty check
+uv run ty check -c 'src.exclude=["src/seahaven/mcp", "tests/test_mcp_server.py", "tests/test_mcp_process.py"]'
 uv run pytest                              # the framework
 uv run pytest worlds/projecttracker        # the reference world
 uv run pytest extensions/seahaven-xmlrpc   # the example extension
-uv run python scripts/check_licences.py
+uv run python scripts/check_licences.py serve
 ```
+
+```sh
+uv sync --extra mcp
+uv run pytest                              # the framework again, on the other extra
+uv run python scripts/check_licences.py mcp
+```
+
+End on the sync you want to keep working in; `uv sync --extra serve` is the everyday one. The
+licence gate is named the extra the environment holds, and naming one the environment does not hold
+fails rather than reading the wrong tree. Run it bare to audit what is installed and be told what
+was not read.
+
+`ty` resolves imports against the environment it runs in, so the type check is split as well: the
+line above walks the whole tree except the MCP paths, and CI's `mcp` job checks those paths in the
+other environment. Copy that line rather than running `ty check` bare. A new module that imports
+the MCP SDK goes on the `mcp` side of the split, in both places `.github/workflows/ci.yml` names
+them -- `tests/test_ci_workflow.py` fails when the two lists disagree.
 
 The three suites are separate because a world and an extension are separate packages with their own
 pytest rootdir. `ruff format` also formats Python blocks inside Markdown, and

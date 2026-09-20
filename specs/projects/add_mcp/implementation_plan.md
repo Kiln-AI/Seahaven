@@ -8,7 +8,7 @@ Four phases. Each is a reviewable unit that leaves the repository green.
 
 ## Phases
 
-- [ ] **Phase 1: The extra, and the world's instructions.** The `mcp` extra in `pyproject.toml` and
+- [x] **Phase 1: The extra, and the world's instructions.** The `mcp` extra in `pyproject.toml` and
       a regenerated `uv.lock`; `World(..., mcp_server_instructions=...)`; `reference/api.md` and the
       `authoring.md` line telling an author cloning a real MCP server to set it. Nothing imports the
       SDK yet. `scripts/check_licences.py` passes on the new tree, or the phase stops and says so

@@ -1,13 +1,14 @@
 # Authoring a world
 
-This is the long page. It covers the package layout, the state format a world pins, tools,
-arguments, results, transactions, errors, the error handler, middleware, startup hooks, the schema
-files, and the things that go wrong quietly.
+This is the long page. It covers the package layout, the state format a world pins, the
+instructions an MCP client reads, tools, arguments, results, transactions, errors, the error
+handler, middleware, startup hooks, the schema files, and the things that go wrong quietly.
 
 | Section | What it covers |
 |---|---|
 | [Scaffolding a world](#scaffolding-a-world) | `seahaven new`, the layout it writes, and three rules about it |
 | [Pinning a state format](#pinning-a-state-format) | The one `World` argument with no default |
+| [Instructions for an MCP client](#instructions-for-an-mcp-client) | The server instruction string a world writes |
 | [Writing a tool](#writing-a-tool) | Signatures, arguments, results, transactions, and what registration refuses |
 | [Errors](#errors) | This world's error shapes, the framework's own, and the error handler |
 | [Middleware](#middleware) | Wrapping every call |
@@ -104,6 +105,31 @@ Three things follow from the pin, and each of them catches an author out once:
   and the keyword never reaches a hook.
 - **Changing the pin changes what every eval built on the world saves**, so bump `world.version`
   when you change it. These docs recommend it; nothing enforces it.
+
+## Instructions for an MCP client
+
+`World(mcp_server_instructions=...)` is the instruction string an MCP client reads before it calls
+any of this world's tools. It is optional. A world that is never served over MCP does not set it,
+and a world that sets it to nothing, or to a blank string, gets instructions built from its name and
+its description instead.
+
+```py
+world = seahaven.World(
+    name="notes",
+    version="1.0.0",
+    schema=seahaven.sql_files(__package__, "schema"),
+    state_format="seahaven.state/1",
+    mcp_server_instructions=(
+        "Notes keeps short notes for one person. Search before you write: a note that already "
+        "exists is edited, not written again."
+    ),
+)
+```
+
+**A world that emulates a real product has this string to copy.** Read the instructions the real
+product's own MCP server sends, and write those. The value is yours and the framework adds nothing
+to it, so an agent that reads it sees the product and not Seahaven. The argument is a free string,
+unvalidated like `description`: it never becomes a path, a filename or an identifier.
 
 ## Writing a tool
 
