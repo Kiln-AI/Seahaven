@@ -23,8 +23,10 @@ from seahaven.cli.mcp import (
     CONVENIENCE,
     GENERAL_VARIABLE,
     MISSING_EXTRA,
+    RESET_OPTION_KEYS,
     SEED_CEILING,
     SEED_LINE,
+    WITHHELD,
 )
 from tests.conftest import WORLDS, CliResult, run_cli
 
@@ -137,14 +139,19 @@ def test_a_variable_set_to_nothing_is_not_a_value(
 def test_reset_options_are_passed_whole(
     calls: list[Call], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The general door: a world's own startup keyword has no flag and needs none."""
-    assert (
-        serve_mcp(
-            capsys, "--reset-options", '{"fixture": "small_startup", "seed": 7, "region": "eu"}'
-        ).code
-        == 0
-    )
-    assert calls[0].reset_options == {"fixture": "small_startup", "seed": 7, "region": "eu"}
+    """The general door: a world's own startup keyword has no flag and needs none.
+
+    A startup keyword travels inside `"startup"`, which is the namespace
+    `world.instance()` gives a world's own keywords.
+    """
+    given = '{"fixture": "small_startup", "seed": 7, "startup": {"region": "eu"}}'
+
+    assert serve_mcp(capsys, "--reset-options", given).code == 0
+    assert calls[0].reset_options == {
+        "fixture": "small_startup",
+        "seed": 7,
+        "startup": {"region": "eu"},
+    }
 
 
 def test_the_general_variable_is_passed_whole(
@@ -245,6 +252,89 @@ def test_reset_options_that_are_not_an_object_are_refused(
     assert result.err.startswith(f"--reset-options takes a JSON object, not {named}:")
 
 
+def test_reset_options_take_the_keyword_arguments_of_world_instance() -> None:
+    """The accepted keys are read off the signature, not written out twice."""
+    assert sorted(RESET_OPTION_KEYS) == ["fixture", "now", "seed", "startup", "state_format"]
+    assert WITHHELD not in RESET_OPTION_KEYS
+
+
+@pytest.mark.parametrize(
+    "document",
+    ['{"region": "eu"}', '{"fixture": "small_startup", "region": "eu"}'],
+    ids=["alone", "beside a keyword that is taken"],
+)
+def test_a_key_world_instance_does_not_take_is_refused(
+    calls: list[Call], capsys: pytest.CaptureFixture[str], document: str
+) -> None:
+    """A world's own startup keyword at the top level, which is where it used to go.
+
+    `world.instance()` would answer it with a `TypeError` once the client had
+    connected, so the message is owed here, and it names the namespace the
+    keyword moved into.
+    """
+    result = serve_mcp(capsys, "--reset-options", document)
+
+    assert (result.code, calls) == (1, [])
+    assert result.err.strip() == (
+        '--reset-options does not take "region"; world.instance() takes "fixture", "now", '
+        '"seed", "startup" and "state_format", and a world\'s own startup keywords go inside '
+        '"startup": --reset-options \'{"fixture": "small_startup", "startup": '
+        '{"user_id": "u_12"}}\''
+    )
+
+
+def test_every_key_world_instance_does_not_take_is_named(
+    calls: list[Call], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One launch, one refusal: a user fixing them one at a time would relaunch three times."""
+    result = serve_mcp(capsys, "--reset-options", '{"region": "eu", "user_id": "u_12"}')
+
+    assert (result.code, calls) == (1, [])
+    assert result.err.startswith('--reset-options does not take "region" and "user_id";')
+
+
+def test_the_general_variable_names_itself_when_a_key_is_refused(
+    calls: list[Call], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A message about a flag is no help to somebody who set the variable months ago."""
+    monkeypatch.setenv(GENERAL_VARIABLE, '{"region": "eu"}')
+
+    result = serve_mcp(capsys)
+
+    assert (result.code, calls) == (1, [])
+    assert result.err.startswith(f'{GENERAL_VARIABLE} does not take "region";')
+
+
+def test_control_tools_are_not_offered_through_the_general_door(
+    calls: list[Call], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`world.instance()` takes `control_tools`; this command withholds it.
+
+    `seahaven serve` has `--include-control-tools` because a harness drives the
+    server it started. `seahaven mcp` has no such flag, and a general door onto
+    `world.instance()` must not become one.
+    """
+    result = serve_mcp(capsys, "--reset-options", '{"control_tools": true}')
+
+    assert (result.code, calls) == (1, [])
+    assert result.err.strip() == (
+        '--reset-options does not take "control_tools": seahaven mcp publishes the world\'s '
+        "own tools and nothing else, and nothing reaching an MCP client may run SQL "
+        "against the world"
+    )
+
+
+@pytest.mark.parametrize("value", ["true", "false"], ids=["on", "off"])
+def test_control_tools_are_refused_whatever_they_are_set_to(
+    calls: list[Call], capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    """Refused rather than accepted and ignored, so nobody reads a launch as an opt-in."""
+    result = serve_mcp(capsys, "--reset-options", f'{{"control_tools": {value}}}')
+
+    assert (result.code, calls) == (1, [])
+    assert 'does not take "control_tools"' in result.err
+
+
 def test_a_seed_that_is_not_an_integer_is_refused(
     calls: list[Call], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -331,10 +421,10 @@ def test_the_general_door_without_a_seed_still_gets_a_random_one(
     calls: list[Call], capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A seed through any door, and no seed through any door is one of this command's."""
-    result = serve_mcp(capsys, "--reset-options", '{"region": "eu"}')
+    result = serve_mcp(capsys, "--reset-options", '{"startup": {"region": "eu"}}')
 
     assert result.code == 0
-    assert calls[0].reset_options["region"] == "eu"
+    assert calls[0].reset_options["startup"] == {"region": "eu"}
     assert isinstance(calls[0].seed, int)
     assert 0 <= calls[0].seed < SEED_CEILING
     assert result.err.strip() == SEED_LINE.format(seed=calls[0].seed)

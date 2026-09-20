@@ -286,9 +286,10 @@ def test_a_tool_error_is_an_is_error_result_carrying_the_triple(project: Project
 def test_a_control_tool_is_answered_as_an_unknown_tool(project: Project) -> None:
     """Nothing that reaches an MCP client may run arbitrary SQL against the world.
 
-    Written against the behaviour and not the mechanism, so it passes whether
-    the refusal comes from the interim filter or from `functional_spec.md` §15's
-    change to core.
+    The refusal is the framework's: the instance is made without
+    `control_tools`, and a control tool's name then earns `UnknownTool` in the
+    same words a name the world does not have earns. Nothing in `seahaven/mcp/`
+    filters the name.
     """
 
     async def work(client: Client) -> tuple[list[str], types.CallToolResult]:
@@ -340,13 +341,19 @@ def test_the_environment_variables_reach_the_instance(project: Project) -> None:
 
 
 def test_reset_options_reach_a_startup_hook(project: Project) -> None:
-    """The general door: a keyword of the world's own, which no flag spells."""
+    """The general door: a keyword of the world's own, which no flag spells.
+
+    A startup keyword travels inside `"startup"`, the namespace `world.instance()`
+    gives a world's own keywords, and a key at the top level is refused.
+    """
 
     async def work(client: Client) -> Any:
         return answered(await client.call_tool("shop", {}))
 
+    given = '{"startup": {"region": "eu"}, "seed": 7}'
+
     assert talk(project, work)["region"] == "us"
-    assert talk(project, work, "--reset-options", '{"region": "eu", "seed": 7}')["region"] == "eu"
+    assert talk(project, work, "--reset-options", given)["region"] == "eu"
 
 
 def test_two_calls_in_flight_serialise(project: Project) -> None:
@@ -541,6 +548,46 @@ def test_a_refusal_is_one_line_on_stderr_and_exit_one(project: Project) -> None:
         "SEAHAVEN_RESET_OPTIONS JSON instead"
     ]
     # Nothing was served, so the world was never imported and nothing was made.
+    assert finished.out == ""
+    assert project.living() == []
+
+
+def test_a_startup_keyword_at_the_top_level_is_refused_before_anything_is_served(
+    project: Project,
+) -> None:
+    """`--reset-options` names what `world.instance()` takes, and a world's own keyword is not one.
+
+    The message names `"startup"`, because that is where a world's own keywords
+    moved to. Without this refusal the key reaches `world.instance()` after the
+    client has connected, and the user reads a `TypeError` instead.
+    """
+    finished = run_command(project, "--reset-options", '{"region": "eu"}')
+
+    assert finished.code == 1
+    assert finished.err.splitlines() == [
+        '--reset-options does not take "region"; world.instance() takes "fixture", "now", '
+        '"seed", "startup" and "state_format", and a world\'s own startup keywords go inside '
+        '"startup": --reset-options \'{"fixture": "small_startup", "startup": '
+        '{"user_id": "u_12"}}\''
+    ]
+    assert finished.out == ""
+    assert project.living() == []
+
+
+def test_control_tools_cannot_be_turned_on_through_the_general_door(project: Project) -> None:
+    """`control_tools` is a keyword `world.instance()` takes and this command withholds.
+
+    `seahaven serve` has `--include-control-tools`; `seahaven mcp` has no such
+    flag, and the general door is not a way around that.
+    """
+    finished = run_command(project, "--reset-options", '{"control_tools": true}')
+
+    assert finished.code == 1
+    assert finished.err.splitlines() == [
+        '--reset-options does not take "control_tools": seahaven mcp publishes the world\'s '
+        "own tools and nothing else, and nothing reaching an MCP client may run SQL "
+        "against the world"
+    ]
     assert finished.out == ""
     assert project.living() == []
 

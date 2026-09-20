@@ -15,9 +15,17 @@ the whole of what `world.instance()` is called with; `--fixture`, `--seed` and
 `--now` are convenience spellings of three of its keys, because JSON inside an
 `.mcp.json` args array is painful to quote. Combining the two is refused rather
 than merged: a user who has to reason about which fixture wins has already lost.
+
+**A world's own startup keywords go inside `"startup"`,** which is the namespace
+`world.instance()` gives them. A key the signature does not name is refused
+here, on the command line, rather than reaching the client as a `TypeError`
+after the process has started. `control_tools` is the one keyword the signature
+does name and this command withholds, because an MCP client is what is being
+kept away from arbitrary SQL.
 """
 
 import argparse
+import inspect
 import json
 import os
 import random
@@ -27,21 +35,47 @@ from dataclasses import dataclass
 from typing import Any
 
 from seahaven.cli import CliError, add_world_option, check_world_option, find_world
+from seahaven.world import World
 
-__all__ = ["MISSING_EXTRA", "Options", "add_parser", "resolve_options", "run"]
+__all__ = [
+    "MISSING_EXTRA",
+    "RESET_OPTION_KEYS",
+    "WITHHELD",
+    "Options",
+    "add_parser",
+    "resolve_options",
+    "run",
+]
 
 MISSING_EXTRA = 'seahaven mcp needs the mcp extra: pip install "seahaven[mcp]"'
 
-# The three keys of `world.RESET_ARGUMENTS` that are common enough to have a flag
-# of their own, and the variable each one answers to. `state_format` is not here:
-# the state document is not published over MCP, so the format it would be
-# rendered in has no reader (`functional_spec.md` §2.1).
+# The three keyword arguments of `world.instance()` that are common enough to
+# have a flag of their own, and the variable each one answers to. `state_format`
+# is not here: the state document is not published over MCP, so the format it
+# would be rendered in has no reader (`functional_spec.md` §2.1).
 CONVENIENCE = {"fixture": "SEAHAVEN_FIXTURE", "seed": "SEAHAVEN_SEED", "now": "SEAHAVEN_NOW"}
 
 # The general door: a JSON object passed to `world.instance()` whole, which is
-# how a world's own startup keywords are reached.
+# how a world's own startup keywords are reached, inside `"startup"`.
 GENERAL_FLAG = "--reset-options"
 GENERAL_VARIABLE = "SEAHAVEN_RESET_OPTIONS"
+
+# `seahaven mcp` publishes the world's own tools and nothing else
+# (`functional_spec.md` §1), so this one keyword argument of `world.instance()`
+# is not offered. `seahaven serve` has `--include-control-tools` because a
+# harness drives the server it started; an MCP client is the thing being kept
+# away from arbitrary SQL, and a general door is not the place to hand it over.
+WITHHELD = "control_tools"
+
+# The keys a `--reset-options` object may name. Read off the signature of
+# `world.instance()` rather than written out, so a keyword argument the
+# framework adds is one this command takes without an edit here.
+RESET_OPTION_KEYS = frozenset(
+    name
+    for name, parameter in inspect.signature(World.instance).parameters.items()
+    if name not in {"self", WITHHELD}
+    and parameter.kind in {parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY}
+)
 
 # The seed this command picks when the user gave none, drawn below this. A signed
 # 32-bit range, which is wide enough that two launches never collide and narrow
@@ -53,6 +87,9 @@ SEED_CEILING = 2**31
 SEED_LINE = "no seed was given, so this run uses --seed {seed}"
 
 _EXAMPLE = """--reset-options '{"fixture": "small_startup", "seed": 7}'"""
+_STARTUP_EXAMPLE = (
+    """--reset-options '{"fixture": "small_startup", "startup": {"user_id": "u_12"}}'"""
+)
 
 
 @dataclass(frozen=True)
@@ -222,7 +259,7 @@ def _english(items: list[str]) -> str:
 
 
 def _object(given: _Given) -> dict[str, Any]:
-    """A `--reset-options` document, which has to be a JSON object."""
+    """A `--reset-options` document, which has to be a JSON object `world.instance()` takes."""
     try:
         document = json.loads(given.value)
     except json.JSONDecodeError as error:
@@ -232,7 +269,37 @@ def _object(given: _Given) -> dict[str, Any]:
             f"{given.spelling} takes a JSON object, not {type(document).__name__}: "
             f"{_EXAMPLE} names the keyword arguments world.instance() is called with"
         )
+    _check_keys(given, document)
     return document
+
+
+def _check_keys(given: _Given, document: dict[str, Any]) -> None:
+    """Refuse the withheld keyword, and a key `world.instance()` does not take.
+
+    The check is on the command line and not at instance creation, where
+    `world.instance()` answers an unknown keyword with a `TypeError` once the
+    client has already connected. A user who misspells a key is looking at their
+    own command line and is owed the answer before anything is served.
+
+    `"startup"` is named in the message because a world's own keyword is the key
+    most likely to be written at the top level: startup keywords sat there until
+    they were given a namespace of their own.
+    """
+    if WITHHELD in document:
+        raise CliError(
+            f'{given.spelling} does not take "{WITHHELD}": seahaven mcp publishes the world\'s '
+            "own tools and nothing else, and nothing reaching an MCP client may run SQL "
+            "against the world"
+        )
+    unknown = sorted(set(document) - RESET_OPTION_KEYS)
+    if not unknown:
+        return
+    named = _english([f'"{key}"' for key in unknown])
+    takes = _english([f'"{key}"' for key in sorted(RESET_OPTION_KEYS)])
+    raise CliError(
+        f"{given.spelling} does not take {named}; world.instance() takes {takes}, and a "
+        f'world\'s own startup keywords go inside "startup": {_STARTUP_EXAMPLE}'
+    )
 
 
 def _seed(given: _Given) -> int:

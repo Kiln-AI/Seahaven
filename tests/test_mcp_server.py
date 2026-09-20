@@ -363,7 +363,11 @@ def test_a_name_the_world_does_not_have_is_an_is_error_result(served: Served) ->
 
 
 def test_a_control_tool_is_answered_as_an_unknown_tool(served: Served) -> None:
-    """Written against the behaviour, so `functional_spec.md` §15 changes nothing here."""
+    """The instance is made without control tools, so its name is a name the world lacks.
+
+    Nothing in `seahaven/mcp/` filters the name. The refusal is the framework's,
+    in the words any unknown name earns.
+    """
 
     async def work(client: Client) -> types.CallToolResult:
         return await call(client, "controller_run_sql", sql="SELECT 1")
@@ -373,6 +377,30 @@ def test_a_control_tool_is_answered_as_an_unknown_tool(served: Served) -> None:
         "message": "unknown tool: controller_run_sql",
         "details": {"name": "controller_run_sql"},
     }
+
+
+@pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+def test_a_control_tool_answers_when_the_instance_was_made_with_them(tmp_path: Path) -> None:
+    """What proves the refusal above is the instance's and not a filter of this server's.
+
+    A harness building a server in process may make an instance that has control
+    tools, as it may call `world.instance(control_tools=True)` itself. The
+    `seahaven mcp` command cannot: it refuses the keyword on its own command
+    line (`tests/test_mcp_process.py`).
+    """
+    ready = serve_world(build_world(tmp_path), control_tools=True)
+
+    async def work(client: Client) -> types.CallToolResult:
+        return await call(client, "controller_run_sql", sql="SELECT 1 AS n")
+
+    try:
+        result = ready.talk(work)
+    finally:
+        ready.sessions.close_all()
+
+    assert result.is_error is False, text(result)
+    answer = json.loads(text(result))
+    assert (answer["columns"], answer["rows"]) == (["n"], [[1]])
 
 
 def test_arguments_the_schema_refuses_are_an_is_error_result(served: Served) -> None:

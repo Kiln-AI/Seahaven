@@ -668,11 +668,20 @@ can see it. Left out, the world is found by the convention every other command u
 directory the process starts in.
 
 `--fixture`, `--seed` and `--now` are convenience spellings of three of the keyword arguments
-`world.instance()` takes. `--reset-options` is a JSON object passed to `world.instance()` whole,
-which is how a startup hook's own keywords are reached. The two may not be combined: a command that
-gives both is refused rather than merged, because a user who has to work out which fixture wins has
-already lost. [reference/cli.md](reference/cli.md#seahaven-mcp) has every option, every variable and
-every refusal, and `seahaven mcp -h` prints them.
+`world.instance()` takes. `--reset-options` is a JSON object of those keyword arguments, passed
+whole, and a startup hook's own keywords are reached inside `"startup"`, the same namespace
+[a reset message uses](#sessions-and-instances):
+
+```sh
+seahaven mcp --reset-options '{"fixture": "small_startup", "startup": {"user_id": "u_12"}}'
+```
+
+The convenience flags and `--reset-options` may not be combined: a command that gives both is
+refused rather than merged, because a user who has to work out which fixture wins has already lost.
+A key `world.instance()` does not take is refused as well, on the command line, so a startup keyword
+written at the top level says so before anything is served.
+[reference/cli.md](reference/cli.md#seahaven-mcp) has every option, every variable and every
+refusal, and `seahaven mcp -h` prints them.
 
 ### The seed is random unless you give one
 
@@ -694,9 +703,9 @@ unless `--now` says otherwise, whatever the seed is.
 ### One instance, and no reset
 
 The instance is created while the client connects, and not when the process starts. A fixture that
-does not exist, a reset option no startup hook names, or a hook that raises then reaches the client
-as an error saying what is wrong, rather than as a pipe that closed. A process that could not make
-its instance answers that error and exits 1.
+does not exist, a startup keyword no startup hook names, or a hook that raises then reaches the
+client as an error saying what is wrong, rather than as a pipe that closed. A process that could
+not make its instance answers that error and exits 1.
 
 After that the connection keeps the one instance it has. There is no reset tool and no second
 episode, so restarting the server in your client is how you get a fresh world. The instance is
@@ -708,6 +717,14 @@ instance's working directory and its copy of the fixture with it.
 No resources, no prompts, no control tool, and no state document. `Instance.state()`,
 `Instance.call_log()` and `Instance.change_log()` are not reachable over MCP at all.
 
+The control tool is withheld by the instance and not by a filter of the server's.
+`world.instance()` takes `control_tools=True` to make it callable, and `seahaven mcp` never passes
+that keyword: `"control_tools"` is the one keyword argument `--reset-options` refuses rather than
+passes on. The control tool's name is therefore an unknown tool on the instance, and a `tools/call`
+naming it is answered with the words any name the world does not have earns. There is no
+`--include-control-tools` here; `serve` has that flag because a harness drives the server it
+started, and an MCP client is the thing being kept away from arbitrary SQL.
+
 The state document is how an episode is graded. A client that exposes resources to the model would
 hand the agent its own grade, and a client that does not would still put a Seahaven-shaped object in
 front of a user who came for the emulated product. An eval reads the document over `/ws`, where the
@@ -716,8 +733,9 @@ reader is the eval and not the agent.
 ### When something goes wrong
 
 - **A wrong command line** is one line on stderr and exit 1, before anything is served:
-  `--reset-options` that is not a JSON object, a `--seed` that is not an integer, a `--world` that
-  is not `module:attr`, and a convenience flag given together with `--reset-options`.
+  `--reset-options` that is not a JSON object, one that names a key `world.instance()` does not
+  take, a `--seed` that is not an integer, a `--world` that is not `module:attr`, and a convenience
+  flag given together with `--reset-options`.
 - **A world that could not be imported, or an instance that could not be made**, is answered as a
   JSON-RPC error carrying what actually went wrong, and the process then exits 1.
 - **A tool failure** is a result with `isError` set, carrying the world's own `{code, message,

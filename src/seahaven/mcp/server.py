@@ -8,6 +8,12 @@ raises reaches the client as a JSON-RPC error instead of a broken pipe
 The server publishes tools and nothing else: no resources, no prompts, no
 control tool, no state document. What a client sees is the world's own surface,
 and nothing on it is about Seahaven (`functional_spec.md` §1).
+
+Control tools need no filter here. An instance is made with `control_tools`
+false unless `reset_options` says otherwise, and an instance made without it
+answers a control tool's name with `UnknownTool`, in the same words a name the
+world does not have earns. `seahaven mcp` refuses the keyword on the command
+line, so the command can never make an instance that has them.
 """
 
 import functools
@@ -24,10 +30,10 @@ from mcp.server.lowlevel import Server
 from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR
 
-from seahaven.errors import INTERNAL_ERROR_MESSAGE, SeahavenError, ToolError, UnknownTool, WorldBug
+from seahaven.errors import INTERNAL_ERROR_MESSAGE, SeahavenError, ToolError, WorldBug
 from seahaven.instances import Instance
 from seahaven.mcp import wire
-from seahaven.world import CONTROL_TOOL_NAMES, World
+from seahaven.world import World
 
 __all__ = [
     "NEEDS_AN_INSTANCE",
@@ -234,7 +240,7 @@ def build_server(
     async def on_list_tools(
         ctx: ServerRequestContext[None, Any], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
-        """The world's tools, and nothing else. Control tools are never listed.
+        """The world's tools, and nothing else. `Instance.tools()` never lists a control tool.
 
         The list is fixed for the life of the process, so it is never paginated
         and no `tools/list_changed` notification is ever sent.
@@ -250,7 +256,9 @@ def build_server(
         is data the agent reads and recovers from, a framework error is the
         author's and fails the frame with nothing in it, and an accident is
         answered with the fixed generic error. Only the two scrubbed rows can
-        carry an author's prose, and both send it to stderr instead.
+        carry an author's prose, and both send it to stderr instead. A control
+        tool's name is a `ToolError` like any other unknown name, refused by the
+        instance rather than by anything here.
 
         Several calls in flight are several worker threads, which queue on the
         instance's own lock: calls into one instance serialise, which is what
@@ -260,13 +268,6 @@ def build_server(
         name = params.name
         arguments = dict(params.arguments or {})
         try:
-            if name in CONTROL_TOOL_NAMES:
-                # The interim filter of `architecture.md` §9, in the same words a
-                # name the world does not have earns: whether a control tool
-                # exists is not something a client gets to learn by calling.
-                # `functional_spec.md` §15 makes control tools opt-in in core,
-                # and these three lines are what it deletes.
-                raise UnknownTool(name)
             result = await anyio.to_thread.run_sync(
                 functools.partial(instance.call, name, **arguments)
             )
