@@ -116,7 +116,9 @@ The MCP `instructions` string is the world's, not the framework's:
 
 - `World(..., mcp_server_instructions=...)` is a new optional constructor argument. When it is set,
   its value is returned verbatim, and nothing is added to it.
-- When it is unset or blank, the default is built from the world's name alone.
+- When it is unset or blank, the default is built from the world's `name` and its `description`.
+  Both are the author's own prose about the world, and neither carries anything about this process:
+  no fixture, no seed, no instance. A world with no `description` falls back to the name alone.
 
 A world author cloning a real MCP server reads that server's instructions and sets
 `mcp_server_instructions` to match. `authoring.md` says so, and `reference/api.md` documents the
@@ -161,12 +163,16 @@ On failure the server answers the error and then **exits non-zero**. It does not
 every later call: there is no instance, there never will be one in this process, and a server that
 answers `tools/list` with an empty list looks like a world with no tools.
 
-The error messages of `initialize` are **not scrubbed**. Elsewhere a framework error is replaced by
-a generic message and a correlation id, because an eval must not be able to read an author's prose
-out of an error (`errors.INTERNAL_ERROR_MESSAGE`). That reasoning does not reach here: at
-`initialize` no agent is in the loop, nothing has been graded, and the person who reads the message
-is the one who wrote the `.mcp.json` that launched the process. "fixture 'small_startupp' not found"
-is exactly what they need.
+The error messages of `initialize` are **not scrubbed**. A working world appears as the world it
+clones; a broken one says what is actually wrong, so the person who broke it can fix it. Nobody is
+being evaluated against a server that never started, the person reading the message is the one who
+wrote the `.mcp.json` that launched the process, and "fixture 'small_startupp' not found" is exactly
+what they need to see.
+
+A framework error *during* a session is still scrubbed to `internal error (<correlation id>)`
+(§5.5). There an agent is in the loop and an eval must not be able to read an author's prose out of
+an error (`errors.INTERNAL_ERROR_MESSAGE`); the real error and its traceback are on stderr, which
+is where the person debugging is already looking.
 
 ### 5.3 `tools/list`
 
@@ -196,11 +202,21 @@ whose text block carries the `{code, message, details}` triple, so the model can
 recover. This is the same split `SeahavenClient.call` already makes. JSON-RPC errors are reserved
 for framework and protocol failures.
 
-**Control tools are refused as unknown names.** `Instance.call` will dispatch `controller_run_sql`
-if asked — the gate lives at the wire layer, and this command is now a wire layer. A `tools/call`
-naming a control tool is answered with `UnknownTool`, in the same words as a name the world does not
-have, before dispatch. Whether a server was started with a control tool available is not something
-an agent gets to learn by calling.
+**Control tools are refused as unknown names.** This is not belt and braces. `controller_run_sql`
+is registered on **every** world (`control.py`), and `Instance._target` falls back to the root's own
+registry for a control tool, so `instance.call("controller_run_sql", sql=...)` works on any world in
+process. There is no flag to leave unset: `--include-control-tools` lives on the OpenEnv app, which
+decides whether the name reaches `Instance.call` at all, and this command is the layer that owes
+the same decision. A server that forwarded `tools/call` straight through would let any agent that
+guesses the name read every table directly, around the tool surface it is being evaluated against
+— and `controller_run_sql` is not a name the cloned product has.
+
+The call is read-only (the control tool runs on an inspection handle), so nothing can be corrupted
+this way. Reading is the whole of the problem.
+
+A `tools/call` naming a control tool is answered with `UnknownTool` before dispatch, in the same
+words as a name the world does not have. Whether a server has a control tool available is not
+something an agent gets to learn by calling.
 
 ### 5.5 Error taxonomy
 
@@ -344,7 +360,8 @@ this project has a history of defects that passed a unit test and failed on the 
 9. The option matrix: each flag, each variable, flag beats variable, and every mixing refusal of
    §2.3 with its message naming the sources actually given.
 10. No seed gives a random seed, two launches differ, and the seed reaches stderr.
-11. `mcp_server_instructions` set is returned verbatim; unset falls back to the name-only default.
+11. `mcp_server_instructions` set is returned verbatim; unset falls back to a default built from
+    the world's name and description; unset with no description falls back to the name alone.
 12. The session-to-instance map is exercised with more than one entry, so the stdio case is proved
     to be the degenerate case and not the only one the code supports.
 
