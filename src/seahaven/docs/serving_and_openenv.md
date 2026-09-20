@@ -79,7 +79,7 @@ seahaven serve --host 127.0.0.1 --port 9000
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
 | `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
-| `--include-control-tools` | off | make the deprecated control tool callable over the wire; [reference/cli.md](reference/cli.md) names it |
+| `--include-control-tools` | off | make each session's instance one that can call the deprecated control tool; without the flag the name is an unknown tool. [reference/cli.md](reference/cli.md) names it |
 | `--no-console` | off | do not serve the web console at `/console` |
 | `--world module:attr` | the convention | which world to serve |
 
@@ -114,11 +114,11 @@ for a server that should answer the protocol and nothing else.
 
 A WebSocket connection is one session, and one session holds one instance.
 
-- **`reset(fixture=..., seed=..., **startup_kwargs)`** creates the instance. `reset()` with no
-  fixture creates a blank instance from the schema, whose clock is wall time unless `now=` says
-  otherwise. Passing `now=` together with a fixture is refused, because the fixture carries its own
-  clock. Everything is passed straight to `world.instance(...)`, so the rules are the ones you
-  already know from running in process.
+- **`reset(fixture=..., seed=..., startup=...)`** creates the instance. `reset()` with no fixture
+  creates a blank instance from the schema, whose clock is wall time unless `now=` says otherwise.
+  Passing `now=` together with a fixture is refused, because the fixture carries its own clock.
+  Everything is passed straight to `world.instance(...)`, so the rules are the ones you already know
+  from running in process.
 - **A second `reset`** destroys the current instance before making the new one, so a session never
   holds two. If creation then fails, the session is left exactly as a fresh one — no instance, no
   episode, no steps — and is open for another `reset`.
@@ -134,10 +134,21 @@ A WebSocket connection is one session, and one session holds one instance.
 | `now=` | the clock, for a blank instance only. A fixture carries its own, and `now=` with one is refused |
 | `episode_id=` | your own id for the episode, echoed back on `state` so a trajectory ties to your run |
 | `state_format=` | the format the `state` message answers in, in place of the world's pin ([state.md](state.md)) |
-| anything else | passed to the world's startup hooks, so a world can be set up per episode |
+| `startup=` | an object of the world's own startup keywords, passed to its startup hooks, so a world can be set up per episode |
 
 `reset` is therefore where a run is customised. One served world covers every scenario a fixture and
 a startup hook can express.
+
+The list above is every key a reset message can act on. OpenEnv has no reset schema of its own, so
+its server reads the signature of `SeahavenEnv.reset` and drops every other key before Seahaven sees
+it. One key is accepted and then ignored: `control_tools`, because the control tool is the
+operator's to enable with `--include-control-tools` and a client sending the key must not turn it
+on. A startup keyword goes inside `startup`, and a message that sends one at the top level reaches
+no hook:
+
+```jsonc
+{"fixture": "agency", "seed": 7, "startup": {"user_id": "u_12"}}
+```
 
 `reset` answers a plain OpenEnv `Observation`, not the shape of a tool call, because no tool was
 called. Its `metadata` carries `fixture`, `now` and `tools` (the fixture the instance was made from,
@@ -312,7 +323,7 @@ envelope field of the document is a typed field on the model:
 | `fixture` | `FixtureRef \| None` | the fixture's `id`, and `nodes` keyed by the same path; `null` for a blank instance |
 | `episode_id`, `now` | `str \| None` | the episode id `reset` was given or minted, and the instance clock |
 | `seed` | `int \| None` | the seed `reset` was given |
-| `startup` | `dict[str, Any] \| None` | the reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as JSON at instance creation |
+| `startup` | `dict[str, Any] \| None` | the world's own startup keywords, reset's `startup`, rendered as JSON at instance creation |
 | `call_count` | `int` | how many calls were dispatched |
 | `state` | `dict[str, Any]` | the formatter's output, left untyped because its shape is the format's |
 | `step_count` | `int` | OpenEnv's count of everything the session asked for, tool listings included. Not `call_count` |

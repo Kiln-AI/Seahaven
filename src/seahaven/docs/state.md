@@ -57,7 +57,7 @@ A document has two halves, and each half has its own owner.
   "episode_id": "…",
   "seed": 7,                                                   // as given; null if none
   "now": "2026-06-01T09:00:00.000Z",
-  "startup": {},                                               // the reset keywords, if any
+  "startup": {},                                               // the startup keywords, if any
   "call_count": 2,
   "state": {"db": {"log": [ … ]}}                              // the formatter's output
 }
@@ -76,7 +76,7 @@ every format, built in or your own.
 | `episode_id` | Over a server, the session's episode id: the one `reset` was given, or the one it minted. In process an instance is an episode, so it is the instance id |
 | `seed` | The `seed=` the caller gave, or `null`. Not the derived per-instance seed |
 | `now` | The instance's frozen clock as an ISO-8601 instant, the same string `inst.clock.iso()` answers |
-| `startup` | The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as JSON at instance creation. A hook receives the value the caller passed; the document carries that value's JSON rendering, so a `datetime` or a model is text or an object here. Empty when there were none |
+| `startup` | The world's own startup keywords — `world.instance(startup={...})`, or the same `startup` on `reset` — rendered as JSON at instance creation. A hook receives the value the caller passed; the document carries that value's JSON rendering, so a `datetime` or a model is text or an object here. Empty when there were none |
 | `call_count` | How many calls have been dispatched to the instance. The last call's ordinal is one less. Over a server this is **not** `step_count`, which counts tool listings as well |
 | `state` | The formatter's output, and the only part of the document `format` describes |
 
@@ -338,8 +338,9 @@ assert [
 ]
 ```
 
-`state_format` is a reserved reset keyword, beside `fixture`, `seed` and `now`: a startup hook that
-names a parameter `state_format` is refused at registration, and the keyword never reaches a hook.
+`state_format` is a parameter of `world.instance` and of `reset`, not a startup keyword, so it
+never reaches a hook. A hook is still free to name a parameter `state_format`: a startup keyword
+travels in `startup=`, where it cannot collide with a framework parameter.
 
 When a bad name is caught depends on what is wrong with it. A name that is not spelled
 `<family>/<major>` is refused at `World(...)`, and so is a `seahaven.` name the framework does not
@@ -520,9 +521,10 @@ with projecttracker.world.instance() as blank:
 ```
 
 For a blank instance, `fixture` is `null` and the starting state is the world's schema plus
-whatever the startup hooks wrote, with `startup` recording the keywords it was created with. **The
-format does not promise that starting state is reproducible.** A startup hook is ordinary world
-code and may read anything, and a blank instance's clock is wall time unless `now=` was given.
+whatever the startup hooks wrote, with `startup` recording the startup keywords it was created
+with. **The format does not promise that starting state is reproducible.** A startup hook is
+ordinary world code and may read anything, and a blank instance's clock is wall time unless `now=`
+was given.
 Grade against a frozen fixture when the starting state has to be pinned down.
 
 ## The compatibility contract

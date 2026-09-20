@@ -42,9 +42,9 @@ that maps its own failures registers its middleware *inside* the world's error h
 after it, since order is outermost first — so its errors are mapped before the generic handler sees
 what is left.
 
-**3. Instance startup.** An extension may export a hook the world registers, and may read `reset()`
-keyword arguments through it. Spell the parameters out; a `**kwargs` hook switches off
-unknown-argument detection for the whole world.
+**3. Instance startup.** An extension may export a hook the world registers, and may read startup
+keywords through it. Spell the parameters out; a `**kwargs` hook switches off unknown-keyword
+detection for the whole world.
 
 **4. Schema text.** An extension that needs a table exports a `CREATE TABLE` string the world
 concatenates into its schema:
@@ -78,8 +78,9 @@ errors (`WorldBug`, `ToolError`, `ArgumentError`, `DbError`, `UnknownTool`).
 - **Register itself.** The world registers what it wants, by name, in its own `__init__`. An
   extension that registered itself on import would make a world's tool surface depend on its import
   order.
-- **Set `control`.** That flag is Seahaven's own, for its control tool, and
-  `Tool.from_function` cannot set it.
+- **Set `control`.** That flag is Seahaven's own, for its control tool, which is listed nowhere and
+  is callable only on an instance made with `control_tools=True`. `Tool.from_function` cannot set
+  it.
 
 ## The worked example: XML-RPC
 

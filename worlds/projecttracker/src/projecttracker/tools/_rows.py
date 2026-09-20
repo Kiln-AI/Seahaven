@@ -150,12 +150,12 @@ def attach_labels(ctx: seahaven.Ctx, issues: Sequence[dict[str, Any]]) -> list[d
 def resolve_actor(ctx: seahaven.Ctx, actor_id: str | None) -> str:
     """Who is making this write: the `actor_id` given, else the instance's viewer.
 
-    The viewer is what `reset(user_id=...)` put in `ctx.state` (`startup.py`), so
-    an eval that says who it is driving the tracker as need not repeat it on every
-    call, and one that drives several people names each of them per call. With
-    neither, there is no one to attribute the write to and the product refuses --
-    which is the case `empty` starts in, because a tracker with no users has no
-    viewer to fall back to.
+    The viewer is what the `user_id` startup keyword put in `ctx.state`
+    (`startup.py`), so an eval that says who it is driving the tracker as need not
+    repeat it on every call, and one that drives several people names each of them
+    per call. With neither, there is no one to attribute the write to and the
+    product refuses -- which is the case `empty` starts in, because a tracker with
+    no users has no viewer to fall back to.
     """
     resolved = actor_id if actor_id is not None else ctx.state.get("viewer_id")
     if not resolved:

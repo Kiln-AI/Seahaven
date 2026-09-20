@@ -27,6 +27,7 @@ and ignored because Seahaven does not bound a call.
 
 import logging
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -48,12 +49,11 @@ from seahaven.errors import (
     INTERNAL_ERROR_MESSAGE,
     SeahavenError,
     ToolError,
-    UnknownTool,
     WorldBug,
 )
 from seahaven.instances import Instance
 from seahaven.state import document
-from seahaven.world import CONTROL_TOOL_NAMES, World
+from seahaven.world import World
 
 __all__ = [
     "FileRef",
@@ -285,9 +285,9 @@ class SeahavenState(State):
     startup: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "The reset keywords beyond `fixture`, `seed`, `now` and `state_format`, rendered as "
-            "JSON when the instance was created: a hook receives the caller's value and this "
-            "carries its JSON rendering. Empty when there were none, null before any reset."
+            "The world's own startup keywords -- reset's `startup` -- rendered as JSON when "
+            "the instance was created: a hook receives the caller's value and this carries its "
+            "JSON rendering. Empty when there were none, null before any reset."
         ),
     )
     call_count: int = Field(
@@ -336,7 +336,11 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         """The session's live instance, or `None` before the first `reset`."""
         return self._instance
 
-    def reset(
+    # OpenEnv's `Environment.reset` takes `**kwargs`, so narrowing it here is an
+    # override ty refuses on Liskov grounds. The narrowing is the point: OpenEnv's
+    # server introspects this signature and forwards every key a `**kwargs`
+    # signature accepts, which is every key the client sent.
+    def reset(  # ty: ignore[invalid-method-override]
         self,
         seed: int | None = None,
         episode_id: str | None = None,
@@ -344,7 +348,8 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         fixture: str | None = None,
         now: str | None = None,
         state_format: str | None = None,
-        **startup_kwargs: Any,
+        control_tools: Any = None,
+        startup: Mapping[str, Any] | None = None,
     ) -> Observation:
         """Start an episode: a fresh instance, and the session's previous one gone.
 
@@ -363,9 +368,21 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         episode's `state` message in another of the root world's formats, in
         place of the world's pin, and an unregistered one is refused before
         anything is copied. Those are the instance's own rules and not a second
-        set: everything here is passed straight through, including any startup
-        keyword. `state_format` is keyword-only and named, like `fixture`, `seed`
-        and `now`, so it can never fall into `**startup_kwargs` and reach a hook.
+        set: everything here is passed straight through, including `startup`,
+        the world's own keyword namespace.
+
+        This signature is the reset wire schema. OpenEnv has no schema of its
+        own for a reset message: its server introspects this method and drops
+        every key the signature does not name, so a parameter added here is a
+        key a client can send. `tests/test_env.py` pins the set for that reason.
+        A startup keyword therefore travels inside `startup`, and a client
+        sending one at the top level of the message is dropped before Seahaven
+        sees it.
+
+        `control_tools` is named so that a reset message carrying it binds here,
+        where it is read by nothing, rather than reaching a hook. The instance
+        takes the server's own `include_control_tools` and never the client's
+        word.
 
         The old instance is destroyed *before* the new one is made, so the
         session never holds two at once. A creation that then fails leaves the
@@ -391,7 +408,8 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
             now=now,
             state_format=state_format,
             episode_id=episode_id or str(uuid.uuid4()),
-            startup_kwargs=startup_kwargs,
+            control_tools=self.include_control_tools,
+            startup=startup,
         )
         self._instance = instance
         return Observation(
@@ -416,9 +434,10 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         whatever `include_control_tools` says -- the flag makes them *callable*,
         never advertised.
 
-        A `CallToolAction` needs an instance, and naming a control tool without
-        the flag is refused as `UnknownTool` before dispatch, in the same words an
-        unregistered name earns: an agent must not be able to tell the two apart.
+        A `CallToolAction` needs an instance, and naming a control tool on a
+        session the flag did not start is refused by the instance as
+        `UnknownTool`, in the same words an unregistered name earns: an agent
+        must not be able to tell the two apart.
 
         `timeout_s` is accepted and ignored. Seahaven does not bound a call, and a
         bound that silently did nothing would be worse than none.
@@ -534,11 +553,6 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         # count that did not means it failed before it reached the world.
         dispatched_before = instance.call_count
         try:
-            if name in CONTROL_TOOL_NAMES and not self.include_control_tools:
-                # Before dispatch, and in the same words as a name the world does
-                # not have: whether this server was started with the flag is not
-                # something an agent gets to learn by calling.
-                raise UnknownTool(name)
             # `Instance.call` answers with the object the tool returned, so that
             # a host tool handed a model is handed a model (architecture section
             # 8.4); this is the layer that owes the wire its rendering. A world's

@@ -276,15 +276,57 @@ def test_the_instance_seed_is_the_derived_one(world: World, seed: int | None) ->
         assert instance.ctx.instance.seed == instance.seed
 
 
-def test_an_unknown_startup_argument_is_refused_before_anything_is_copied(tmp_path: Path) -> None:
+def test_a_startup_keyword_named_like_a_framework_parameter_stays_the_worlds(
+    tmp_path: Path,
+) -> None:
+    """`startup=` is the world's namespace, so a name the framework also uses is the world's.
+
+    The hook reads `seed` as the caller spelled it inside `startup`, and the
+    instance's own seed is the `seed=` parameter, still an integer.
+    """
+    world = build_world(tmp_path)
+    seen: list[Any] = []
+
+    @world.instance_startup
+    def remember(ctx: Ctx, *, seed: Any = None) -> None:
+        """Name a framework parameter, which a hook is now free to do."""
+        seen.append(seed)
+
+    with world.instance(None, seed=7, startup={"seed": "not-an-int"}) as instance:
+        assert seen == ["not-an-int"]
+        assert instance.caller_seed == 7
+        assert instance.seed == instance_seed(world.name, 7)
+
+
+def test_an_unknown_startup_keyword_is_refused_before_anything_is_copied(tmp_path: Path) -> None:
     world = build_world(tmp_path)
 
     @world.instance_startup
     def seed(ctx: Ctx, *, owner: str = "nobody") -> None:
         ctx.state["owner"] = owner
 
-    with pytest.raises(WorldBug, match=r"unknown reset argument\(s\): \['onwer'\]"):
-        world.instance(None, onwer="alice")
+    with pytest.raises(WorldBug, match=r"unknown startup keyword\(s\): \['onwer'\]"):
+        world.instance(None, startup={"onwer": "alice"})
+
+    assert instance_dirs(world) == []
+
+
+@pytest.mark.parametrize("bad", ["oops", 5, 0, ["owner"]])
+def test_a_startup_that_is_not_a_dict_is_refused(tmp_path: Path, bad: Any) -> None:
+    """`startup=` is a value a client sends, so a bad one is refused in words.
+
+    A `**kwargs` hook takes the name check out of the picture, so what is left is
+    the shape check. Without it a string is read as a collection of its
+    characters and a number is not iterable at all.
+    """
+    world = build_world(tmp_path)
+
+    @world.instance_startup
+    def anything(ctx: Ctx, **kwargs: Any) -> None:
+        """Take everything, so the refusal cannot come from the unknown-keyword check."""
+
+    with pytest.raises(WorldBug, match="startup= takes a dict"):
+        world.instance(None, startup=bad)
 
     assert instance_dirs(world) == []
 
@@ -296,7 +338,7 @@ def test_a_hook_taking_kwargs_accepts_anything(tmp_path: Path) -> None:
     def seed(ctx: Ctx, **kwargs: Any) -> None:
         ctx.state.update(kwargs)
 
-    with world.instance(None, anything="at all") as instance:
+    with world.instance(None, startup={"anything": "at all"}) as instance:
         assert instance.ctx.state == {"anything": "at all"}
 
 
@@ -312,7 +354,7 @@ def test_hooks_run_in_order_each_with_only_what_it_accepts(tmp_path: Path) -> No
     def second(ctx: Ctx, *, plan: str = "free") -> None:
         seen.append(("second", {"plan": plan}))
 
-    with world.instance(None, owner="alice"):
+    with world.instance(None, startup={"owner": "alice"}):
         pass
 
     assert seen == [("first", {"owner": "alice"}), ("second", {"plan": "free"})]
@@ -374,7 +416,7 @@ def test_what_a_hook_puts_in_state_is_there_for_every_call(tmp_path: Path) -> No
     def whose(ctx: Ctx) -> dict[str, str]:
         return {"owner": ctx.state["owner"]}
 
-    with world.instance(None, owner="alice") as instance:
+    with world.instance(None, startup={"owner": "alice"}) as instance:
         assert instance.call("whose") == {"owner": "alice"}
         assert instance.call("whose") == {"owner": "alice"}
 
@@ -395,7 +437,7 @@ def test_tools_never_lists_a_control_tool(world: World) -> None:
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         assert "peek" not in {tool["name"] for tool in instance.tools()}
         assert instance.call("peek") == {"seen": 1}
 
@@ -519,7 +561,7 @@ def test_a_control_tool_bypasses_the_chain(world: World) -> None:
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         assert instance.call("peek") == {"peeked": True}
         instance.call("now")
 
@@ -533,7 +575,7 @@ def test_a_control_tool_validates_its_arguments(world: World) -> None:
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         assert instance.call("peek", limit=3) == {"limit": 3}
         with pytest.raises(ArgumentError):
             instance.call("peek", limit="three")
@@ -559,7 +601,7 @@ def test_a_control_tool_is_called_with_exactly_the_validated_arguments(world: Wo
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         # The wire name reaches the parameter it aliases, and the default the
         # tool declared reaches it too.
         assert instance.call("peek", max=7) == {"limit": 7}
@@ -583,7 +625,10 @@ def test_a_control_tools_result_is_held_to_the_rules_every_result_is(
 
     world.tool(control_tool(peek))
 
-    with world.instance(None) as instance, pytest.raises(WorldBug, match=refusal):
+    with (
+        world.instance(None, control_tools=True) as instance,
+        pytest.raises(WorldBug, match=refusal),
+    ):
         instance.call("peek")
 
 
@@ -605,7 +650,7 @@ def test_a_control_tool_may_read_the_instance_it_is_called_on(world: World) -> N
 
     world.tool(control_tool(peek_rows))
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         add(instance, "n1")
 
         assert instance.call("peek_rows", sql="SELECT id FROM notes") == [{"id": "n1"}]
@@ -791,7 +836,7 @@ def test_a_control_tool_passes_an_exhausted_gate(tmp_path: Path) -> None:
     world.tool(control_tool(peek))
 
     set_concurrency(1)
-    with world.instance(None) as first, world.instance(None) as second:
+    with world.instance(None) as first, world.instance(None, control_tools=True) as second:
         caller = Caller(lambda: first.call("slow"))
         caller.start()
         assert inside.wait(WAIT)

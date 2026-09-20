@@ -202,12 +202,13 @@ def test_a_control_tools_function_is_not_reachable_by_reference(tmp_path: Path) 
         """Name the framework's own tool on the world this one adds."""
         ctx.worlds.leaf.call(run_sql, sql="SELECT 1")
 
-    with host.instance(None) as live:
+    with host.instance(None, control_tools=True) as live:
         with pytest.raises(WorldBug, match="is not a tool"):
             live.call(host.tools["controller_run_sql"].fn, sql="SELECT 1")
         with pytest.raises(WorldBug, match="is not a tool of world 'leaf'"):
             live.call("reach")
-        # By name on the instance they still run: it is the harness's own way in.
+        # By name on an instance that asked for them they still run: it is the
+        # harness's own way in, and a reference is not.
         assert live.call("controller_run_sql", sql="SELECT 1")["rows"] == [[1]]
 
 

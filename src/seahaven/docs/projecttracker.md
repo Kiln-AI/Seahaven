@@ -167,13 +167,13 @@ and no tool will change a field of it again. `add_comment` is the deliberate exc
 freezes the issue, not the conversation about it. "Read-only" is therefore the wrong word for it,
 and the world's own notes avoid it.
 
-**The viewer.** `world.instance(fixture, user_id=...)` — `reset(user_id=...)` over a server — names
-who the session is driving the tracker as. `startup.py` puts it in `ctx.state["viewer_id"]`, falling
-back to the workspace's first admin. Every write takes an optional `actor_id` which wins, so one run
-can have two people writing without two instances. A write with neither, in a workspace with no
-admin such as a blank instance or `empty`, is `INVALID_INPUT`. A `user_id` naming nobody is a
-`WorldBug` rather than a product error, because it comes from the eval's `reset` and not from the
-agent.
+**The viewer.** `world.instance(fixture, startup={"user_id": ...})`, and the same `startup` on
+`reset` over a server, names who the session is driving the tracker as. `startup.py` puts it in
+`ctx.state["viewer_id"]`, falling back to the workspace's first admin. Every write takes an optional
+`actor_id` which wins, so one run can have two people writing without two instances. A write with
+neither, in a workspace with no admin such as a blank instance or `empty`, is `INVALID_INPUT`. A
+`user_id` naming nobody is a `WorldBug` rather than a product error, because it comes from the
+eval's `reset` and not from the agent.
 
 **Order within one run.** The clock does not move, so every row one run writes shares a
 `created_at`. Reading `issue_events` in the order things happened means `ORDER BY created_at,

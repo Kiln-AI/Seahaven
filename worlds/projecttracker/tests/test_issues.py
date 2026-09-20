@@ -422,7 +422,7 @@ def test_the_forty_first_issue_of_the_small_startup_is_eng_41(
     )
 
 
-@pytest.mark.seahaven(fixture=SMALL_STARTUP, user_id=None)
+@pytest.mark.seahaven(fixture=SMALL_STARTUP, startup={"user_id": None})
 def test_the_fixture_never_has_a_closed_issue_with_an_assignee(
     instance: seahaven.Instance,
 ) -> None:

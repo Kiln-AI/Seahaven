@@ -289,6 +289,7 @@ class Instance:
         caller_seed: int | None,
         fixture_files: Mapping[str, str] | None,
         startup: Mapping[str, Any],
+        control_tools: bool,
     ) -> None:
         self.id = id
         self.fixture = fixture
@@ -311,13 +312,17 @@ class Instance:
         # included; `None` for a blank instance. With `composition()` this is a
         # reader's lookup for the state the episode started from.
         self.fixture_files = dict(fixture_files) if fixture_files is not None else None
-        # The reset keywords beyond `fixture`, `seed`, `now` and `state_format`,
-        # already JSON-able: serialised at creation, so a keyword no document
-        # could carry is refused there rather than at `state()` time.
+        # The `startup=` keywords the instance was made with, already JSON-able:
+        # serialised at creation, so a keyword no document could carry is refused
+        # there rather than at `state()` time.
         self.startup = dict(startup)
         # The format this instance answers in, fixed for its life, and the
         # formatter the root resolved it to when the instance was made.
         self.state_format = state_format
+        # Whether the framework's own tools are callable on this instance, fixed
+        # for its life. False and a control tool is a name this instance does not
+        # have (`_target`).
+        self.control_tools = control_tools
         self._formatter = formatter
         # The thread running a formatter on this instance, or `None`. A thread
         # id rather than a flag because `call` asks before taking the gate: only
@@ -637,9 +642,12 @@ class Instance:
         # own registry is where they are. Every other name the root registers is
         # in that list already.
         registered = self.world.tools.get(name)
-        if registered is None or not registered.control:
+        if registered is None or not registered.control or not self.control_tools:
             # An agent naming a tool that does not exist reads the answer: it is
-            # a tool error, not a framework one.
+            # a tool error, not a framework one. An instance made without
+            # `control_tools=True` answers a control tool's name in those same
+            # words: whether the name exists at all is not something a caller
+            # gets to learn by calling it.
             raise UnknownTool(name)
         return _Target(name, registered, composition.root)
 
@@ -985,7 +993,8 @@ class InstanceManager:
         now: str | datetime | None = None,
         state_format: str | None = None,
         episode_id: str | None = None,
-        startup_kwargs: Mapping[str, Any] | None = None,
+        control_tools: bool = False,
+        startup: Mapping[str, Any] | None = None,
     ) -> Instance:
         """Materialise an instance from a fixture, or from the world's DDL.
 
@@ -999,20 +1008,31 @@ class InstanceManager:
         of the root world's pin, and `episode_id` the id every document of the
         episode reports; over OpenEnv `reset` mints one before the instance
         exists, and in process the instance id is it.
+
+        `control_tools` makes the framework's own tools callable on this
+        instance. Off unless the caller asks: they are the harness's way in, and
+        an instance that did not ask for them refuses their names as unknown.
+
+        `startup` is the world's own keyword namespace, kept apart from the
+        parameters above so that the framework can add a parameter without
+        taking a name a world was already using.
         """
         world = self._world
-        kwargs = startup_kwargs or {}
+        # `None` is the only spelling of "no startup keywords". Anything else is
+        # checked for shape below, rather than coalesced away for being falsy:
+        # `startup` is a value a remote client controls.
+        keywords: Mapping[str, Any] = {} if startup is None else startup
         # The seal first: every whole-tree failure surfaces from the first use of
         # the tree, and this is one.
         composition = world.composition()
         # Everything else that can be refused is refused here, before a directory
-        # exists: an unknown startup argument, a startup value no state document
+        # exists: an unknown startup keyword, a startup value no state document
         # could carry, a format nothing registered, an id that is not an id, a
         # fixture that is missing, modified or frozen from another schema, and
         # `now=` where the fixture already carries the clock. A creation that
         # cannot succeed copies nothing and leaves nothing behind.
-        _check_startup_kwargs(composition, kwargs)
-        startup = _serialised_startup(kwargs)
+        _check_startup_keywords(composition, keywords)
+        serialised_startup = _serialised_startup(keywords)
         # On the root, and only the root: an added world's registrations are
         # never consulted (`functional_spec.md` §6).
         format_name = state_format if state_format is not None else world.pinned_state_format
@@ -1064,12 +1084,13 @@ class InstanceManager:
                 episode_id=episode_id or instance_id,
                 caller_seed=seed,
                 fixture_files=_fixture_files(fixture),
-                startup=startup,
+                startup=serialised_startup,
+                control_tools=control_tools,
             )
             # One activation for the whole of creation, so a root hook's handles
             # stay live across every hook that runs after it.
             with instance._held() as frame:
-                _run_startup_hooks(composition, frame, kwargs)
+                _run_startup_hooks(composition, frame, keywords)
                 for node_runtime in runtime.values():
                     # Asked once, here, so that the refusal of a table with no
                     # primary key is still a refusal at instance creation and
@@ -1339,7 +1360,7 @@ def _open_node(
     )
 
 
-def _serialised_startup(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+def _serialised_startup(keywords: Mapping[str, Any]) -> dict[str, Any]:
     """The startup keywords as the state document reports them, one at a time.
 
     Rendered at creation so that a keyword a document could never carry is a
@@ -1348,7 +1369,7 @@ def _serialised_startup(kwargs: Mapping[str, Any]) -> dict[str, Any]:
     receive the raw values.
     """
     startup: dict[str, Any] = {}
-    for keyword, value in kwargs.items():
+    for keyword, value in keywords.items():
         try:
             startup[keyword] = serialise(value)
         except WorldBug as error:
@@ -1425,25 +1446,30 @@ def _copy_fixture(fixture: Fixture, composition: Composition, directory: Path) -
         shutil.copyfile(fixture.file_of(node), directory / by_path[node.path].file_name)
 
 
-def _check_startup_kwargs(composition: Composition, startup_kwargs: Mapping[str, Any]) -> None:
-    """Refuse a `reset` argument no startup hook in the tree asked for.
+def _check_startup_keywords(composition: Composition, keywords: Mapping[str, Any]) -> None:
+    """Refuse a `startup=` that is not a mapping, and a keyword no hook in the tree asked for.
 
-    The union across the tree, because a keyword is broadcast: every hook in the
-    tree that names it receives it. A hook taking `**kwargs` anywhere accepts
-    everything, which switches the check off for the whole tree; the docs say to
-    spell the parameters out.
+    The shape first, because `startup=` is a value a client sends over the wire
+    and a string or a number would otherwise be read as a collection of names.
+
+    Then the names, against the union across the tree, because a keyword is
+    broadcast: every hook in the tree that names it receives it. A hook taking
+    `**kwargs` anywhere accepts everything, which switches the name check off for
+    the whole tree; the docs say to spell the parameters out.
     """
+    if not isinstance(keywords, Mapping):
+        raise WorldBug(
+            f"startup= takes a dict of the world's own keywords, not {type(keywords).__name__}"
+        )
     accepted = composition.accepted_startup_kwargs
     if accepted is None:
         return
-    unknown = set(startup_kwargs) - accepted
+    unknown = set(keywords) - accepted
     if unknown:
-        raise WorldBug(f"unknown reset argument(s): {sorted(unknown)}")
+        raise WorldBug(f"unknown startup keyword(s): {sorted(unknown)}")
 
 
-def _run_startup_hooks(
-    composition: Composition, frame: Frame, startup_kwargs: Mapping[str, Any]
-) -> None:
+def _run_startup_hooks(composition: Composition, frame: Frame, keywords: Mapping[str, Any]) -> None:
     """Run every node's hooks once, root first, with every node's transaction already open.
 
     All the transactions before the first hook, because the root's hooks are
@@ -1462,16 +1488,16 @@ def _run_startup_hooks(
         for node in canonical_tree(composition.root):
             ctx = frame.ctx(node.key, None)
             for hook in node.world.startup_hooks:
-                hook(ctx, **_hook_arguments(hook, node, startup_kwargs))
+                hook(ctx, **_hook_arguments(hook, node, keywords))
 
 
 def _hook_arguments(
-    hook: RegisteredStartupHook, node: Node, startup_kwargs: Mapping[str, Any]
+    hook: RegisteredStartupHook, node: Node, keywords: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """What one hook is called with: the `reset` keywords it named, then the bound ones.
+    """What one hook is called with: the `startup=` keywords it named, then the bound ones.
 
     Bound last and therefore final. A bound keyword is part of the composition,
-    and an eval must not be able to reconfigure one node by passing a `reset()`
+    and an eval must not be able to reconfigure one node by passing a `startup=`
     keyword that happens to share its name -- while that keyword still reaches
     every other hook in the tree that names it.
     """
@@ -1480,7 +1506,7 @@ def _hook_arguments(
         return hook.takes_var_kwargs or name in hook.accepts
 
     return {
-        **{name: value for name, value in startup_kwargs.items() if wanted(name)},
+        **{name: value for name, value in keywords.items() if wanted(name)},
         **{name: value for name, value in node.bound_startup.items() if wanted(name)},
     }
 

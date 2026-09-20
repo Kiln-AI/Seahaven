@@ -474,9 +474,11 @@ def app(
     `seahaven serve --no-console` turns it off, for a server that should answer
     the protocol and nothing else.
 
-    `include_control_tools` makes `controller_run_sql` callable over the wire. It
-    is never listed either way; the flag is for a harness that drives the world
-    itself, and a server an agent talks to should not have it. The tool is
+    `include_control_tools` makes `controller_run_sql` callable over the wire:
+    every session of this app makes its instance with `control_tools=True`, and
+    without the flag the name is refused as an unknown tool. It is never listed
+    either way; the flag is for a harness that drives the world itself, and a
+    server an agent talks to should not have it. The tool is
     deprecated -- the `state` message is what an eval reads now -- and a call of
     it warns in the server's process.
 

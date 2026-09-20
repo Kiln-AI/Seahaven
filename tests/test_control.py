@@ -47,12 +47,67 @@ CREATE TABLE files (
 @pytest.fixture
 def instance(tmp_path: Path) -> Any:
     world = build_world(tmp_path, SCHEMA)
-    with world.instance(None) as live:
+    with world.instance(None, control_tools=True) as live:
         yield live
 
 
 def add(instance: Instance, id: str, body: str = "b") -> None:
     instance.call("execute", sql=f"INSERT INTO notes (id, body) VALUES ('{id}', '{body}')")
+
+
+# The gate: `control_tools=True` is what makes any of the rest reachable.
+
+
+def test_an_instance_that_did_not_ask_for_control_tools_cannot_call_one(tmp_path: Path) -> None:
+    """The refusal is the instance's, and it is the one an unregistered name earns.
+
+    The tool is registered on the world either way -- that registration is what
+    refuses a world that tries to take the name -- so what is being pinned here
+    is that registration is not permission.
+    """
+    world: World = build_world(tmp_path, SCHEMA)
+
+    with world.instance(None) as instance:
+        assert "controller_run_sql" in world.tools
+        with pytest.raises(UnknownTool) as raised:
+            instance.call("controller_run_sql", sql="SELECT 1")
+        with pytest.raises(UnknownTool) as for_a_name_the_world_never_had:
+            instance.call("controller_no_such_tool", sql="SELECT 1")
+
+    assert str(raised.value) == "unknown tool: controller_run_sql"
+    assert raised.value.to_dict() == {
+        "code": "unknown_tool",
+        "message": "unknown tool: controller_run_sql",
+        "details": {"name": "controller_run_sql"},
+    }
+    assert for_a_name_the_world_never_had.value.to_dict()["code"] == "unknown_tool"
+
+
+def test_a_refused_control_call_opens_no_control_handle(tmp_path: Path) -> None:
+    """Refused before dispatch: the second read-only connection is never opened."""
+    world: World = build_world(tmp_path, SCHEMA)
+
+    with world.instance(None) as instance:
+        with pytest.raises(UnknownTool):
+            instance.call("controller_run_sql", sql="SELECT 1")
+
+        assert instance._control is None
+
+
+def test_asking_for_control_tools_makes_the_tool_callable(tmp_path: Path) -> None:
+    world: World = build_world(tmp_path, SCHEMA)
+
+    with world.instance(None, control_tools=True) as instance:
+        assert instance.call("controller_run_sql", sql="SELECT 1")["rows"] == [[1]]
+
+
+@pytest.mark.parametrize("asked", [True, False])
+def test_neither_instance_lists_a_control_tool(tmp_path: Path, asked: bool) -> None:
+    """The flag makes the tool callable, never advertised."""
+    world: World = build_world(tmp_path, SCHEMA)
+
+    with world.instance(None, control_tools=asked) as instance:
+        assert "controller_run_sql" not in {tool["name"] for tool in instance.tools()}
 
 
 def test_it_reads_a_table_the_framework_knows_nothing_about(instance: Instance) -> None:
@@ -137,7 +192,7 @@ def test_the_control_handle_is_its_own_connection_opened_once_and_closed_with_th
     call it made.
     """
     world: World = build_world(tmp_path, SCHEMA)
-    instance = world.instance(None)
+    instance = world.instance(None, control_tools=True)
     instance.call("controller_run_sql", sql="SELECT 1")
     handle = instance._control_db()
 
@@ -325,7 +380,7 @@ def test_control_calls_bypass_the_middleware_chain(tmp_path: Path) -> None:
         seen.append(call.name)
         return next_(ctx, call)
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         instance.call("controller_run_sql", sql="SELECT 1")
         add(instance, "n1")
 
@@ -343,7 +398,7 @@ def test_a_control_call_from_inside_a_call_does_not_deadlock(tmp_path: Path) -> 
         ctx.db.execute("INSERT INTO notes (id, body) VALUES ('n1', 'b')")
         return {"counted": holder[0].call("controller_run_sql", sql="SELECT count(*) FROM notes")}
 
-    with world.instance(None) as instance:
+    with world.instance(None, control_tools=True) as instance:
         holder.append(instance)
 
         # The write is in the call's own transaction, so the control read on the
@@ -370,7 +425,7 @@ def test_a_control_call_answers_while_another_instance_holds_the_lock(tmp_path: 
         assert release.wait(WAIT)
         return {"done": True}
 
-    with world.instance(None) as first, world.instance(None) as second:
+    with world.instance(None) as first, world.instance(None, control_tools=True) as second:
         caller = Caller(lambda: first.call("slow"))
         caller.start()
         assert inside.wait(WAIT)
@@ -410,7 +465,7 @@ world = World(
     fixtures_dir=tmp / "fixtures",
     work_dir=tmp / "work",
 )
-instance = world.instance(None)
+instance = world.instance(None, control_tools=True)
 with instance.bulk() as ctx:
     ctx.db.executemany(
         "INSERT INTO notes (id, body) VALUES (?, 'b')", [(f"n{{n}}", ) for n in range({rows})]

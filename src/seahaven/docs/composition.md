@@ -176,8 +176,9 @@ Three rules fall out of that:
   collision is a seal error, never resolved silently.
 - A prefixed name must still be a valid tool name (`^[A-Za-z0-9_-]{1,128}$`), so a `tool_prefix` of
   `"payments."` is refused rather than published.
-- Control tools are never contributed. Every world has them, but a call by that name resolves on the
-  root's own registry, and the root's cover every node.
+- Control tools are never contributed. Every world registers them, but a call by that name resolves
+  on the root's own registry, and only on an instance made with `control_tools=True`. The root's
+  control tools cover every node.
 
 **A prefix does not rewrite description text.** If an added world's descriptions cross-reference its
 own tools — "call `create_customer` first" — a prefix leaves those mentions naming something the
@@ -404,11 +405,12 @@ what lets a root hook write into a child's store — through `ctx.worlds.<name>.
 `ctx.worlds.<name>.state` — before that child's own hooks run. A hook that raises rolls all of them
 back, and no instance is left behind.
 
-`reset()` keyword arguments beyond `fixture`, `seed` and `now` are **broadcast**: every hook in the
-tree that names a keyword receives it, and an unknown argument is checked against the union of names
-across the whole tree, before any file is touched. Keywords bound with `add_world(startup=...)` are
-**configuration**: they reach that node's hooks, and a `reset()` keyword of the same name does not
-override them, because an eval must not be able to reconfigure one node of a tree by accident.
+The startup keywords a caller passes — `world.instance(startup={...})`, or the same `startup` on
+`reset()` — are **broadcast**: every hook in the tree that names a keyword receives it, and an
+unknown keyword is checked against the union of names across the whole tree, before any file is
+touched. Keywords bound with `add_world(startup=...)` are **configuration**: they reach that node's
+hooks, and a caller's startup keyword of the same name does not override them, because an eval must
+not be able to reconfigure one node of a tree by accident.
 
 ```python
 import seahaven
@@ -448,7 +450,7 @@ def accounts(ctx: seahaven.Ctx) -> dict[str, str]:
     }
 
 
-with company.instance(region="uk", plan="enterprise") as inst:
+with company.instance(startup={"region": "uk", "plan": "enterprise"}) as inst:
     # `region` is broadcast and reaches both hooks; the bound `region` on the EU
     # node wins there and nowhere else. `plan` is broadcast and bound nowhere.
     assert inst.call("accounts") == {

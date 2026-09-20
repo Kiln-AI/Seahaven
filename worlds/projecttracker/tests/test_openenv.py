@@ -122,7 +122,7 @@ def test_reset_names_the_person_the_session_drives_the_tracker_as() -> None:
         )
 
     with serving() as url, SeahavenClient(base_url=url) as env:
-        env.reset(fixture=SMALL_STARTUP, user_id=member["id"])
+        env.reset(fixture=SMALL_STARTUP, startup={"user_id": member["id"]})
         assert (
             env.call("create_issue", project_id=project["id"], title="B").result["creator_id"]
             == member["id"]

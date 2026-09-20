@@ -32,11 +32,12 @@ applies here too.
   forty-first issue team `ENG` ever had, whichever project it is in. Anything that writes issues
   without that statement — a bulk load in a fixture generator — has to leave the counter where the
   tools would have.
-- **The viewer.** `world.instance(fixture, user_id=...)` (`reset(user_id=...)` over OpenEnv) names
-  who the session is driving the tracker as; `startup.py` puts it in `ctx.state["viewer_id"]` and
-  falls back to the workspace's first admin. Every write takes an optional `actor_id`, which wins,
-  and a write with neither is `InvalidInput("actor_id", "no actor")` — which is what a blank
-  instance and `empty` do, having no admin to fall back to.
+- **The viewer.** `world.instance(fixture, startup={"user_id": ...})`, and the same `startup=` on
+  `reset` over OpenEnv, names who the session is driving the tracker as; `startup.py` puts it in
+  `ctx.state["viewer_id"]` and falls back to the workspace's first admin. Every write takes an
+  optional `actor_id`, which wins, and a write with neither is
+  `InvalidInput("actor_id", "no actor")` — which is what a blank instance and `empty` do, having
+  no admin to fall back to.
 - **Order within one episode.** An instance's clock does not move, so every row a single episode
   writes carries the same `created_at`, and the timestamp orders none of them. Two places feel it.
   Reading `issue_events` in the order things happened means `ORDER BY created_at, rowid` — the

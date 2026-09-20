@@ -286,12 +286,12 @@ def test_a_function_the_typed_call_cannot_resolve_takes_no_ordinal(instance: Ins
     assert instance.call_count == 0
 
 
-def test_a_control_tool_and_tool_listing_are_not_calls(instance: Instance) -> None:
-    instance.tools()
-    instance.call("controller_run_sql", sql="SELECT 1")
+def test_a_control_tool_and_tool_listing_are_not_calls(control_instance: Instance) -> None:
+    control_instance.tools()
+    control_instance.call("controller_run_sql", sql="SELECT 1")
 
-    assert instance.call_count == 0
-    assert instance.change_log() == []
+    assert control_instance.call_count == 0
+    assert control_instance.change_log() == []
 
 
 # -------------------------------------------------------------------- determinism

@@ -289,6 +289,13 @@ def instance(world: World) -> Iterator[Instance]:
 
 
 @pytest.fixture
+def control_instance(world: World) -> Iterator[Instance]:
+    """Like the `instance` fixture, with the framework's own tools callable on it."""
+    with world.instance(None, now=INSTANT_ISO, control_tools=True) as live:
+        yield live
+
+
+@pytest.fixture
 def emporium_instance(tmp_path: Path) -> Iterator[Instance]:
     """A blank instance of the committed composite world, on its own directory.
 

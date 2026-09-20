@@ -167,7 +167,7 @@ def test_the_startup_keywords_are_reported_as_the_hooks_received_them(tmp_path: 
         """Take two keywords, one of them nested."""
         ctx.state["tier"] = tier
 
-    with world.instance(None, tier="paid", limits={"calls": 10}) as live:
+    with world.instance(None, startup={"tier": "paid", "limits": {"calls": 10}}) as live:
         assert live.state()["startup"] == {"tier": "paid", "limits": {"calls": 10}}
     with world.instance(None) as live:
         assert live.state()["startup"] == {}
@@ -184,7 +184,7 @@ def test_a_startup_keyword_a_document_could_not_carry_is_refused_at_creation(
         """Take anything at all, which in process includes what JSON cannot carry."""
 
     with pytest.raises(WorldBug, match="startup keyword 'ledger' must be JSON-able"):
-        world.instance(None, ledger=threading.Lock())
+        world.instance(None, startup={"ledger": threading.Lock()})
 
 
 def test_two_identical_episodes_produce_the_same_document(tmp_path: Path) -> None:
@@ -587,15 +587,26 @@ def test_a_leaf_used_as_a_root_uses_its_own_pin_and_its_own_formats(tmp_path: Pa
         assert live.state(format="payments.state/1")["state"] == {"charged": 250}
 
 
-def test_a_startup_hook_may_not_be_given_the_reset_keyword(tmp_path: Path) -> None:
-    """`state_format` is `reset`'s, as `fixture`, `seed` and `now` are."""
+def test_a_startup_keyword_named_state_format_reaches_the_hook_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    """The two `state_format`s are in different namespaces and never meet.
+
+    The framework's is a parameter of `world.instance`; the world's is a key of
+    `startup=`, and a hook is free to name it now that the two cannot collide.
+    """
     world = build_world(tmp_path)
+    seen: list[str] = []
 
-    with pytest.raises(WorldBug, match="state_format"):
+    @world.instance_startup
+    def hook(ctx: Ctx, *, state_format: str = "unset") -> None:
+        """Name a keyword that is also one of the framework's own parameters."""
+        seen.append(state_format)
 
-        @world.instance_startup
-        def hook(ctx: Ctx, *, state_format: str = "acme.state/1") -> None:
-            """Name a keyword the framework has already spent."""
+    with world.instance(None, startup={"state_format": "acme.state/1"}) as live:
+        assert seen == ["acme.state/1"]
+        assert live.state()["format"] == SEAHAVEN_STATE_V1
+        assert live.state()["startup"] == {"state_format": "acme.state/1"}
 
 
 # ------------------------------------------------------- the document is the caller's
@@ -608,7 +619,7 @@ def test_editing_a_document_edits_nothing_the_instance_holds(tmp_path: Path) -> 
     def remember(ctx: Ctx, *, limits: dict[str, Any] | None = None) -> None:
         """Take a nested keyword, which is what a shallow copy would share."""
 
-    with world.instance(None, limits={"calls": 10}) as live:
+    with world.instance(None, startup={"limits": {"calls": 10}}) as live:
         add(live, "n1")
         document = live.state()
 
