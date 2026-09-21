@@ -192,16 +192,13 @@ of the process. Run it from the world's own directory, as `uv run --extra mcp se
 `mcp` extra is the MCP SDK, it cannot be installed beside the `serve` extra, and without it the
 command says so and exits 1.
 
-| Option | Variable | Default | What it does |
+| Option | Env Var | Default | What it does |
 |---|---|---|---|
 | `--fixture NAME` | `SEAHAVEN_FIXTURE` | a blank instance | the fixture the instance starts from |
 | `--seed N` | `SEAHAVEN_SEED` | a random seed, written to stderr | the caller seed, an integer; the framework refuses a negative one, and one that does not fit in 8 bytes |
 | `--now ISO` | `SEAHAVEN_NOW` | wall time at creation | the clock a blank instance starts at; the framework refuses it together with a fixture |
 | `--reset-options JSON` | `SEAHAVEN_RESET_OPTIONS` | none | a JSON object of the keyword arguments `world.instance()` is called with; not allowed with `--fixture`, `--seed` or `--now` |
-| `--world module:attr` | no variable | the convention | which world to serve |
-
-A variable is how an MCP client configuration passes an option, in its `env` block. A flag beats
-its variable, and a variable set to the empty string counts as unset.
+| `--world module:attr` | -- | the convention | which world to serve |
 
 ```sh
 uv run --extra mcp seahaven mcp
@@ -215,9 +212,6 @@ convenience spellings of three of its keys. Giving `--reset-options` together wi
 three flags is refused rather than merged, and so is a key `world.instance()` does not take. An
 instance this command makes never has control tools, and `--reset-options` refuses the
 `"control_tools"` key that would ask for them.
-
-**No `--seed` means a random seed**, not the constant `world.instance()` falls back to. The command
-picks an integer, uses it, and writes it to stderr, so the same run can be asked for again.
 
 Read [../serving_and_openenv.md](../serving_and_openenv.md#serving-one-world-to-an-mcp-client) for
 the `.mcp.json` that launches the command, and for what a client is and is not given.

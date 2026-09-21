@@ -611,12 +611,8 @@ document and no control tool.
 
 Two steps run a world in a client:
 
-1. `uv run --extra mcp seahaven mcp`, in the world's own directory, which is where the command
-   looks for the world. `--extra mcp` installs the MCP support into that project's `.venv`, so the
-   first run changes the environment, and `seahaven new` writes the `mcp = ["seahaven[mcp]"]` line
-   it needs. An environment holds the `mcp` extra or the `serve` extra and never both, and until
-   Seahaven is published both come from a checkout ([the `serve` extra](#install-the-serve-extra)
-   says how). The process then waits for a client, so Ctrl-C ends a run started by hand.
+1. `uv run --extra mcp seahaven mcp`, in the world's own directory ([from a checkout until
+   publication](#install-the-serve-extra)).
 2. Give a client that same command. The `.mcp.json` below is the whole configuration:
 
 ```json
@@ -624,15 +620,11 @@ Two steps run a world in a client:
   "mcpServers": {
     "project-tracker": {
       "command": "uv",
-      "args": ["run", "--extra", "mcp", "seahaven", "mcp"]
+      "args": ["run", "--directory", "/path/to/the/world", "--extra", "mcp", "seahaven", "mcp"]
     }
   }
 }
 ```
-
-A client starts the command in a directory of its own choosing, which is often not the world's, so
-add `"--directory", "/path/to/the/world"` to `args` before `"seahaven"` unless you know otherwise.
-Options of the command go in `args` after `"mcp"`, or in an `env` block.
 
 **This is not the road for an eval or an RL run.** There is no reset and no second episode. A
 harness that needs thousands of private instances uses `/ws` and `SeahavenClient`, where every
