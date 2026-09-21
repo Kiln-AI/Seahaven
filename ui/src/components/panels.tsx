@@ -601,8 +601,8 @@ export function EnvInfoPanel({ env }: { env: LiveEnv }) {
         )}
         <p className="mt-2 text-[12px] leading-snug text-faint">
           OpenEnv binds these to the signature of the environment's `reset()`. A key it does not
-          accept is the server's to judge: some servers drop it silently, and a Seahaven server
-          answers with an error that names it.
+          accept is the server's to judge: some servers drop it silently, and others answer with an
+          error that names it.
         </p>
       </Disclosure>
 

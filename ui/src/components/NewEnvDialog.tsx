@@ -140,7 +140,7 @@ export function NewEnvDialog({
               commonly <code className="font-mono text-fg">seed</code> and{" "}
               <code className="font-mono text-fg">episode_id</code>, plus whatever that environment
               adds. A key the environment does not accept is the server's to judge: some servers
-              drop it silently, and a Seahaven server answers with an error that names it.
+              drop it silently, and others answer with an error that names it.
             </p>
             <Textarea
               rows={5}
