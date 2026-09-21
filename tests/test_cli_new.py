@@ -9,6 +9,8 @@ to something that already worked, so the first failure they see is one they made
 import os
 import subprocess
 import sys
+import tomllib
+from importlib.metadata import metadata
 from pathlib import Path
 
 import pytest
@@ -75,6 +77,40 @@ def test_the_scaffold_pins_a_state_format(scaffold: Path) -> None:
     source = (scaffold / "src" / "my_world" / "world.py").read_text(encoding="utf-8")
 
     assert 'state_format="seahaven.state/1"' in source
+
+
+def test_the_scaffold_re_exports_every_extra_the_framework_publishes(scaffold: Path) -> None:
+    """A world is its own package, so `uv sync --extra serve` reads *its* extras.
+
+    The framework's extras are read from its own metadata rather than written out
+    here, because the failure this catches is an extra that the framework gained
+    and the template never re-exported: `mcp` was added to the framework and to
+    nothing else, and `uv run --extra mcp` in a generated world answered "Extra
+    `mcp` is not defined" until this test existed.
+    """
+    declared = tomllib.loads((scaffold / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = declared["project"]["optional-dependencies"]
+    published = metadata("seahaven").get_all("Provides-Extra") or []
+    assert published, "seahaven publishes no extras, so this test is asking the wrong question"
+    for extra in published:
+        assert extras.get(extra) == [f"seahaven[{extra}]"], (
+            f"a generated world does not re-export seahaven's {extra!r} extra"
+        )
+
+
+def test_the_scaffold_declares_the_conflict_between_serve_and_mcp(scaffold: Path) -> None:
+    """Without the declaration, `uv lock` in a generated world is unsolvable.
+
+    The two extras cannot be installed together, and uv reads `conflicts` from
+    the project it is locking and never from a dependency, so the framework's own
+    declaration does not reach a world outside this workspace.
+    """
+    declared = tomllib.loads((scaffold / "pyproject.toml").read_text(encoding="utf-8"))
+    conflicts = declared["tool"]["uv"]["conflicts"]
+    paired = [{entry["extra"] for entry in pair} for pair in conflicts]
+    assert {"serve", "mcp"} in paired, (
+        f"a generated world does not declare serve and mcp as conflicting extras: {conflicts}"
+    )
 
 
 def test_the_scaffold_pins_the_installed_minor_version(scaffold: Path) -> None:

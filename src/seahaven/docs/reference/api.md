@@ -66,6 +66,7 @@ class World:
         *,
         state_format: str | None = None,
         description: str | None = None,
+        mcp_server_instructions: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
@@ -90,13 +91,15 @@ appear in the OpenEnv metadata and in every fixture's sidecar. `state_format` is
 the format `inst.state()` answers in, and a world constructed without one is refused with the
 built-in names in the message. `description` is the one-line description the OpenEnv metadata
 publishes. It is a free string, unvalidated, and the only thing that sets that line; a world that
-gives none, or gives a blank string, publishes `Seahaven world <name>`. `fixtures_dir` defaults to
-`fixtures/` at the project root, found by walking up from the
-constructing module to the directory holding `pyproject.toml`, and to `fixtures/` beside the package
-where there is none. `work_dir` is where instance copies are kept; the default is a per-process
-directory under the system temp directory, which is swept of previous processes' leftovers, and a
-directory you name is used exactly as given and never swept. `untracked_tables` names tables the
-change log's sessions do not attach.
+gives none, or gives a blank string, publishes `Seahaven world <name>`. `mcp_server_instructions`
+is the MCP `instructions` string a client reads before it calls a tool. It is a free string too,
+unvalidated, and a world that gives none, or gives a blank string, gets instructions built from its
+name and its description instead. `fixtures_dir` defaults to `fixtures/` at the project root, found
+by walking up from the constructing module to the directory holding `pyproject.toml`, and to
+`fixtures/` beside the package where there is none. `work_dir` is where instance copies are kept;
+the default is a per-process directory under the system temp directory, which is swept of previous
+processes' leftovers, and a directory you name is used exactly as given and never swept.
+`untracked_tables` names tables the change log's sessions do not attach.
 
 A `World` whose schema does not execute cannot be constructed: the schema is built in memory to
 compute the schema hash, and SQLite's own message is reported.
@@ -128,7 +131,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.accepted_startup_kwargs` | every startup keyword some hook names |
 | `world.added_worlds` | what `add_world` recorded, in registration order. Read-only |
 | `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
-| `world.name`, `world.version`, `world.description`, `world.schema`, `world.schema_hash`, `world.fixtures_dir`, `world.pinned_state_format` | as given, plus the hash of the normalised schema |
+| `world.name`, `world.version`, `world.description`, `world.mcp_server_instructions`, `world.schema`, `world.schema_hash`, `world.fixtures_dir`, `world.pinned_state_format` | as given, plus the hash of the normalised schema |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
 [../authoring.md](../authoring.md).

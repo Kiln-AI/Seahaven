@@ -40,6 +40,26 @@ pytest_plugins = ["pytester"]
 
 WAIT = 5.0  # every thread test's patience, in seconds
 
+# What `mcp_sdk()` asks for. `tests/test_ci_workflow.py` holds CI's import
+# assertion to this same module, so the job cannot pass while every test that
+# needs the SDK skips.
+MCP_SDK_MODULE = "mcp.server.context"
+
+
+def mcp_sdk() -> ModuleType:
+    """The MCP SDK, or a skip: `serve`'s environment has 1.x, which cannot serve this.
+
+    `pytest.importorskip("mcp")` is not enough. An environment synced for the
+    `serve` extra has `mcp` 1.30 installed transitively, because `openenv` pins
+    `fastmcp` 3.x, so a bare import guard does not skip there: it imports the
+    wrong major and the tests fail on a missing attribute. `mcp.server.context`
+    is where 2.x keeps `ServerRequestContext` and 1.30 has no such module, so
+    the guard asks what the SDK can do rather than what its version string says.
+    """
+    pytest.importorskip("mcp")
+    return pytest.importorskip(MCP_SDK_MODULE)
+
+
 # The small worlds the lints and the CLI are run against (`tests/worlds/README.md`).
 WORLDS = Path(__file__).resolve().parent / "worlds"
 

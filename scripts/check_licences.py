@@ -15,14 +15,23 @@ This is an allowlist, not a denylist of the licences we have thought to refuse:
 an identifier nobody has classified fails, which is the only way an unread
 licence cannot ship by accident.
 
-Run it as `uv run python scripts/check_licences.py`; CI does, in the environment
-it built with `uv sync --locked --extra serve`. An extra that is declared and not
+**Name the extras to audit**: `uv run python scripts/check_licences.py serve`
+reads the base closure plus `serve`, and an extra named this way that is not
 installed cannot have its licences read, so it fails rather than passing quietly.
+CI names them, one job per extra, because `serve` and `mcp` are declared as
+conflicting in `pyproject.toml` and no environment can hold both. Between them
+the jobs cover every extra the project declares, which
+`tests/test_licence_check.py` asserts against the workflow file.
+
+Run bare -- `uv run python scripts/check_licences.py` -- it audits the base
+closure plus every declared extra this environment actually has, and prints what
+it could not read and the command that reads it. That is the developer's run;
+the strict one is the gate.
 """
 
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from importlib import metadata
 
@@ -202,19 +211,97 @@ def audit(root: str, extras: Iterable[str] | None = None) -> list[Licence]:
     return [licence for licence in runtime_licences(root, extras) if not licence.allowed()]
 
 
-def main() -> int:
-    extras = declared_extras("seahaven")
-    problems = audit("seahaven")
+def extras_to_audit(named: Sequence[str], declared: Sequence[str]) -> list[str]:
+    """The extras one run covers: the ones named on the command line, or all of them.
+
+    An extra the project does not declare is a typo -- in a workflow file, or in
+    a command a person typed -- and a typo that audited nothing quietly would be
+    a green run proving nothing.
+    """
+    unknown = sorted(set(named) - set(declared))
+    if unknown:
+        raise ValueError(
+            f"{', '.join(unknown)}: not an extra seahaven declares ({', '.join(declared)})"
+        )
+    return sorted(set(named)) if named else list(declared)
+
+
+def unmet_requirements(root: str, extra: str) -> list[str]:
+    """What this environment is missing before `root[extra]` can be audited.
+
+    A requirement of the extra that is not installed, or one installed at a
+    version the extra does not ask for. The second is not hypothetical: `serve`
+    brings `mcp` 1.x transitively, so an environment synced for `serve` has a
+    distribution called `mcp`, and a walk that only asked whether the name was
+    installed would read that tree, clear it, and report the `mcp` extra as
+    audited when nothing of it was.
+
+    A requirement is this extra's when the marker is true for it and false
+    without it, which is what excludes the base dependencies.
+    """
+    try:
+        distribution = metadata.distribution(root)
+    except metadata.PackageNotFoundError:
+        # `main` never reaches this -- a `seahaven` that is not installed
+        # declares no extras, so there is nothing to ask about -- but a caller
+        # asking this function about another project does.
+        return [f"{root} is not installed"]
+    unmet: list[str] = []
+    for requirement in distribution.requires or []:
+        parsed = Requirement(requirement)
+        if parsed.marker is None or not parsed.marker.evaluate({"extra": extra}):
+            continue
+        if parsed.marker.evaluate({"extra": ""}):
+            continue
+        try:
+            version = metadata.version(parsed.name)
+        except metadata.PackageNotFoundError:
+            unmet.append(f"{parsed.name} is not installed")
+            continue
+        if not parsed.specifier.contains(version, prereleases=True):
+            unmet.append(f"{parsed.name} {version} is not {parsed.name}{parsed.specifier}")
+    return unmet
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    named = list(sys.argv[1:] if argv is None else argv)
+    try:
+        asked = extras_to_audit(named, declared_extras("seahaven"))
+    except ValueError as error:
+        print(error)
+        return 2
+
+    unsynced = {extra: unmet_requirements("seahaven", extra) for extra in asked}
+    unsynced = {extra: lines for extra, lines in unsynced.items() if lines}
+    if named and unsynced:
+        for extra, lines in unsynced.items():
+            for line in lines:
+                print(f"{extra}: {line}")
+        print("an unread licence cannot be cleared; sync the extra first:")
+        for extra in unsynced:
+            print(f"  uv sync --extra {extra}")
+        return 1
+
+    extras = [extra for extra in asked if extra not in unsynced]
+    problems = audit("seahaven", extras)
     for licence in problems:
         print(f"{licence.distribution} {licence.version}: {licence.expression} is not allowed")
     if problems:
         print(f"{len(problems)} shipped dependencies need review")
         if any(licence.expression == "<not installed>" for licence in problems):
-            extra_flags = " ".join(f"--extra {extra}" for extra in extras)
-            print(f"an unread licence cannot be cleared; try `uv sync {extra_flags}` first")
+            # Not an extra -- an extra this environment does not have was
+            # answered above -- so this is a requirement missing from the middle
+            # of a tree, which a sync of what was audited puts back.
+            command = " ".join(["uv sync", *(f"--extra {extra}" for extra in extras)])
+            print(f"an unread licence cannot be cleared; try `{command}` first")
         return 1
     scope = ", ".join(extras) or "no extras"
     print(f"every shipped dependency is allowed (base closure plus: {scope})")
+    for extra in unsynced:
+        print(
+            f"{extra} was not read here, because this environment is not synced for it: "
+            f"`uv sync --extra {extra} && uv run python scripts/check_licences.py {extra}`"
+        )
     return 0
 
 

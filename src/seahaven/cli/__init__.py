@@ -1,6 +1,6 @@
 """`seahaven`: the command, its parser, and how it finds a world.
 
-Five subcommands, one module each, and nothing in any of them that is not
+Six subcommands, one module each, and nothing in any of them that is not
 argument parsing, world discovery or output. The work is done by code that
 already exists -- `World.instance`, `Instance.freeze`, `seahaven.openenv.serve`,
 `seahaven.lint` -- which is what keeps the CLI from becoming a second API beside
@@ -99,11 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
     """
     # Imported here rather than at module top: every subcommand module imports
     # this one for `CliError` and `find_world`.
-    from seahaven.cli import check, docs, fixture, new, serve
+    from seahaven.cli import check, docs, fixture, mcp, new, serve
 
     parser = argparse.ArgumentParser(prog="seahaven", description="Build and run Seahaven worlds.")
     subcommands = parser.add_subparsers(dest="command", required=True, metavar="<command>")
-    for module in (new, check, docs, fixture, serve):
+    for module in (new, check, docs, fixture, serve, mcp):
         module.add_parser(subcommands)
     return parser
 
@@ -121,6 +121,30 @@ def add_world_option(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def check_world_option(explicit: str | None) -> None:
+    """Refuse a `--world` that is not `module:attr`, without importing anything.
+
+    `discover` asks the same question on its way to the import, and every
+    subcommand but one lets it. `seahaven mcp` resolves its world late, inside
+    the server, so that a failed import reaches the MCP client as an error
+    rather than as a broken pipe -- and a misspelled option is not that: the
+    user is looking at their own command line and is owed the answer before
+    anything is served (MCP functional spec §2.4).
+    """
+    if explicit is not None:
+        _split_world_option(explicit)
+
+
+def _split_world_option(explicit: str) -> tuple[str, str]:
+    """`module:attr` in two parts, or the refusal that names the spelling."""
+    module_name, separator, attribute = explicit.partition(":")
+    if not separator or not module_name or not attribute:
+        raise CliError(
+            f"--world takes module:attr, not {explicit!r}; for example --world myworld:world"
+        )
+    return module_name, attribute
+
+
 def find_world(explicit: str | None, start: Path | None = None) -> World:
     """The world `seahaven` and the pytest plugin act on."""
     return discover(explicit, start).world
@@ -130,11 +154,7 @@ def discover(explicit: str | None, start: Path | None = None) -> Discovery:
     """`find_world`, plus the module, the project root and the import snapshot."""
     start = (start or Path.cwd()).resolve()
     if explicit is not None:
-        module_name, separator, attribute = explicit.partition(":")
-        if not separator or not module_name or not attribute:
-            raise CliError(
-                f"--world takes module:attr, not {explicit!r}; for example --world myworld:world"
-            )
+        module_name, attribute = _split_world_option(explicit)
         _make_importable(start, start / SOURCE_DIRNAME)
         return _import(module_name, attribute, root=start)
     root = _project_root(start)

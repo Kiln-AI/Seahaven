@@ -9,6 +9,8 @@ import json
 import pkgutil
 import subprocess
 import sys
+import tomllib
+from importlib.metadata import metadata
 from pathlib import Path
 
 import pytest
@@ -158,6 +160,30 @@ def test_every_module_under_tools_and_middleware_is_imported_by_the_package() ->
             assert hasattr(package, module.name), (
                 f"{package.__name__}/{module.name}.py is never imported, so nothing in it registers"
             )
+
+
+def test_the_world_re_exports_every_extra_the_framework_publishes() -> None:
+    """This world is its own package, so `uv sync --extra mcp` reads *its* extras.
+
+    The framework's extras are read from its own metadata rather than written out
+    here, so an extra the framework gains and this world never re-exports fails
+    here rather than in somebody's terminal. No `conflicts` table is asserted:
+    this world is a workspace member, and the root `pyproject.toml` declares the
+    conflict between `serve` and `mcp` for the whole workspace.
+
+    The file is located the way the fixtures test below locates the world's
+    directory, beside `fixtures/`, rather than by counting `..` from this file.
+    """
+    pyproject = world.fixtures_dir.parent / "pyproject.toml"
+    extras = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
+        "optional-dependencies"
+    ]
+    published = metadata("seahaven").get_all("Provides-Extra") or []
+    assert published, "seahaven publishes no extras, so this test is asking the wrong question"
+    for extra in published:
+        assert extras.get(extra) == [f"seahaven[{extra}]"], (
+            f"worlds/projecttracker does not re-export seahaven's {extra!r} extra"
+        )
 
 
 def test_the_world_reads_its_fixtures_from_the_package_directory() -> None:

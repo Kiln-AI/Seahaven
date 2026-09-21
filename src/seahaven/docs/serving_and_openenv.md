@@ -11,8 +11,11 @@ wire. Seahaven took that standard rather than inventing a protocol, which means 
 any OpenEnv client can drive a Seahaven world, and a harness written in TypeScript, Go or Rust needs
 a WebSocket and a JSON encoder rather than a Seahaven port.
 
-A world is driven either in process through `world.instance(...)`, or over the WebSocket endpoint
-`/ws`. There is no third way and no Seahaven-specific remote API to learn.
+An eval or an RL harness drives a world in process through `world.instance(...)`, or over the
+WebSocket endpoint `/ws`. A harness has no third transport and no Seahaven-specific remote API to
+learn. A person working against a world by hand has a third command,
+[`seahaven mcp`](#serving-one-world-to-an-mcp-client), which puts one world in front of one
+[MCP](https://modelcontextprotocol.io) client such as an editor or a chat client.
 
 | Section | What it covers |
 |---|---|
@@ -28,6 +31,7 @@ A world is driven either in process through `world.instance(...)`, or over the W
 | [Running it in production](#running-it-in-production) | Reaping, disconnects, and scaling out |
 | [Publishing to a hub](#publishing-to-a-hub) | `seahaven new --hub`, and what does not work yet |
 | [Evaluating with Kiln](#evaluating-with-kiln) | Where the scenario and the grader belong |
+| [Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) | `seahaven mcp`, and who it is for |
 | [Known problems in OpenEnv](#known-problems-in-openenv) | Routes Seahaven refuses, and why |
 
 ## Running the server
@@ -593,6 +597,42 @@ against that eval. Same world, same fixture, as many scenarios as the job needs.
 
 Seahaven is built by the Kiln AI team.
 
+## Serving one world to an MCP client
+
+`seahaven mcp` puts one world behind an MCP server on stdio, so an editor, a chat client or an agent
+framework that speaks MCP can call the world's tools. One process serves one client and holds one
+instance. It publishes the world's own tools and nothing else: no resources, no prompts, no state
+document and no control tool.
+
+> [!WARNING]
+> The instance is ephemeral. It is made when the client connects and destroyed when the client
+> disconnects or the process stops, and every row the tools wrote goes with it. Use this command for
+> short-term experimentation, not to keep data.
+
+Two steps run a world in a client:
+
+1. `uv run --extra mcp seahaven mcp`, in the world's own directory ([from a checkout until
+   publication](#install-the-serve-extra)).
+2. Give a client that same command. The `.mcp.json` below is the whole configuration:
+
+```json
+{
+  "mcpServers": {
+    "project-tracker": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/the/world", "--extra", "mcp", "seahaven", "mcp"]
+    }
+  }
+}
+```
+
+**This is not the road for an eval or an RL run.** There is no reset and no second episode. A
+harness that needs thousands of private instances uses `/ws` and `SeahavenClient`, where every
+session already has one.
+
+[reference/cli.md](reference/cli.md#seahaven-mcp) has every option and every environment variable,
+and `uv run seahaven mcp -h` prints them.
+
 ## Known problems in OpenEnv
 
 These are real and reproduced, and every one of them is OpenEnv's rather than Seahaven's. None of
@@ -639,43 +679,19 @@ has it. Drive episodes over `/ws`.
 
 ### `POST /mcp` and `ws /mcp` are refused with a JSON-RPC error
 
-**There is no MCP server here.** An OpenEnv app publishes a `/mcp` endpoint, but it is not the MCP
-protocol. It dispatches exactly four methods — `openenv/session/create`, `openenv/session/close`,
-`tools/list` and `tools/call` — and has no `initialize`, no capability negotiation, no
-notifications, no SSE, no `Mcp-Session-Id`, no resources and no prompts. An off-the-shelf MCP client
-(Claude Desktop, Cursor, the `mcp` and `fastmcp` SDKs) opens with `initialize`, gets `-32601 Method
-not found: initialize`, and never gets further. Upstream says this is deliberate and temporary: its
-RFC 003 leans on MCP's custom-transports clause, lists no SSE streaming, no server-initiated
-messages and no session management as known gaps, and plans standard Streamable HTTP later.
+**OpenEnv's `/mcp` endpoint is not the MCP protocol.** It dispatches four methods of its own --
+`openenv/session/create`, `openenv/session/close`, `tools/list` and `tools/call` -- and answers
+"Method not found" to the `initialize` an MCP client opens with, so no off-the-shelf MCP client can
+speak it. The RFC behind the endpoint is open and still moving. The dialect also has no verb that
+starts an episode, and a Seahaven tool call needs an instance, so every `tools/call` on it could
+only answer `reset first`. Seahaven therefore refuses all four methods, on both transports, rather
+than advertise a tool list whose every entry fails when called.
 
-Underneath that, every door on it is dead for one reason: the dialect has no `reset`, and a Seahaven
-tool call needs an instance. Left alone, `tools/list` would succeed and advertise every tool the
-world has, and then every `tools/call` behind it would answer `reset first` — with or without an
-`openenv/session/create` session id, and over the WebSocket exactly as over `POST`. That is a
-well-formed answer about nothing, which is what the three HTTP routes above are refused for. So all
-four methods are refused, on both transports, in one statement.
+The refusal is JSON-RPC error `-32601` inside an HTTP `200`, because `openenv push` probes this
+route and passes only on a `200` whose body is JSON-RPC. `/mcp` stays in the published OpenAPI
+schema for the same reason the three paths above do.
 
-**The refusal is an HTTP `200`, not the `501` above**, because `openenv push` probes this exact
-route: `mcp_endpoint` in `openenv/cli/_validation.py` POSTs `{}` to `/mcp` and passes only on a
-`200` whose JSON body has `"jsonrpc": "2.0"`. A `501` would fail a push that has nothing wrong with
-it. The refusal therefore travels in the JSON-RPC envelope, where a JSON-RPC caller looks for it
-anyway: error code `-32601`, whose definition is "method does not exist / *is not available*", with
-the framework's `{"code", "message", "details"}` triple in `data`. `ws /mcp` answers the same frame
-and then closes normally, because every method is refused, so a second frame could only earn the
-same answer. `/mcp` stays in the published OpenAPI schema for the same reason the three paths above
-do.
-
-**Seahaven will not add MCP support until the standard supports stateful servers.** Seahaven exists
-to build stateful MCP-shaped servers, where the session is what matters: an instance is a session,
-and two sessions must not see each other's writes. Support would have to come without mutating the
-tool interface and without passing a non-standard session id alongside every call.
-
-**`/ws` is the agent-facing transport, which is a deliberate divergence from OpenEnv's advice.**
-OpenEnv's own lifecycle guide says `/ws` "is not an agent-facing interface … must not be given
-directly to agents" and points agents at `/mcp` instead. Seahaven inverts that on purpose: a
-Seahaven episode needs a `reset`, the MCP dialect has no verb for one, and a transport an agent
-cannot start an episode on is not an agent-facing interface either. This is not the end of MCP
-frames — a `{"type": "mcp"}` message on a `/ws` connection reaches the same upstream handler with
-the *session's* environment, and works correctly once the session has been reset. Anything built on
-`openenv/session/create` would be thrown away the day upstream ships real Streamable HTTP; a world
-reached over `/ws` would not.
+**Use `seahaven mcp` to reach a world from an MCP client.** That command speaks the real protocol
+over stdio, and [Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) is the
+section on it. An eval or an RL harness uses `/ws`, which gives every session its own instance and
+carries MCP frames as `{"type": "mcp"}` messages once the session has been reset.

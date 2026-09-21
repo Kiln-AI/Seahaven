@@ -588,6 +588,11 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         rest of the line is the join back to the state document -- the world, the
         instance, the episode the harness named, and which entry of the call log
         this was.
+
+        `seahaven/mcp/wire.py` has a `log_failure` of its own that deliberately
+        does not share this one: an MCP session has no episode id and no call
+        ordinal to log, and a helper general enough for both would say less than
+        either.
         """
         correlation = uuid.uuid4().hex[:CORRELATION_ID_LENGTH]
         _log.exception(

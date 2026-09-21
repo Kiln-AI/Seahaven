@@ -12,11 +12,13 @@ seahaven fixture fork <parent> <id> --run module:function --description <text> [
 seahaven serve [--host HOST] [--port PORT] [--max_concurrent_envs N] [--concurrency N]
                [--session-timeout SECONDS] [--include-control-tools] [--no-console]
                [--world module:attr]
+seahaven mcp [--fixture NAME] [--seed N] [--now ISO] [--reset-options JSON] [--world module:attr]
 ```
 
 Every command exits `0` on success and `1` on failure, and a failure is one line on stderr with the
 fix in it, never a traceback. `seahaven check` also exits 1 when it found an error-severity finding,
-which is what makes it usable in CI.
+which is what makes it usable in CI. An option that does not exist, or a missing argument, is
+argparse's own usage error and exits 2.
 
 | Command | What it does |
 |---|---|
@@ -27,6 +29,7 @@ which is what makes it usable in CI.
 | [`seahaven fixture freeze`](#seahaven-fixture-freeze-id) | fill a blank instance and freeze it |
 | [`seahaven fixture fork`](#seahaven-fixture-fork-parent-id) | fill an instance of a fixture and freeze the result |
 | [`seahaven serve`](#seahaven-serve) | run this world's OpenEnv server |
+| [`seahaven mcp`](#seahaven-mcp) | serve this world to one MCP client over stdio |
 
 ## Finding the world
 
@@ -182,9 +185,40 @@ second spelling here would be one more thing to translate.
 Read [../serving_and_openenv.md](../serving_and_openenv.md) before choosing `--concurrency`. The
 gate is unfair whenever it binds, and the default is not exempt.
 
+## `seahaven mcp`
+
+Serves this world to one MCP client over stdio: one world, one instance, one episode, for the life
+of the process. Run it from the world's own directory, as `uv run --extra mcp seahaven mcp`: the
+`mcp` extra is the MCP SDK, it cannot be installed beside the `serve` extra, and without it the
+command says so and exits 1.
+
+| Option | Env Var | Default | What it does |
+|---|---|---|---|
+| `--fixture NAME` | `SEAHAVEN_FIXTURE` | a blank instance | the fixture the instance starts from |
+| `--seed N` | `SEAHAVEN_SEED` | a random seed, written to stderr | the caller seed, an integer; the framework refuses a negative one, and one that does not fit in 8 bytes |
+| `--now ISO` | `SEAHAVEN_NOW` | wall time at creation | the clock a blank instance starts at; the framework refuses it together with a fixture |
+| `--reset-options JSON` | `SEAHAVEN_RESET_OPTIONS` | none | a JSON object of the keyword arguments `world.instance()` is called with; not allowed with `--fixture`, `--seed` or `--now` |
+| `--world module:attr` | -- | the convention | which world to serve |
+
+```sh
+uv run --extra mcp seahaven mcp
+uv run --extra mcp seahaven mcp --fixture small_startup --seed 7
+uv run --extra mcp seahaven mcp --reset-options '{"startup": {"reviewer": "ada"}}'
+```
+
+`--reset-options` is the whole of what `world.instance()` is called with, and the only way to reach
+a world's own startup keywords, which go inside `"startup"`. `--fixture`, `--seed` and `--now` are
+convenience spellings of three of its keys. Giving `--reset-options` together with one of those
+three flags is refused rather than merged, and so is a key `world.instance()` does not take. An
+instance this command makes never has control tools, and `--reset-options` refuses the
+`"control_tools"` key that would ask for them.
+
+Read [../serving_and_openenv.md](../serving_and_openenv.md#serving-one-world-to-an-mcp-client) for
+the `.mcp.json` that launches the command, and for what a client is and is not given.
+
 ## Using it from Python
 
-Nothing in the CLI is a hidden entry point. `seahaven.cli.main(argv)` is the whole command,
-`seahaven.cli.find_world(explicit, start=...)` is the discovery, and
-`seahaven.openenv.serve.serve(world, ...)` is the three lines `serve` runs, for a harness that wants
-a server inside its own process without going through `argv`.
+Nothing in the CLI is a hidden entry point. `seahaven.cli.main(argv)` is the whole command, and
+`seahaven.cli.find_world(explicit, start=...)` is the discovery. For a harness that wants a server
+inside its own process without going through `argv`, `seahaven.openenv.serve.serve(world, ...)` is
+the three lines `serve` runs, and `seahaven.mcp.serve(world, reset_options=...)` is what `mcp` runs.
