@@ -25,6 +25,7 @@ OpenEnv's, the concurrency gate is the framework's, and `timeout_s` is accepted
 and ignored because Seahaven does not bound a call.
 """
 
+import inspect
 import logging
 import uuid
 from collections.abc import Mapping
@@ -336,11 +337,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         """The session's live instance, or `None` before the first `reset`."""
         return self._instance
 
-    # OpenEnv's `Environment.reset` takes `**kwargs`, so narrowing it here is an
-    # override ty refuses on Liskov grounds. The narrowing is the point: OpenEnv's
-    # server introspects this signature and forwards every key a `**kwargs`
-    # signature accepts, which is every key the client sent.
-    def reset(  # ty: ignore[invalid-method-override]
+    def reset(
         self,
         seed: int | None = None,
         episode_id: str | None = None,
@@ -350,6 +347,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         state_format: str | None = None,
         control_tools: Any = None,
         startup: Mapping[str, Any] | None = None,
+        **unknown: Any,
     ) -> Observation:
         """Start an episode: a fresh instance, and the session's previous one gone.
 
@@ -372,17 +370,29 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         the world's own keyword namespace.
 
         This signature is the reset wire schema. OpenEnv has no schema of its
-        own for a reset message: its server introspects this method and drops
-        every key the signature does not name, so a parameter added here is a
-        key a client can send. `tests/test_env.py` pins the set for that reason.
-        A startup keyword therefore travels inside `startup`, and a client
-        sending one at the top level of the message is dropped before Seahaven
-        sees it.
+        own for a reset message: its server introspects this method to bind the
+        client's body, so a parameter added here is a key a client can send, and
+        `tests/test_env.py` pins the set for that reason. `**unknown` takes
+        every other key the client sent and refuses it, because the wire is
+        where a caller is furthest from the code and least able to guess: a
+        startup keyword travels inside `startup`, and one sent at the top level
+        is an error rather than a key that quietly does nothing. The refusal
+        names the stray keys and the names this method does take, so a
+        misspelled `fixure` is answered with `fixture`. Nothing but the client's
+        own body reaches this method, so a key in `**unknown` is always one the
+        client wrote.
 
         `control_tools` is named so that a reset message carrying it binds here,
         where it is read by nothing, rather than reaching a hook. The instance
         takes the server's own `include_control_tools` and never the client's
         word.
+
+        The refusal is the one check `reset` can make from the message alone, so
+        it runs before `_forget()` and the session keeps the episode it had,
+        which is what the same call does in process: an unknown keyword fails at
+        argument binding, before the body. Everything the world judges -- an
+        unknown startup keyword, `now=` with a fixture -- is judged while the
+        instance is being made, after the old one is gone.
 
         The old instance is destroyed *before* the new one is made, so the
         session never holds two at once. A creation that then fails leaves the
@@ -390,6 +400,26 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         open for another `reset`: the exception propagates, and OpenEnv answers
         the frame with `EXECUTION_ERROR` rather than closing the connection.
         """
+        # Three key names never reach this method: `self`, `session_id` and
+        # `func` are the arguments of OpenEnv's own call frame
+        # (`_run_in_session_executor` in `openenv/core/env_server/http_server.py`,
+        # verified against 0.5.0, which now receives them because a `**kwargs`
+        # signature makes it forward every key). A client sending one gets
+        # upstream's `TypeError` as the error frame instead of the refusal below,
+        # and the session survives it either way.
+        if unknown:
+            # The names it does take, read off the signature so the message cannot
+            # drift from it: the answer to a misspelled `fixure` is `fixture`, and
+            # a list of the real names is where the caller finds it.
+            takes = [
+                name
+                for name, parameter in inspect.signature(self.reset).parameters.items()
+                if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+            ]
+            raise WorldBug(
+                f"reset does not take {', '.join(sorted(unknown))}. It takes "
+                f"{', '.join(takes)}; a world's own keywords go inside startup={{...}}"
+            )
         self._forget()
         # Minted before the instance, because the instance keeps it: every
         # document this episode produces reports the episode id the harness gave

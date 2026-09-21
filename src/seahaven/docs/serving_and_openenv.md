@@ -139,12 +139,14 @@ A WebSocket connection is one session, and one session holds one instance.
 `reset` is therefore where a run is customised. One served world covers every scenario a fixture and
 a startup hook can express.
 
-The list above is every key a reset message can act on. OpenEnv has no reset schema of its own, so
-its server reads the signature of `SeahavenEnv.reset` and drops every other key before Seahaven sees
-it. One key is accepted and then ignored: `control_tools`, because the control tool is the
-operator's to enable with `--include-control-tools` and a client sending the key must not turn it
-on. A startup keyword goes inside `startup`, and a message that sends one at the top level reaches
-no hook:
+The list above is every key that changes what a reset does. A key outside the list is refused before
+the session is touched: the error names the stray keys and the keys `reset` does take, the session
+keeps the instance it already had, and it can reset again. A reset whose keys are all known but
+whose instance then fails to build leaves the session fresh instead, as above. One key outside the
+list is accepted and then ignored rather than refused: `control_tools`, because the control tool is
+the operator's to enable with `--include-control-tools` and a client sending the key must not turn
+it on. A startup keyword goes inside `startup`; a message that sends one at the top level is
+refused rather than delivered:
 
 ```jsonc
 {"fixture": "agency", "seed": 7, "startup": {"user_id": "u_12"}}

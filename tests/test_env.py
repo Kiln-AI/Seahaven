@@ -249,20 +249,75 @@ def test_reset_takes_exactly_the_parameters_a_client_may_send() -> None:
     """This signature is the reset wire schema, and it is pinned on purpose.
 
     OpenEnv publishes no schema for a reset message. Its server introspects this
-    method and forwards every key the signature names, so a parameter added here
-    is a key any client may set -- and `world.instance` gaining a parameter does
-    not, by itself, put it on the wire. If this fails because you added one to
+    method and binds the client's keys by it, so a parameter added here is a key
+    any client may set -- and `world.instance` gaining a parameter does not, by
+    itself, put it on the wire. If this fails because you added a parameter to
     `reset`, decide whether a client should be able to send it and then update
-    this list; if it fails because you removed one, a client that sends it will
-    have the key dropped from now on.
+    this list; if it fails because you removed one, a client that sends it is
+    refused from now on rather than served.
+
+    `unknown` is the catch-all, and it is the last parameter and a keyword one:
+    a `*args` would bind a positional that no name above covers.
     """
     parameters = inspect.signature(SeahavenEnv.reset).parameters
-    assert tuple(parameters) == RESET_PARAMETERS
-    # A `**kwargs` of any name sets OpenEnv's `has_kwargs`, which forwards every
-    # key the client sent, and the names above would not change.
+    assert tuple(parameters) == (*RESET_PARAMETERS, "unknown")
+    assert parameters["unknown"].kind is inspect.Parameter.VAR_KEYWORD
     assert all(
-        parameter.kind is not inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        parameter.kind is not inspect.Parameter.VAR_POSITIONAL for parameter in parameters.values()
     )
+
+
+def test_a_reset_key_the_signature_does_not_name_binds_to_nothing(env: SeahavenEnv) -> None:
+    """The pinned names are an allowlist, and the catch-all is what enforces it.
+
+    Every other key is refused by name, and nothing is built from it: not a
+    startup hook keyword, and not a keyword of anything `reset` delegates to.
+    The delegates are read from their own signatures rather than typed out here,
+    so a parameter added to one of them is covered the day it is added.
+    `include_control_tools` (the operator's flag) and `fixture_id` (the manager's
+    own spelling of `fixture`) are the two that would matter most, and a rename
+    that loses them fails the check below.
+    """
+    delegates = (SeahavenEnv.__init__, World.instance, seahaven.instances.InstanceManager.create)
+    strays = sorted(
+        {
+            name
+            for delegate in delegates
+            for name in inspect.signature(delegate).parameters
+            if name not in RESET_PARAMETERS
+        }
+    )
+    assert {"include_control_tools", "fixture_id"} <= set(strays)
+
+    for stray in [*strays, "tenant", "fixure"]:
+        message: dict[str, Any] = {stray: True}
+        with pytest.raises(WorldBug, match=rf"reset does not take {stray}\."):
+            env.reset(**message)
+        assert env.instance is None
+
+
+def test_a_refused_reset_names_every_stray_key_and_keeps_the_episode(env: SeahavenEnv) -> None:
+    """A message Seahaven will not act on does not end the episode the session has.
+
+    The message is asserted whole, because it is the whole answer a caller over
+    the wire gets: every stray key, and the names that were available instead,
+    which for `fixure` is the misspelling's own repair.
+    """
+    env.reset(episode_id="first")
+    running = env.instance
+    assert running is not None
+
+    takes = ", ".join(name for name in RESET_PARAMETERS if name != "self")
+    with pytest.raises(WorldBug) as refusal:
+        env.reset(fixure="agency", tenant="globex")
+    assert str(refusal.value) == (
+        f"reset does not take fixure, tenant. It takes {takes}; "
+        "a world's own keywords go inside startup={...}"
+    )
+
+    assert env.instance is running
+    assert env.state.episode_id == "first"
+    assert call(env, "rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
 def test_a_startup_keyword_named_like_a_framework_parameter_stays_the_worlds(
