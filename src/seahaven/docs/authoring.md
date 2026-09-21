@@ -1,6 +1,6 @@
 # Authoring a world
 
-This is the long page. It covers the package layout, the state format a world pins, the
+This is the long page. It covers the package layout, the state format a world pins, the name and
 instructions an MCP client reads, tools, arguments, results, transactions, errors, the error
 handler, middleware, startup hooks, the schema files, and the things that go wrong quietly.
 
@@ -8,7 +8,7 @@ handler, middleware, startup hooks, the schema files, and the things that go wro
 |---|---|
 | [Scaffolding a world](#scaffolding-a-world) | `seahaven new`, the layout it writes, and three rules about it |
 | [Pinning a state format](#pinning-a-state-format) | The one `World` argument with no default |
-| [Instructions for an MCP client](#instructions-for-an-mcp-client) | The server instruction string a world writes |
+| [What an MCP client reads](#what-an-mcp-client-reads) | The server name and the instruction string a world publishes |
 | [Writing a tool](#writing-a-tool) | Signatures, arguments, results, transactions, and what registration refuses |
 | [Errors](#errors) | This world's error shapes, the framework's own, and the error handler |
 | [Middleware](#middleware) | Wrapping every call |
@@ -106,12 +106,11 @@ Three things follow from the pin, and each of them catches an author out once:
 - **Changing the pin changes what every eval built on the world saves**, so bump `world.version`
   when you change it. These docs recommend it; nothing enforces it.
 
-## Instructions for an MCP client
+## What an MCP client reads
 
-`World(mcp_server_instructions=...)` is the instruction string an MCP client reads before it calls
-any of this world's tools. It is optional, in MCP and here. A world that does not set it sends no
-instructions: the handshake leaves the `instructions` field out, and the framework never writes a
-string of its own to put there.
+Two `World` arguments fill in the MCP handshake: `mcp_server_name` is the server name a client
+reads, and `mcp_server_instructions` is the instruction string a client reads before it calls any
+of this world's tools. Both are optional, in MCP and here.
 
 ```py
 world = seahaven.World(
@@ -119,6 +118,7 @@ world = seahaven.World(
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema"),
     state_format="seahaven.state/1",
+    mcp_server_name="Notes",
     mcp_server_instructions=(
         "Notes keeps short notes for one person. Search before you write: a note that already "
         "exists is edited, not written again."
@@ -126,12 +126,10 @@ world = seahaven.World(
 )
 ```
 
-**A world that emulates a real product has this string to copy.** Read the instructions the real
-product's own MCP server sends, and write those. The value is yours and the framework adds nothing
-to it, so an agent that reads it sees the product and not Seahaven. The argument is a free string,
-unvalidated like `description`: it never becomes a path, a filename or an identifier. Seahaven
-sends the string you give as given and never trims it, so a world that must send an empty
-instruction string sets `mcp_server_instructions=""`.
+**Important.** A world that emulates a real product should read what that product's own MCP server
+publishes and set both arguments to it, so an agent reading the handshake sees the product and not
+a mock environment. A world that sets neither publishes its `World(name=...)` and sends no
+instructions; [reference/api.md](reference/api.md) has the rules for both.
 
 ## Writing a tool
 

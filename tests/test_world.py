@@ -426,6 +426,75 @@ def test_the_mcp_server_instructions_are_kept_as_given_and_carried_by_a_copy(
     assert blank.mcp_server_instructions == ""
 
 
+def test_the_mcp_server_name_falls_back_to_the_worlds_name_and_is_carried_by_a_copy(
+    tmp_path: Path,
+) -> None:
+    """`world.mcp_server_name` always answers what the handshake will publish.
+
+    The fallback is resolved in `World.__init__` rather than at the server, so a
+    caller reads one attribute and never repeats the `or name`.
+    """
+    bare = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
+
+    assert bare.mcp_server_name == "w"
+    assert copy.copy(bare).mcp_server_name == "w"
+
+
+def test_the_mcp_server_name_is_kept_as_given_and_carried_by_a_copy(tmp_path: Path) -> None:
+    """The world keeps its own identity while the wire says the product's name.
+
+    The value is not held to the world-name rule: it never becomes a path or a
+    directory in Seahaven's own code, so capitals, spaces and `&` are all names a
+    real product's server may publish.
+    """
+    world = World(
+        "shopify_synthetic_world",
+        "1.0.0",
+        SCHEMA,
+        fixtures_dir=tmp_path,
+        state_format=PIN,
+        mcp_server_name="Shop & Ship",
+    )
+
+    assert world.name == "shopify_synthetic_world"
+    assert world.mcp_server_name == "Shop & Ship"
+    assert copy.copy(world).mcp_server_name == "Shop & Ship"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_a_blank_mcp_server_name_is_refused(tmp_path: Path, blank: str) -> None:
+    """Unlike `mcp_server_instructions`, this one may become an identifier for a client.
+
+    `None` is how a world says it publishes its own name; a blank string leaves a
+    client with nothing to show, so it is a mistake rather than a choice.
+    """
+    with pytest.raises(WorldBug, match="blank"):
+        World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN, mcp_server_name=blank)
+
+
+def test_an_over_long_mcp_server_name_is_refused_at_the_name_limit(tmp_path: Path) -> None:
+    """The limit is `names.MAX_LENGTH`, the one number this framework puts on such a name."""
+    at_the_limit = "s" * 128
+    World(
+        "w",
+        "1.0.0",
+        SCHEMA,
+        fixtures_dir=tmp_path,
+        state_format=PIN,
+        mcp_server_name=at_the_limit,
+    )
+
+    with pytest.raises(WorldBug, match="129 characters, and the limit is 128"):
+        World(
+            "w",
+            "1.0.0",
+            SCHEMA,
+            fixtures_dir=tmp_path,
+            state_format=PIN,
+            mcp_server_name=at_the_limit + "s",
+        )
+
+
 def test_the_registry_is_ordered_and_read_only(world: World) -> None:
     world.tool(echo)
 

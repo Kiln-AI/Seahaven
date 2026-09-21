@@ -264,7 +264,10 @@ def build_server(
         return wire.success(result)
 
     server = Server[None](
-        name=resolved.name if resolved is not None else UNRESOLVED_NAME,
+        # The world's `mcp_server_name`, which is its own `name` unless the
+        # author published another: what a client sees here is the author's
+        # choice, like every other string on this surface.
+        name=resolved.mcp_server_name if resolved is not None else UNRESOLVED_NAME,
         version=resolved.version if resolved is not None else "",
         # Whatever the world holds, sent as given: the author's own prose, never
         # the framework's, and never trimmed or read. MCP's `instructions` is
