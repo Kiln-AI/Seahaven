@@ -155,9 +155,10 @@ class World:
         # The MCP `instructions` string, returned verbatim by `seahaven mcp` and
         # read by nothing else in the framework. A free string, unvalidated for
         # the same reason as `description`: it is the author's own prose, and it
-        # never becomes a path, a filename or an identifier. `None` -- and a
-        # string that is blank -- means the server builds a default from the
-        # world's name and description instead.
+        # never becomes a path, a filename or an identifier. Every string an
+        # author gives is sent as given, the empty one included. `None` means
+        # the server sends no instructions at all, which MCP allows and which is
+        # the default because the framework writes none of its own.
         self.mcp_server_instructions = mcp_server_instructions
         self.fixtures_dir = (
             Path(fixtures_dir)

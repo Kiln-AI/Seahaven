@@ -93,13 +93,14 @@ built-in names in the message. `description` is the one-line description the Ope
 publishes. It is a free string, unvalidated, and the only thing that sets that line; a world that
 gives none, or gives a blank string, publishes `Seahaven world <name>`. `mcp_server_instructions`
 is the MCP `instructions` string a client reads before it calls a tool. It is a free string too,
-unvalidated, and a world that gives none, or gives a blank string, gets instructions built from its
-name and its description instead. `fixtures_dir` defaults to `fixtures/` at the project root, found
-by walking up from the constructing module to the directory holding `pyproject.toml`, and to
-`fixtures/` beside the package where there is none. `work_dir` is where instance copies are kept;
-the default is a per-process directory under the system temp directory, which is swept of previous
-processes' leftovers, and a directory you name is used exactly as given and never swept.
-`untracked_tables` names tables the change log's sessions do not attach.
+unvalidated and untrimmed, and every string a world gives is sent as given, the empty one included;
+a world that gives none sends no instructions at all, and the handshake leaves the field out.
+`fixtures_dir` defaults to `fixtures/` at the project root, found by walking up from the
+constructing module to the directory holding `pyproject.toml`, and to `fixtures/` beside the
+package where there is none. `work_dir` is where instance copies are kept; the default is a
+per-process directory under the system temp directory, which is swept of previous processes'
+leftovers, and a directory you name is used exactly as given and never swept. `untracked_tables`
+names tables the change log's sessions do not attach.
 
 A `World` whose schema does not execute cannot be constructed: the schema is built in memory to
 compute the schema hash, and SQLite's own message is reported.

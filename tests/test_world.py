@@ -402,9 +402,10 @@ def test_the_mcp_server_instructions_are_kept_as_given_and_carried_by_a_copy(
 ) -> None:
     """The MCP `instructions` string, verbatim, and `None` when it is not given.
 
-    A free string like `description`, and unvalidated for the same reason. A
-    blank string is accepted here and falls back where the server builds the
-    instructions, which is where the fallback is pinned.
+    A free string like `description`, and unvalidated for the same reason. The
+    empty string is accepted and kept as given, like any other string; that
+    `None` alone means no instructions is the server's reading of it, and is
+    pinned there.
     """
     world = World(
         "w",
