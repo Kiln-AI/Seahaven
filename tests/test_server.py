@@ -625,9 +625,10 @@ def test_a_startup_keyword_sent_flat_reaches_no_hook(tmp_path: Path) -> None:
     """The reset message's top level is the framework's namespace, and only its own.
 
     OpenEnv has no reset schema: its server forwards whatever
-    `SeahavenEnv.reset`'s signature accepts. Removing `**kwargs` from that
-    signature is what makes a flat key a key the server drops, rather than one
-    handed to a hook that happens to name it.
+    `SeahavenEnv.reset`'s signature accepts, and the catch-all there accepts a
+    flat key only in order to refuse it. The hook is read from outside, through
+    a tool and through the episode's startup, because "refused" is worth nothing
+    unless the keyword also failed to arrive.
     """
     world = build_world(tmp_path)
 
@@ -641,9 +642,49 @@ def test_a_startup_keyword_sent_flat_reaches_no_hook(tmp_path: Path) -> None:
         return {"tenant": ctx.state["tenant"]}
 
     with serving(world) as url, SeahavenClient(base_url=url) as env:
-        env.reset(tenant="globex")
+        with pytest.raises(RuntimeError, match=r"reset does not take tenant.*startup="):
+            env.reset(tenant="globex")
+        env.reset()
         assert env.call("whose").result == {"tenant": "acme"}
         assert env.state().startup == {}
+
+
+def test_a_stray_top_level_key_is_an_error_frame_and_the_session_survives(
+    world: World,
+) -> None:
+    """Every stray key is named at once, so one round trip fixes the whole message.
+
+    The session is running an episode when the stray message arrives, because
+    that is the case the refusal is placed for: the message is judged before the
+    old instance is destroyed, and over the wire is where that has to hold.
+    """
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset(episode_id="first")
+        with pytest.raises(RuntimeError, match=r"reset does not take fixure, tenant\.") as refusal:
+            env.reset(tenant="globex", fixure="agency")
+        assert "startup={...}" in str(refusal.value)
+        assert env.state().episode_id == "first"
+        reset = env.reset(now=INSTANT_ISO)
+        assert reset.observation.metadata["now"] == INSTANT_ISO
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+
+
+def test_a_misspelled_framework_argument_is_refused_and_builds_nothing(world: World) -> None:
+    """`fixure=` asked for a fixture, and a blank instance is not what it asked for.
+
+    The stock client, because the refusal is the server's: a Seahaven client is
+    not what stands between a misspelling and an episode. The answer carries the
+    spelling the caller wanted, which is the point of naming what `reset` takes.
+    """
+    fixture_id = _freeze(world)
+    with serving(world) as url, GenericEnvClient(base_url=url) as env:
+        with pytest.raises(RuntimeError, match="reset does not take fixure") as refusal:
+            env.reset(fixure=fixture_id)
+        assert re.search(r"It takes [^;]*\bfixture\b", str(refusal.value))
+        assert env.state()["fixture"] is None
+        reset = env.reset(fixture=fixture_id)
+        assert reset.observation["metadata"]["fixture"] == fixture_id
+        assert env.state()["fixture"]["id"] == fixture_id
 
 
 def test_a_startup_that_is_not_a_dict_is_an_error_frame_and_the_session_survives(

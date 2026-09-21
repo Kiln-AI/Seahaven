@@ -8,7 +8,8 @@
  *     at a time, in order, with no request ids.
  *   - a `step` on `{"type": "list_tools"}` answers the tool list; an
  *     environment that is not tool-shaped rejects it (see `--plain`).
- *   - `reset` silently drops kwargs the environment does not accept.
+ *   - `reset` takes the kwargs the environment accepts; a Seahaven server refuses
+ *     any other key by name, which this mock does not yet copy.
  *   - `GET /schema` and `GET /metadata` answer, and **no CORS headers are set**,
  *     because the real server sets none either.
  *   - `/reset`, `/step` and `/state` over HTTP answer 501, as Seahaven's do.

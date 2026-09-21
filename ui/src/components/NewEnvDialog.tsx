@@ -139,8 +139,8 @@ export function NewEnvDialog({
               form for. Whatever the environment's `reset()` accepts goes here, as a JSON object:
               commonly <code className="font-mono text-fg">seed</code> and{" "}
               <code className="font-mono text-fg">episode_id</code>, plus whatever that environment
-              adds. Anything it does not accept is dropped silently by the server, so an argument
-              that seems to do nothing was probably not one of its parameters.
+              adds. A key the environment does not accept is the server's to judge: some servers
+              drop it silently, and a Seahaven server answers with an error that names it.
             </p>
             <Textarea
               rows={5}
