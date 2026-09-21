@@ -425,6 +425,8 @@ def run_statement(
         rows, truncated = _collect(cursor, sql, params, max_rows, max_bytes)
     except apsw.Error as error:
         raise _failure(error, authorizer, tracer) from error
+    except UnicodeDecodeError as error:
+        raise _not_utf8_text(error) from error
     finally:
         # Nested, not three statements in a row: each of these has to run even if
         # the one before it raises. A restore skipped because its predecessor
@@ -455,6 +457,31 @@ def _failure(error: apsw.Error, authorizer: Authorizer, tracer: _StatementTracer
         # result code is an API where the message text is not.
         return DbError(message, code, (f"value larger than {MAX_VALUE_BYTES} bytes",))
     return DbError(message, code)
+
+
+def _not_utf8_text(error: UnicodeDecodeError) -> DbError:
+    """A TEXT value that is not valid UTF-8, in the sandbox's own vocabulary.
+
+    SQLite keeps whatever bytes a TEXT value was given and does not check them,
+    so `CAST(x'ff' AS TEXT)` is a legal result value, and APSW decodes it as UTF-8
+    while it builds the row. The failure therefore arrives out of `_collect` as a
+    bare `UnicodeDecodeError` -- a `ValueError`, not an `apsw.Error` -- which
+    `_failure` never sees.
+
+    Classified `value`, the same word as the size cap, because it is the same kind
+    of fact: the statement was allowed everything it asked for and then produced a
+    value that cannot be carried back. `sqlite_message` carries the decode error's
+    own text, there being no SQLite message for a failure SQLite does not consider
+    one.
+
+    The exception type is the whole of the classification, so a
+    `UnicodeDecodeError` raised by world code inside the statement -- a world's own
+    SQL function, or an extension's `Authorizer` subclass -- arrives here too and
+    is answered as this refusal. Nothing here can tell the two apart: APSW's decode
+    of a result value and a world function's own decode raise the same exception
+    out of the same call.
+    """
+    return DbError(str(error), None, ("value that is not valid UTF-8 text",))
 
 
 class _StatementTracer:

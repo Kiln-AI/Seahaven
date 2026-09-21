@@ -530,12 +530,65 @@ def test_bytes_come_back_as_base64(world: Db) -> None:
     assert result.rows == [["aGk="]]
 
 
+def test_text_that_is_not_utf8_is_a_value_refusal(world: Db) -> None:
+    """A TEXT value SQLite will hand over and APSW cannot decode is still a `DbError`.
+
+    SQLite does not check the bytes in a TEXT value, so `CAST(x'ff' AS TEXT)`
+    is a legal result and APSW's decode of it raises a `UnicodeDecodeError`
+    while the row is built. That is not an `apsw.Error`, so before it was
+    classified it left this function as a bare Python exception -- nothing a
+    world's error handler could map.
+    """
+    with pytest.raises(DbError) as raised:
+        run(world, "SELECT CAST(x'ff' AS TEXT)")
+
+    assert raised.value.refusals == ("value that is not valid UTF-8 text",)
+    assert refusal_kind(raised.value.refusals[0]) == "value"
+    assert raised.value.message == "not allowed: value that is not valid UTF-8 text"
+    # No SQLite result code, because SQLite did not consider this a failure.
+    assert raised.value.sqlite_code is None
+    assert "0xff" in raised.value.sqlite_message
+    # The bytes themselves are carryable: the refusal is about the cast to text.
+    assert run(world, "SELECT x'ff'").rows == [["/w=="]]
+    # And it survives the whole row rather than only a single-column one.
+    with pytest.raises(DbError) as second:
+        run(world, "SELECT id, CAST(x'ff' AS TEXT) FROM notes ORDER BY id")
+    assert second.value.refusals == ("value that is not valid UTF-8 text",)
+    # And a route with no BLOB in it: `char` of a surrogate codepoint builds the
+    # same undecodable bytes out of the default function allowlist alone.
+    with pytest.raises(DbError) as third:
+        run(world, "SELECT char(55296)")
+    assert third.value.refusals == ("value that is not valid UTF-8 text",)
+
+
+def test_a_world_bug_from_inside_a_statement_is_not_classified(world: Db) -> None:
+    """`WorldBug` reaches the author. Only the decode failure is turned into a refusal.
+
+    A world's own SQL function runs inside the statement, so whatever it raises
+    comes back out of the row loop next to the `UnicodeDecodeError` this function
+    now catches. Catching more broadly there would answer an agent with
+    "not allowed" for a bug in the world.
+    """
+
+    def explode(*_args: Any) -> str:
+        raise WorldBug("the world's own function is broken")
+
+    world.conn.create_scalar_function("boom", explode, 0)
+
+    with pytest.raises(WorldBug, match="the world's own function is broken"):
+        run(world, "SELECT boom()", functions=frozenset({"boom"}))
+
+    # The connection was still put back, the way it is for a `DbError`.
+    assert world.conn.authorizer is None
+
+
 @pytest.mark.parametrize(
     "sql",
     [
         "SELECT id FROM notes ORDER BY id",
         "SELECT * FROM secrets",
         "SELECT printf('%1000000000d', 1)",
+        "SELECT CAST(x'ff' AS TEXT)",
     ],
 )
 def test_the_connection_is_left_as_it_was_found(world: Db, sql: str) -> None:
