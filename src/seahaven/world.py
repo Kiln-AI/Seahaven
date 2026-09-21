@@ -47,7 +47,7 @@ from seahaven.db import SCHEMA_CHECK_CLOCK, SCHEMA_CHECK_SEED, build_blank
 from seahaven.errors import WorldBug
 from seahaven.fixtures import Fixture, load_all
 from seahaven.instances import Instance, InstanceManager, calling
-from seahaven.names import NAME_RULE, why_not_a_name
+from seahaven.names import MAX_LENGTH, NAME_RULE, why_not_a_name
 from seahaven.state import BUILTIN_FORMATS, BUILTIN_PREFIX, Formatter, check_format_name
 from seahaven.tool import Tool
 
@@ -125,6 +125,7 @@ class World:
         *,
         state_format: str | None = None,
         description: str | None = None,
+        mcp_server_name: str | None = None,
         mcp_server_instructions: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
@@ -152,6 +153,14 @@ class World:
         # nothing for a rule to protect. `None` -- and, at publication, a string
         # that is blank -- means the fallback, `Seahaven world <name>`.
         self.description = description
+        # The MCP `serverInfo.name` the handshake publishes. `World(name=...)` is
+        # the world's own identity -- a directory under the working root, the
+        # OpenEnv `env_name` -- and a world that emulates a real product wants a
+        # descriptive identity of its own while the MCP wire says what the real
+        # product's own server says. `None` means the world's `name`, and the
+        # fallback is resolved here so that `world.mcp_server_name` always
+        # answers what the wire will say and no caller repeats it.
+        self.mcp_server_name = _checked_mcp_server_name(name, mcp_server_name)
         # The MCP `instructions` string, returned verbatim by `seahaven mcp` and
         # read by nothing else in the framework. A free string, unvalidated for
         # the same reason as `description`: it is the author's own prose, and it
@@ -1037,6 +1046,34 @@ def _checked_state_format(name: str, state_format: str | None) -> str:
             f"the built-in formats are {_builtin_names()}"
         )
     return state_format
+
+
+def _checked_mcp_server_name(name: str, mcp_server_name: str | None) -> str:
+    """The name the MCP handshake publishes, or the refusal that says why not.
+
+    Deliberately not `names.why_not_a_name`, which `name` itself is held to: this
+    value never becomes a path, a filename or a directory in Seahaven's own code,
+    and a real product's server name is free to carry capitals, spaces and `&`.
+    It is not left unvalidated like `description` either, because a client may
+    make an identifier of it in a namespace of its own: a blank name gives such a
+    client nothing to work with, and the length limit is `names.MAX_LENGTH`,
+    which is already the one number this framework puts on an identifier a person
+    types into a world.
+    """
+    if mcp_server_name is None:
+        return name
+    if not mcp_server_name.strip():
+        raise WorldBug(
+            f"world {name!r} sets World(mcp_server_name={mcp_server_name!r}), which is blank; an "
+            f"MCP client has nothing to show for it. Leave the argument out to publish the "
+            f"world's own name"
+        )
+    if len(mcp_server_name) > MAX_LENGTH:
+        raise WorldBug(
+            f"world {name!r} sets World(mcp_server_name=...) to {len(mcp_server_name)} "
+            f"characters, and the limit is {MAX_LENGTH}"
+        )
+    return mcp_server_name
 
 
 def _check_name(name: str) -> None:

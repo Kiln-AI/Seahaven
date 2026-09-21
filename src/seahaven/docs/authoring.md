@@ -1,6 +1,6 @@
 # Authoring a world
 
-This is the long page. It covers the package layout, the state format a world pins, the
+This is the long page. It covers the package layout, the state format a world pins, the name and
 instructions an MCP client reads, tools, arguments, results, transactions, errors, the error
 handler, middleware, startup hooks, the schema files, and the things that go wrong quietly.
 
@@ -8,7 +8,7 @@ handler, middleware, startup hooks, the schema files, and the things that go wro
 |---|---|
 | [Scaffolding a world](#scaffolding-a-world) | `seahaven new`, the layout it writes, and three rules about it |
 | [Pinning a state format](#pinning-a-state-format) | The one `World` argument with no default |
-| [Instructions for an MCP client](#instructions-for-an-mcp-client) | The server instruction string a world writes |
+| [What an MCP client reads](#what-an-mcp-client-reads) | The server name and the instruction string a world publishes |
 | [Writing a tool](#writing-a-tool) | Signatures, arguments, results, transactions, and what registration refuses |
 | [Errors](#errors) | This world's error shapes, the framework's own, and the error handler |
 | [Middleware](#middleware) | Wrapping every call |
@@ -106,12 +106,11 @@ Three things follow from the pin, and each of them catches an author out once:
 - **Changing the pin changes what every eval built on the world saves**, so bump `world.version`
   when you change it. These docs recommend it; nothing enforces it.
 
-## Instructions for an MCP client
+## What an MCP client reads
 
-`World(mcp_server_instructions=...)` is the instruction string an MCP client reads before it calls
-any of this world's tools. It is optional, in MCP and here. A world that does not set it sends no
-instructions: the handshake leaves the `instructions` field out, and the framework never writes a
-string of its own to put there.
+Two `World` arguments fill in the MCP handshake: `mcp_server_name` is the server name a client
+reads, and `mcp_server_instructions` is the instruction string a client reads before it calls any
+of this world's tools. Both are optional, in MCP and here.
 
 ```py
 world = seahaven.World(
@@ -119,6 +118,7 @@ world = seahaven.World(
     version="1.0.0",
     schema=seahaven.sql_files(__package__, "schema"),
     state_format="seahaven.state/1",
+    mcp_server_name="Notes",
     mcp_server_instructions=(
         "Notes keeps short notes for one person. Search before you write: a note that already "
         "exists is edited, not written again."
@@ -126,12 +126,30 @@ world = seahaven.World(
 )
 ```
 
-**A world that emulates a real product has this string to copy.** Read the instructions the real
-product's own MCP server sends, and write those. The value is yours and the framework adds nothing
-to it, so an agent that reads it sees the product and not Seahaven. The argument is a free string,
-unvalidated like `description`: it never becomes a path, a filename or an identifier. Seahaven
-sends the string you give as given and never trims it, so a world that must send an empty
-instruction string sets `mcp_server_instructions=""`.
+**A world that emulates a real product has both of these to copy.** Set `mcp_server_name` to the
+name the real product's own MCP server publishes, and write the instructions that server sends. An
+agent that reads the handshake then sees the product and not Seahaven.
+
+`World(name=...)` is a different name, for a different reader. It is the world's own identity: a
+directory under the working root, the name in every fixture sidecar, and the OpenEnv environment
+name, so it is the name you want to be descriptive and unambiguous. `mcp_server_name` is what goes
+on the wire. A world that sets no `mcp_server_name` publishes its `name`, which is what a world
+scaffolded by `seahaven new` does.
+
+`mcp_server_name` is not held to the rule `name` follows, because it never becomes a path or a
+filename. Capitals, spaces and punctuation such as `&` are all accepted. A client may still make an
+identifier of it, so Seahaven refuses a blank name and a name longer than 128 characters; anything
+else is published as given.
+
+`mcp_server_instructions` is a free string, unvalidated like `description`: it never becomes a
+path, a filename or an identifier. Seahaven sends the string you give as given and never trims it,
+so a world that must send an empty instruction string sets `mcp_server_instructions=""`. A world
+that gives none sends no instructions: the handshake leaves the `instructions` field out, and the
+framework never writes a string of its own to put there.
+
+Both arguments apply to a server that started. A `seahaven mcp` process that could not start its
+world answers the client with the error it hit, and that error can name a file path and Seahaven
+itself, because it is written for the person who has to fix the client configuration.
 
 ## Writing a tool
 

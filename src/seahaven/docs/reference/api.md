@@ -66,6 +66,7 @@ class World:
         *,
         state_format: str | None = None,
         description: str | None = None,
+        mcp_server_name: str | None = None,
         mcp_server_instructions: str | None = None,
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
@@ -91,10 +92,15 @@ appear in the OpenEnv metadata and in every fixture's sidecar. `state_format` is
 the format `inst.state()` answers in, and a world constructed without one is refused with the
 built-in names in the message. `description` is the one-line description the OpenEnv metadata
 publishes. It is a free string, unvalidated, and the only thing that sets that line; a world that
-gives none, or gives a blank string, publishes `Seahaven world <name>`. `mcp_server_instructions`
-is the MCP `instructions` string a client reads before it calls a tool. It is a free string too,
-unvalidated and untrimmed, and every string a world gives is sent as given, the empty one included;
-a world that gives none sends no instructions at all, and the handshake leaves the field out.
+gives none, or gives a blank string, publishes `Seahaven world <name>`. `mcp_server_name` is the
+name the MCP handshake publishes; a world that gives none publishes its own `name`. Give it when
+the world emulates a real product whose own MCP server publishes another name. The name is not held
+to the world-name rule below, because it never becomes a path: capitals, spaces and `&` are all
+accepted. A blank name is refused, and so is one longer than 128 characters.
+`mcp_server_instructions` is the MCP `instructions` string a client reads before it calls a tool.
+It is a free string too, unvalidated and untrimmed, and every string a world gives is sent as
+given, the empty one included; a world that gives none sends no instructions at all, and the
+handshake leaves the field out.
 `fixtures_dir` defaults to `fixtures/` at the project root, found by walking up from the
 constructing module to the directory holding `pyproject.toml`, and to `fixtures/` beside the
 package where there is none. `work_dir` is where instance copies are kept; the default is a
@@ -133,6 +139,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.added_worlds` | what `add_world` recorded, in registration order. Read-only |
 | `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
 | `world.name`, `world.version`, `world.description`, `world.mcp_server_instructions`, `world.schema`, `world.schema_hash`, `world.fixtures_dir`, `world.pinned_state_format` | as given, plus the hash of the normalised schema |
+| `world.mcp_server_name` | the name the MCP handshake publishes: as given, or `world.name` when the world gives none |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
 [../authoring.md](../authoring.md).

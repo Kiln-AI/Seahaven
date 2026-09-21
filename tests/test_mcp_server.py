@@ -123,7 +123,7 @@ async def call(client: Client, name: str, **arguments: Any) -> types.CallToolRes
     return await client.call_tool(name, arguments)
 
 
-# --- the instructions the world writes --------------------------------------
+# --- what an MCP client reads -----------------------------------------------
 
 
 def instructions_from_the_handshake(world: World) -> str | None:
@@ -183,6 +183,46 @@ def test_the_handshake_carries_the_worlds_identity(served: Served) -> None:
 
     assert info is not None
     assert (info.name, info.version) == ("testworld", "1.0.0")
+
+
+def server_info_from_the_handshake(world: World) -> Any:
+    """What a client reads as `world`'s `serverInfo`, over a connection of its own."""
+
+    async def work(client: Client) -> Any:
+        return client.server_info
+
+    served = serve_world(world)
+    try:
+        return served.talk(work)
+    finally:
+        served.sessions.close_all()
+
+
+def test_the_handshake_publishes_the_worlds_own_mcp_server_name(tmp_path: Path) -> None:
+    """The world keeps a descriptive identity while the wire says the product's name.
+
+    `name` is the world's filesystem identity and its OpenEnv `env_name`, and
+    neither of those readers is the agent; `mcp_server_name` is what the agent's
+    client reads.
+    """
+    world = build_world(tmp_path, name="shopify_synthetic_world", mcp_server_name="shopify")
+
+    info = server_info_from_the_handshake(world)
+
+    assert info is not None
+    assert info.name == "shopify"
+
+
+def test_the_handshake_publishes_the_worlds_name_when_it_sets_no_mcp_server_name(
+    tmp_path: Path,
+) -> None:
+    """The fallback, on the wire: nothing changes for a world written before the argument."""
+    world = build_world(tmp_path, name="notes")
+
+    info = server_info_from_the_handshake(world)
+
+    assert info is not None
+    assert info.name == "notes"
 
 
 # --- what is published ------------------------------------------------------
