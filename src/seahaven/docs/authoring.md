@@ -126,30 +126,14 @@ world = seahaven.World(
 )
 ```
 
-**A world that emulates a real product has both of these to copy.** Set `mcp_server_name` to the
-name the real product's own MCP server publishes, and write the instructions that server sends. An
-agent that reads the handshake then sees the product and not Seahaven.
+**Important.** A world that emulates a real product should read what that product's own MCP server
+publishes and set both arguments to it, so an agent reading the handshake sees the product and not
+a mock environment. A world that sets neither publishes its `World(name=...)` and sends no
+instructions; [reference/api.md](reference/api.md) has the rules for both.
 
-`World(name=...)` is a different name, for a different reader. It is the world's own identity: a
-directory under the working root, the name in every fixture sidecar, and the OpenEnv environment
-name, so it is the name you want to be descriptive and unambiguous. `mcp_server_name` is what goes
-on the wire. A world that sets no `mcp_server_name` publishes its `name`, which is what a world
-scaffolded by `seahaven new` does.
-
-`mcp_server_name` is not held to the rule `name` follows, because it never becomes a path or a
-filename. Capitals, spaces and punctuation such as `&` are all accepted. A client may still make an
-identifier of it, so Seahaven refuses a blank name and a name longer than 128 characters; anything
-else is published as given.
-
-`mcp_server_instructions` is a free string, unvalidated like `description`: it never becomes a
-path, a filename or an identifier. Seahaven sends the string you give as given and never trims it,
-so a world that must send an empty instruction string sets `mcp_server_instructions=""`. A world
-that gives none sends no instructions: the handshake leaves the `instructions` field out, and the
-framework never writes a string of its own to put there.
-
-Both arguments apply to a server that started. A `seahaven mcp` process that could not start its
-world answers the client with the error it hit, and that error can name a file path and Seahaven
-itself, because it is written for the person who has to fix the client configuration.
+A `seahaven mcp` process that could not start its world still answers the client with the error it
+hit, and that error can name Seahaven itself, because it is written for the person who has to fix
+the client configuration.
 
 ## Writing a tool
 
