@@ -131,10 +131,6 @@ publishes and set both arguments to it, so an agent reading the handshake sees t
 a mock environment. A world that sets neither publishes its `World(name=...)` and sends no
 instructions; [reference/api.md](reference/api.md) has the rules for both.
 
-A `seahaven mcp` process that could not start its world still answers the client with the error it
-hit, and that error can name Seahaven itself, because it is written for the person who has to fix
-the client configuration.
-
 ## Writing a tool
 
 A tool is a plain synchronous function. Its first parameter is the instance context; the rest are

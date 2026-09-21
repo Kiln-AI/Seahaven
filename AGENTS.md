@@ -28,6 +28,17 @@ The bundled docs in `src/seahaven/docs/` are written in plain, direct English, c
 Simplified Technical English. Being friendly and explaining why something exists is welcome; a
 literary register is not. Check a docs change against this list.
 
+- **Write for someone building on Seahaven now.** Docs are not a record of how the code came to
+  be. Leave out the decision that was taken, the alternative that was rejected and the defect that
+  prompted a change: `specs/` holds that history, and a code comment holds a constraint a reader of
+  the code needs. Write what an author does, and what happens when they do it.
+- **Be succinct.** A reader who is given too much stops reading, and then has none of it. Cover
+  what an author needs in order to act, and stop there. Prefer one sentence to three, and a link to
+  the reference page over a paragraph that repeats it.
+- **Do not document every error case.** A descriptive error message reaches an author at the moment
+  the mistake is made, which a page they are not reading cannot do. Write an error down only where
+  the message alone cannot teach the fix, and put the list of what is refused in `reference/`
+  rather than in a guide page.
 - **Plain sentences.** One idea each, short, active, present tense for facts and imperative for
   instructions. One term per thing, defined before it is used ("schema", not "DDL"). Name the thing
   again rather than writing "it" or "this" across a clause boundary.
