@@ -460,6 +460,28 @@ def test_the_value_cap_applies_to_the_statement_and_is_put_back_afterwards(
     assert reader.call("rows", sql="SELECT length(printf('%1100000d', 1)) AS n") == [{"n": 1100000}]
 
 
+def test_a_cast_of_non_utf8_bytes_to_text_is_refused_at_the_door(reader: Instance) -> None:
+    """The agent gets the world's refusal, not a Python exception out of the tool.
+
+    A BLOB column is where an agent finds this: casting its bytes to text builds
+    a TEXT value APSW cannot decode, and the failure happens while the row is
+    built rather than while the statement is authorized.
+    """
+    with reader.bulk() as ctx:
+        ctx.db.execute("INSERT INTO attachments VALUES (?, ?)", "a1", b"\xff\xfe")
+
+    with pytest.raises(DbError) as raised:
+        ask(reader, "SELECT CAST(blob AS TEXT) FROM attachments")
+
+    error = raised.value
+    assert error.code == "db_error"
+    assert error.refusals == ("value that is not valid UTF-8 text",)
+    assert error.message == "not allowed: value that is not valid UTF-8 text"
+    assert error.details == {"refusals": ["value that is not valid UTF-8 text"]}
+    # The door is still open afterwards: the same blob reads back as base64.
+    assert ask(reader, "SELECT blob FROM attachments")["rows"] == [["//4="]]
+
+
 def test_an_empty_query_is_an_argument_error(reader: Instance) -> None:
     with pytest.raises(ArgumentError) as raised:
         ask(reader, "")
