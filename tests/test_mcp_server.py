@@ -41,7 +41,7 @@ from mcp import Client, types
 from mcp.shared.exceptions import MCPError
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
-from seahaven.mcp.server import Sessions, State, build_server, instructions_for
+from seahaven.mcp.server import Sessions, State, build_server
 
 # A bound on a hang rather than a measurement: a subprocess test waits this long
 # for the whole exchange, including the world's startup.
@@ -126,7 +126,20 @@ async def call(client: Client, name: str, **arguments: Any) -> types.CallToolRes
 # --- the instructions the world writes --------------------------------------
 
 
-def test_instructions_are_the_worlds_own_when_it_sets_them(tmp_path: Path) -> None:
+def instructions_from_the_handshake(world: World) -> str | None:
+    """What a client reads as `world`'s instructions, over a connection of its own."""
+
+    async def work(client: Client) -> str | None:
+        return client.instructions
+
+    served = serve_world(world)
+    try:
+        return served.talk(work)
+    finally:
+        served.sessions.close_all()
+
+
+def test_the_instructions_are_the_worlds_own_when_it_sets_them(tmp_path: Path) -> None:
     """Verbatim, with nothing of the framework's added to it."""
     world = build_world(
         tmp_path,
@@ -134,37 +147,42 @@ def test_instructions_are_the_worlds_own_when_it_sets_them(tmp_path: Path) -> No
         mcp_server_instructions="Use notes to record what happened.",
     )
 
-    assert instructions_for(world) == "Use notes to record what happened."
+    assert instructions_from_the_handshake(world) == "Use notes to record what happened."
 
 
-def test_instructions_fall_back_to_the_name_and_the_description(tmp_path: Path) -> None:
+def test_a_world_that_sets_no_instructions_sends_none(tmp_path: Path) -> None:
+    """Unset is the one thing that sends nothing, and nothing is built from the world's prose.
+
+    MCP's `instructions` is optional. The name and the description are the
+    world's own, but they are written for the OpenEnv metadata; an author who
+    wants an MCP client to read them says so with this argument.
+    """
     world = build_world(tmp_path, description="Notes, and the rows in them.")
 
-    assert instructions_for(world) == "testworld\n\nNotes, and the rows in them."
+    assert instructions_from_the_handshake(world) is None
 
 
-def test_blank_instructions_fall_back_the_same_way(tmp_path: Path) -> None:
-    """A blank string is not prose, so it means the default and not an empty one."""
-    world = build_world(tmp_path, description="Notes.", mcp_server_instructions="   ")
+def test_a_blank_instructions_string_is_sent_as_given(tmp_path: Path) -> None:
+    """The check is `None` and nothing else: a string the author set is the author's.
 
-    assert instructions_for(world) == "testworld\n\nNotes."
+    The empty string and a string of spaces are both values an author chose, so
+    they are sent rather than trimmed away or read as "no instructions".
+    """
+    empty = build_world(tmp_path, description="Notes.", mcp_server_instructions="")
+    spaces = build_world(tmp_path, mcp_server_instructions="  ")
+
+    assert instructions_from_the_handshake(empty) == ""
+    assert instructions_from_the_handshake(spaces) == "  "
 
 
-def test_instructions_fall_back_to_the_name_alone_without_a_description(tmp_path: Path) -> None:
-    world = build_world(tmp_path)
+def test_the_handshake_carries_the_worlds_identity(served: Served) -> None:
+    async def work(client: Client) -> Any:
+        return client.server_info
 
-    assert instructions_for(world) == "testworld"
-
-
-def test_the_handshake_carries_the_worlds_identity_and_its_instructions(served: Served) -> None:
-    async def work(client: Client) -> tuple[Any, str | None]:
-        return client.server_info, client.instructions
-
-    info, instructions = served.talk(work)
+    info = served.talk(work)
 
     assert info is not None
     assert (info.name, info.version) == ("testworld", "1.0.0")
-    assert instructions == "testworld\n\nnotes and the rows in them"
 
 
 # --- what is published ------------------------------------------------------

@@ -41,7 +41,6 @@ __all__ = [
     "Sessions",
     "State",
     "build_server",
-    "instructions_for",
 ]
 
 _log = logging.getLogger(__name__)
@@ -132,23 +131,6 @@ class State:
 
     fatal: BaseException | None = None
     failed: anyio.Event = field(default_factory=anyio.Event)
-
-
-def instructions_for(world: World) -> str:
-    """The MCP `instructions` string: the world's own prose, never the framework's.
-
-    `mcp_server_instructions` is returned verbatim when the author set it, so an
-    author cloning a real MCP server can match that server's instructions word
-    for word. Otherwise the default is built from the world's name and its
-    description, which are the author's prose too; a world with no description
-    falls back to the name alone. Nothing about this process -- the fixture, the
-    seed, the instance -- is ever in it (`functional_spec.md` §3).
-    """
-    given = world.mcp_server_instructions
-    if given is not None and given.strip():
-        return given
-    description = (world.description or "").strip()
-    return f"{world.name}\n\n{description}" if description else world.name
 
 
 def build_server(
@@ -284,7 +266,11 @@ def build_server(
     server = Server[None](
         name=resolved.name if resolved is not None else UNRESOLVED_NAME,
         version=resolved.version if resolved is not None else "",
-        instructions=instructions_for(resolved) if resolved is not None else None,
+        # Whatever the world holds, sent as given: the author's own prose, never
+        # the framework's, and never trimmed or read. MCP's `instructions` is
+        # optional and commonly omitted, so a world that sets nothing sends
+        # nothing and the handshake leaves the field out.
+        instructions=resolved.mcp_server_instructions if resolved is not None else None,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
     )

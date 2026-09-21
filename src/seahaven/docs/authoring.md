@@ -109,9 +109,9 @@ Three things follow from the pin, and each of them catches an author out once:
 ## Instructions for an MCP client
 
 `World(mcp_server_instructions=...)` is the instruction string an MCP client reads before it calls
-any of this world's tools. It is optional. A world that is never served over MCP does not set it,
-and a world that sets it to nothing, or to a blank string, gets instructions built from its name and
-its description instead.
+any of this world's tools. It is optional, in MCP and here. A world that does not set it sends no
+instructions: the handshake leaves the `instructions` field out, and the framework never writes a
+string of its own to put there.
 
 ```py
 world = seahaven.World(
@@ -129,7 +129,9 @@ world = seahaven.World(
 **A world that emulates a real product has this string to copy.** Read the instructions the real
 product's own MCP server sends, and write those. The value is yours and the framework adds nothing
 to it, so an agent that reads it sees the product and not Seahaven. The argument is a free string,
-unvalidated like `description`: it never becomes a path, a filename or an identifier.
+unvalidated like `description`: it never becomes a path, a filename or an identifier. Seahaven
+sends the string you give as given and never trims it, so a world that must send an empty
+instruction string sets `mcp_server_instructions=""`.
 
 ## Writing a tool
 

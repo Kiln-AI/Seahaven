@@ -78,6 +78,7 @@ world = seahaven.World(
         "n INTEGER NOT NULL DEFAULT 0) STRICT;"
     ),
     description="Notes, and the rows in them.",
+    mcp_server_instructions="Write a note, then read it back.",
     state_format="seahaven.state/1",
     work_dir={work_dir!r},
 )
@@ -255,7 +256,7 @@ def test_the_command_serves_the_world_it_finds(project: Project, mode: str) -> N
 
     assert info is not None
     assert (info.name, info.version) == ("noisy", "2.1.0")
-    assert instructions == "noisy\n\nNotes, and the rows in them."
+    assert instructions == "Write a note, then read it back."
     assert names == ["write_note", "notes", "shop", "refuse", "bump"]
 
 
