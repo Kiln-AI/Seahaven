@@ -1,10 +1,10 @@
 ---
-status: draft
+status: complete
 ---
 
 # Reset Schema
 
-Add a new API endpoint to the `seahaven serve` FastAPI server: `/seahaven/_reset_schema` (namespaced to avoid OpenEnv collisions).
+Add a new API endpoint to the `seahaven serve` FastAPI server: `/seahaven/reset_schema` (namespaced to avoid OpenEnv collisions).
 
 The model is like the `/schema` endpoint, in that it returns the expected schema, but for the `reset()` call (the `/schema` endpoint covers state and others). The schema should include:
 
