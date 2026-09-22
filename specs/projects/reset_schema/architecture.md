@@ -144,9 +144,8 @@ def _serve_schemas(served: FastAPI, reset_cls: type[SeahavenResetRequest]) -> No
       return SeahavenSchemaResponse(**base.model_dump(), reset=reset_cls.model_json_schema())
   ```
 
-  `upstream` is `async def get_schemas()` in openenv 0.5.x. Call it through
-  `fastapi.concurrency`-free code: `result = upstream(); if inspect.isawaitable(result): result =
-  await result` so a sync upstream handler still works.
+  `upstream` is `async def get_schemas()` in openenv 0.5.x. Call it as `result = upstream()`, then
+  `await` it if `inspect.isawaitable(result)`, so a sync upstream handler still works.
 - Comment at the function: this is what `create_app(reset_cls=...)` plus a `reset` key on
   `/schema` would give, and it goes away (replaced by passing `reset_cls`) if OpenEnv accepts that.
 - In `app()`: `reset_cls = SeahavenResetRequest.for_world(world)` **before** `create_app`, so a
