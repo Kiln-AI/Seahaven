@@ -1,7 +1,6 @@
 # Seahaven
 
-**Synthetic worlds for AI agents.** Fake, stateful replicas of the systems your agent works
-against, for RL and evals.
+**Framework for building synthetic worlds for AI agents.** Fake, stateful replicas of the systems your agent works against, for RL and evals.
 
 [Docs](src/seahaven/docs/index.md) · [PyPI](https://pypi.org/project/seahaven/) · [Kiln AI](https://kiln.tech)
 
