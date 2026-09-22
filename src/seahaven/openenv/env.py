@@ -28,9 +28,10 @@ and ignored because Seahaven does not bound a call.
 import inspect
 import logging
 import uuid
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.mcp_types import (
@@ -41,10 +42,17 @@ from openenv.core.env_server.mcp_types import (
 )
 from openenv.core.env_server.mcp_types import ToolError as WireToolError
 from openenv.core.env_server.mcp_types import ToolErrorType as WireToolErrorType
-from openenv.core.env_server.types import Action, EnvironmentMetadata, Observation, State
-from pydantic import BaseModel, Field
+from openenv.core.env_server.types import (
+    Action,
+    EnvironmentMetadata,
+    Observation,
+    ResetRequest,
+    SchemaResponse,
+    State,
+)
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from seahaven.call import serialise
+from seahaven.call import name_of, serialise
 from seahaven.errors import (
     INTERNAL_ERROR_CODE,
     INTERNAL_ERROR_MESSAGE,
@@ -53,8 +61,8 @@ from seahaven.errors import (
     WorldBug,
 )
 from seahaven.instances import Instance
-from seahaven.state import document
-from seahaven.world import World
+from seahaven.state import BUILTIN_FORMATS, document
+from seahaven.world import RegisteredStartupHook, World
 
 __all__ = [
     "FileRef",
@@ -62,6 +70,8 @@ __all__ = [
     "NodeRef",
     "SeahavenEnv",
     "SeahavenObservation",
+    "SeahavenResetRequest",
+    "SeahavenSchemaResponse",
     "SeahavenState",
     "WorldRef",
 ]
@@ -303,6 +313,93 @@ class SeahavenState(State):
             "untyped because its shape is the format's, not the framework's."
         )
     )
+
+
+class SeahavenResetRequest(ResetRequest):
+    """The reset message: OpenEnv's two fields and the keywords `SeahavenEnv.reset` adds.
+
+    Used for its JSON schema only; `SeahavenEnv.reset` validates a reset exactly as it did.
+    """
+
+    # `forbid` over the base's `allow`, because `SeahavenEnv.reset` refuses every
+    # key it does not name. `control_tools` is one it names and ignores, so it is
+    # not a field: publishing it would advertise a control that does nothing.
+    model_config = ConfigDict(extra="forbid")
+
+    fixture: str | None = Field(
+        default=None,
+        description=(
+            "The fixture to start from, by id. Null starts a blank instance from the world's "
+            "schema."
+        ),
+    )
+    now: str | None = Field(
+        default=None,
+        description=(
+            "The blank instance's clock, as an ISO-8601 instant. Refused with a fixture, which "
+            "carries its own clock."
+        ),
+    )
+    state_format: str | None = Field(
+        default=None,
+        description=(
+            "The format of this episode's state documents. Null uses the world's pinned format."
+        ),
+    )
+    startup: dict[str, Any] | None = Field(
+        default=None, description="The world's own startup keywords, passed to its startup hooks."
+    )
+
+    @classmethod
+    def for_world(cls, world: World) -> type[SeahavenResetRequest]:
+        """This model narrowed to one world: its fixtures, its formats, its startup keywords.
+
+        The fixture ids are read from the fixtures directory on every
+        `model_json_schema()`, so a fixture frozen while a server runs is
+        published without a restart. Everything else is fixed here, and a
+        startup hook the schema cannot describe is a `WorldBug` here.
+        """
+        base = cls.model_fields
+        # A world cannot register a built-in's name, so the two lists never overlap.
+        formats = (*sorted(BUILTIN_FORMATS), *sorted(world.state_formats))
+
+        def fill_fixture_ids(schema: dict[str, Any]) -> None:
+            ids = [fixture.id for fixture in world.fixtures()]
+            # Null-only rather than an empty `enum`, which is not valid JSON Schema.
+            schema["anyOf"] = [{"type": "string", "enum": ids}] if ids else []
+            schema["anyOf"].append({"type": "null"})
+
+        # The subclass takes the base's own name, so the schema's `title` is
+        # `SeahavenResetRequest` and no generated name reaches the wire. No
+        # `__config__`: `create_model` refuses one beside `__base__`, and the base's
+        # `extra="forbid"` is inherited.
+        return create_model(
+            "SeahavenResetRequest",
+            __base__=cls,
+            fixture=(
+                Annotated[
+                    str | None,
+                    Field(
+                        description=base["fixture"].description, json_schema_extra=fill_fixture_ids
+                    ),
+                ],
+                None,
+            ),
+            state_format=(
+                Literal[formats] | None,  # ty: ignore[invalid-type-form]
+                Field(default=None, description=base["state_format"].description),
+            ),
+            startup=(
+                _startup_model(world) | None,
+                Field(default=None, description=base["startup"].description),
+            ),
+        )
+
+
+class SeahavenSchemaResponse(SchemaResponse):
+    """`GET /schema`'s answer plus the reset message, as OpenEnv would answer with a `reset_cls`."""
+
+    reset: dict[str, Any] = Field(description="JSON schema for the reset message")
 
 
 class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
@@ -721,3 +818,117 @@ def _internal_error(correlation: str) -> ToolError:
     the server's log.
     """
     return ToolError(INTERNAL_ERROR_CODE, INTERNAL_ERROR_MESSAGE, {"id": correlation})
+
+
+def _startup_model(world: World) -> type[BaseModel]:
+    """The startup keywords of every hook in the world's tree, as one model.
+
+    A keyword is built from its hook parameter the way a tool argument is: the
+    annotation is the type (`Any` when there is none), the default is the default,
+    and one with no default is required. Keywords come from every node, because a
+    keyword in `reset(startup=...)` reaches every hook in the tree that names it,
+    so the names are exactly `composition.accepted_startup_kwargs`.
+
+    A keyword bound on a hook's node (`add_world(..., startup={...})`) never
+    reaches that hook from the caller: the bound value is applied last. So that
+    hook's parameter neither makes the keyword required nor conflicts with
+    another hook's annotation. A keyword that only bound hooks name is still
+    accepted by the server, and ignored, so it is published as optional, with
+    no type and no default.
+    """
+    fields: dict[str, tuple[Any, Any]] = {}
+    owners: dict[str, RegisteredStartupHook] = {}
+    bound_only: dict[str, RegisteredStartupHook] = {}
+    open_ended = False
+    for node in world.composition().nodes:
+        for hook in node.world.startup_hooks:
+            open_ended = open_ended or hook.takes_var_kwargs
+            for parameter in _signature(hook).parameters.values():
+                if parameter.kind is not inspect.Parameter.KEYWORD_ONLY:
+                    continue
+                name = parameter.name
+                if name in node.bound_startup:
+                    bound_only.setdefault(name, hook)
+                    continue
+                annotation = (
+                    Any if parameter.annotation is inspect.Parameter.empty else parameter.annotation
+                )
+                default = ... if parameter.default is inspect.Parameter.empty else parameter.default
+                if name not in fields:
+                    fields[name] = (annotation, default)
+                    owners[name] = hook
+                elif fields[name][0] != annotation:
+                    raise WorldBug(
+                        f"startup keyword {name!r} is annotated {fields[name][0]} by "
+                        f"{name_of(owners[name].fn)} and {annotation} by {name_of(hook.fn)}; one "
+                        f"keyword reaches both hooks, so give them one type -- one shared "
+                        f"object, such as a module-level alias, because two `Annotated[..., "
+                        f"Field(...)]` written out separately are never equal"
+                    )
+    for name, hook in bound_only.items():
+        if name not in fields:
+            fields[name] = (Any, Field(default=None, json_schema_extra=_drop_default))
+            owners[name] = hook
+    for name, hook in owners.items():
+        if name.startswith("_") or name == "model_config":
+            raise WorldBug(
+                f"startup hook {name_of(hook.fn)}: keyword {name!r} cannot be published in the "
+                f"reset schema, because pydantic reserves the name; rename it"
+            )
+    config = ConfigDict(extra="allow" if open_ended else "forbid")
+    try:
+        model = _create_startup_model(config, fields)
+        model.model_json_schema(mode="validation")
+    except Exception as error:
+        name = _unschemable_keyword(fields, config)
+        where = f"startup hook {name_of(owners[name].fn)}: keyword {name!r}" if name else "startup"
+        raise WorldBug(f"{where}: no JSON schema: {error}") from error
+    missing = [name for name in fields if name not in model.model_fields]
+    if missing:
+        name = missing[0]
+        raise WorldBug(
+            f"startup hook {name_of(owners[name].fn)}: keyword {name!r} cannot be published in "
+            f"the reset schema; rename it"
+        )
+    return model
+
+
+def _drop_default(schema: dict[str, Any]) -> None:
+    schema.pop("default", None)
+
+
+def _create_startup_model(
+    config: ConfigDict, fields: dict[str, tuple[Any, Any]]
+) -> type[BaseModel]:
+    with warnings.catch_warnings():
+        # A keyword named `schema`, `copy` or `json` is a fine field that shadows a
+        # `BaseModel` method; the model is used for its schema only, so the
+        # shadowing is harmless and the warning would print on every `app()`.
+        warnings.filterwarnings(
+            "ignore", message=".*shadows an attribute in parent", category=UserWarning
+        )
+        return create_model(  # ty: ignore[no-matching-overload]
+            "SeahavenStartup", __config__=config, **fields
+        )
+
+
+def _signature(hook: RegisteredStartupHook) -> inspect.Signature:
+    try:
+        # Evaluated, so a `Literal` or a model reaches pydantic as the object it names.
+        return inspect.signature(hook.fn, eval_str=True)
+    except NameError as error:
+        raise WorldBug(
+            f"startup hook {name_of(hook.fn)} is annotated with {error.name!r}, which does not "
+            f"exist at runtime: an annotation imported only under TYPE_CHECKING cannot describe "
+            f"a startup keyword"
+        ) from error
+
+
+def _unschemable_keyword(fields: dict[str, tuple[Any, Any]], config: ConfigDict) -> str | None:
+    """The keyword pydantic refused, found by building each one alone."""
+    for name, definition in fields.items():
+        try:
+            _create_startup_model(config, {name: definition}).model_json_schema(mode="validation")
+        except Exception:
+            return name
+    return None

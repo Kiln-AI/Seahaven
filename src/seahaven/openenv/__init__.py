@@ -16,6 +16,7 @@ That file, `openenv_app.py`, is the whole of a world's server. One world per
 app, mounted at `/`, which is the shape a hub expects.
 """
 
+import inspect
 import json
 from contextlib import suppress
 from pathlib import Path
@@ -32,6 +33,7 @@ from openenv.core.env_server.mcp_types import (
     ListToolsObservation,
 )
 from openenv.core.env_server.types import ConcurrencyConfig
+from starlette.concurrency import run_in_threadpool
 
 from seahaven.openenv.client import SeahavenClient
 from seahaven.openenv.env import (
@@ -40,6 +42,8 @@ from seahaven.openenv.env import (
     NodeRef,
     SeahavenEnv,
     SeahavenObservation,
+    SeahavenResetRequest,
+    SeahavenSchemaResponse,
     SeahavenState,
     WorldRef,
 )
@@ -55,6 +59,8 @@ __all__ = [
     "SeahavenClient",
     "SeahavenEnv",
     "SeahavenObservation",
+    "SeahavenResetRequest",
+    "SeahavenSchemaResponse",
     "SeahavenState",
     "WorldRef",
     "app",
@@ -460,6 +466,48 @@ def _serve_console(served: FastAPI) -> None:
         return FileResponse(CONSOLE_FILE, media_type="text/html")
 
 
+SCHEMAS_PATH = "/seahaven/schemas"
+UPSTREAM_SCHEMA_PATH = "/schema"
+
+
+def _serve_schemas(served: FastAPI, reset_cls: type[SeahavenResetRequest]) -> None:
+    """Add `GET /seahaven/schemas`: upstream's `GET /schema` answer plus a `reset` key.
+
+    OpenEnv publishes no schema for the reset message. This route answers what
+    `create_app(reset_cls=...)` and a `reset` key on `/schema` would, which is
+    the change proposed upstream; if OpenEnv accepts it, this route goes and
+    `app()` passes `reset_cls` instead. The three shared keys come from
+    upstream's own handler, so the two routes cannot disagree.
+
+    Kept out of the OpenAPI schema for the reason `/console` is: `openenv push`
+    classifies an app by its path names.
+    """
+    upstream = next(
+        (
+            route.endpoint
+            for route in served.router.routes
+            if isinstance(route, APIRoute)
+            and route.path == UPSTREAM_SCHEMA_PATH
+            and "GET" in (route.methods or set())
+        ),
+        None,
+    )
+    if upstream is None:
+        raise RuntimeError(
+            f"OpenEnv's app has no GET {UPSTREAM_SCHEMA_PATH} route, which "
+            f"GET {SCHEMAS_PATH} extends; the installed openenv is not one Seahaven supports"
+        )
+
+    @served.get(SCHEMAS_PATH, include_in_schema=False, response_model=SeahavenSchemaResponse)
+    async def schemas() -> SeahavenSchemaResponse:
+        base = upstream()
+        if inspect.isawaitable(base):
+            base = await base
+        return SeahavenSchemaResponse(
+            **base.model_dump(), reset=await run_in_threadpool(reset_cls.model_json_schema)
+        )
+
+
 def app(
     world: World,
     *,
@@ -489,6 +537,12 @@ def app(
     reach an instance. The websocket transport at `/ws` is the product and is
     untouched, `{"type": "mcp"}` frames included.
 
+    `GET /seahaven/schemas` answers what `GET /schema` answers plus `reset`, the
+    JSON schema of the reset message for this world: its fixture ids, read on
+    every request, its state formats and its startup keywords. It is served
+    whatever `console` says. A startup hook that schema cannot describe makes
+    this function raise a `WorldBug`, so a server with one does not start.
+
     `session_timeout` is seconds of inactivity before OpenEnv reaps a session,
     or `None` for no reaper. It is passed as part of a `ConcurrencyConfig`
     because OpenEnv refuses both that and `max_concurrent_envs` together, and
@@ -513,6 +567,10 @@ def app(
     def _factory() -> SeahavenEnv:
         return SeahavenEnv(world, include_control_tools=include_control_tools)
 
+    # Before anything is built, so a world whose reset schema cannot be built
+    # fails here and nowhere later.
+    reset_cls = SeahavenResetRequest.for_world(world)
+
     served = create_app(
         _factory,
         CallToolAction,
@@ -531,6 +589,7 @@ def app(
     )
     _refuse_http_episode_control(served)
     _refuse_mcp_transport(served)
+    _serve_schemas(served, reset_cls)
     if console:
         _serve_console(served)
     return served

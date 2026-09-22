@@ -110,6 +110,9 @@ Open that in a browser and you can drive the world by hand: open instances, call
 the state document, without writing a client. `seahaven serve --no-console` leaves the console out,
 for a server that should answer the protocol and nothing else.
 
+The New environment dialog builds its reset form from
+[`GET /seahaven/schemas`](#get-seahavenschemas-adds-the-reset-message).
+
 ## Sessions and instances
 
 A WebSocket connection is one session, and one session holds one instance.
@@ -461,6 +464,41 @@ one JSON object holding a JSON Schema document under each of three keys.
 Every field Seahaven declares carries the description this page gives it, so a generated client
 carries the descriptions too. The `state` document is the world's own model rather than OpenEnv's
 base `State`. Publishing the world's own model needs openenv 0.5 or newer on the server.
+
+### `GET /seahaven/schemas` adds the reset message
+
+OpenEnv publishes no schema for the `reset` message. `GET /seahaven/schemas` answers the same three
+keys as `GET /schema`, plus a fourth, `reset`: the JSON Schema of the `data` a `reset` frame
+carries, for this world.
+
+| Property | What the schema says |
+|---|---|
+| `seed`, `episode_id` | OpenEnv's own two fields |
+| `fixture` | an `enum` of the world's fixture ids, or null for a blank instance |
+| `now` | the blank instance's clock, as an ISO-8601 instant |
+| `state_format` | an `enum` of the built-in formats and the ones the world registers |
+| `startup` | an object with one property for each keyword a startup hook in the world's tree names |
+
+A startup keyword is described from its hook parameter, as a tool argument is from its tool
+parameter: the annotation gives the type, the default gives the default, and
+`Annotated[T, Field(description=...)]` gives the description. A hook that takes `**kwargs` makes
+`startup` accept any keyword. A keyword that `add_world(..., startup={...})` binds on a hook's node
+never reaches that hook from the caller, so that hook does not make the keyword required or give
+it a type. The fixture ids are read from the fixtures directory on every request,
+so a fixture frozen while the server runs is listed without a restart. The route is not in the
+OpenAPI schema.
+
+A trimmed answer from the reference world:
+
+```json
+{"action": {...}, "observation": {...}, "state": {...}, "reset": {"title": "SeahavenResetRequest", "type": "object", "additionalProperties": false, "properties": {"fixture": {"anyOf": [{"type": "string", "enum": ["agency", "empty", "small_startup"]}, {"type": "null"}], "default": null}, "startup": {"anyOf": [{"$ref": "#/$defs/SeahavenStartup"}, {"type": "null"}], "default": null}}, "$defs": {"SeahavenStartup": {"type": "object", "additionalProperties": false, "properties": {"user_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null}}}}}}
+```
+
+`seahaven.openenv.app(...)` builds this schema when it builds the app. A startup hook it cannot
+describe fails the build with a `WorldBug`, so `seahaven serve` does not start: two hooks that give
+one keyword two different annotations, or an annotation with no JSON Schema. Two annotations are the
+same only when they are equal objects. Two `Annotated[..., Field(...)]` written out separately are
+never equal, so give a keyword that two hooks share one module-level alias.
 
 ### Reading an error from your own client
 
