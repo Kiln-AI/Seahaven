@@ -24,6 +24,13 @@ export type Field = {
   placeholder: string
   /** A shape the form cannot express exactly, so the value is edited as JSON. */
   typeHint: string
+  /**
+   * The schema names no type at all, and the caller asked for such a field to
+   * take plain text (the reset form does; the tool form does not). It is a
+   * one-line input, and text that is not JSON is sent as a string, so a plain
+   * word does not need quotes.
+   */
+  untyped: boolean
 }
 
 function deref(schema: JsonSchema, root: JsonSchema): JsonSchema {
@@ -107,7 +114,24 @@ function describeType(schema: JsonSchema): string {
   return type || "any"
 }
 
-export function fieldsOf(schema: JsonSchema | undefined, skip: string[] = []): Field[] {
+function isUntyped(schema: JsonSchema): boolean {
+  return (
+    schema.type === undefined &&
+    schema.enum === undefined &&
+    schema.const === undefined &&
+    schema.anyOf === undefined &&
+    schema.oneOf === undefined &&
+    schema.$ref === undefined &&
+    schema.properties === undefined &&
+    schema.items === undefined
+  )
+}
+
+export function fieldsOf(
+  schema: JsonSchema | undefined,
+  skip: string[] = [],
+  { untypedAsText = false }: { untypedAsText?: boolean } = {},
+): Field[] {
   if (!schema?.properties) return []
   const required = new Set(schema.required ?? [])
   return Object.entries(schema.properties)
@@ -126,8 +150,10 @@ export function fieldsOf(schema: JsonSchema | undefined, skip: string[] = []): F
         choices,
         minimum: resolved.minimum,
         maximum: resolved.maximum,
-        placeholder: hasDefault ? `${format(resolved.default)}` : "",
+        // A `null` default means "not given", and a placeholder reading "null" says otherwise.
+        placeholder: hasDefault && resolved.default !== null ? `${format(resolved.default)}` : "",
         typeHint: describeType(resolved),
+        untyped: untypedAsText && isUntyped(resolved),
       }
     })
 }
@@ -139,10 +165,25 @@ function format(value: unknown): string {
 
 /** The value a field starts at: its default, or empty. */
 export function initialValue(field: Field): string | boolean {
-  if (field.kind === "boolean") return field.default === true
-  if (field.default === undefined || field.default === null) return ""
-  if (field.kind === "json") return JSON.stringify(field.default, null, 2)
-  return format(field.default)
+  return toFormValue(field, field.default)
+}
+
+/** A payload value as the form holds it, so that `coerce` gives the value back. */
+export function toFormValue(field: Field, value: unknown): string | boolean {
+  if (field.kind === "boolean") return value === true
+  if (value === undefined || value === null) return ""
+  if (field.untyped && typeof value === "string" && !parsesAsJson(value)) return value
+  if (field.kind === "json") return field.untyped ? JSON.stringify(value) : JSON.stringify(value, null, 2)
+  return format(value)
+}
+
+function parsesAsJson(text: string): boolean {
+  try {
+    JSON.parse(text)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export type Coerced = {
@@ -198,7 +239,8 @@ export function coerce(fields: Field[], raw: Record<string, string | boolean>): 
         try {
           values[field.name] = JSON.parse(text)
         } catch (error) {
-          errors[field.name] = `not valid JSON: ${(error as Error).message}`
+          if (field.untyped) values[field.name] = text
+          else errors[field.name] = `not valid JSON: ${(error as Error).message}`
         }
         break
       }
@@ -228,4 +270,82 @@ export function parseArgsObject(text: string): { value: Record<string, unknown>;
   } catch (error) {
     return { value: {}, error: (error as Error).message }
   }
+}
+
+// --- the reset message -----------------------------------------------------
+
+/** The name prefix that marks a startup keyword in the flat reset form. */
+export const STARTUP_PREFIX = "startup."
+
+/**
+ * The reset schema as one flat field list: the top-level fields, then the
+ * world's startup keywords, named `startup.<keyword>`.
+ *
+ * `startupOpen` is true when the world accepts startup keywords the schema does
+ * not name; those can only be sent as raw JSON.
+ */
+export function resetFieldsOf(reset: JsonSchema): { fields: Field[]; startupOpen: boolean } {
+  // A property that only accepts null offers nothing to fill in: Seahaven
+  // publishes `fixture` that way for a world with no fixtures.
+  const nullOnly = Object.entries(reset.properties ?? {})
+    .filter(([, property]) => isNullOnly(property))
+    .map(([name]) => name)
+  const top = fieldsOf(reset, ["startup", ...nullOnly], { untypedAsText: true })
+  const raw = reset.properties?.startup
+  if (!raw) return { fields: top, startupOpen: false }
+  const startup = unwrapNullable(deref(raw, reset), reset)
+  const inner = fieldsOf({ ...startup, $defs: reset.$defs }, [], { untypedAsText: true }).map((field) => ({
+    ...field,
+    name: STARTUP_PREFIX + field.name,
+    label: `startup · ${field.label}`,
+  }))
+  return { fields: [...top, ...inner], startupOpen: startup.additionalProperties === true }
+}
+
+function isNullOnly(schema: JsonSchema): boolean {
+  if (schema.type === "null") return true
+  const branches = schema.anyOf ?? schema.oneOf
+  return Array.isArray(branches) && branches.length > 0 && branches.every((branch) => branch.type === "null")
+}
+
+/** Coerced flat values back to a reset message, with the startup keywords nested under `startup`. */
+export function nestResetArgs(values: Record<string, unknown>): Record<string, unknown> {
+  const message: Record<string, unknown> = {}
+  const startup: Record<string, unknown> = {}
+  for (const [name, value] of Object.entries(values)) {
+    if (name.startsWith(STARTUP_PREFIX)) startup[name.slice(STARTUP_PREFIX.length)] = value
+    else message[name] = value
+  }
+  if (Object.keys(startup).length > 0) message.startup = startup
+  return message
+}
+
+/**
+ * A reset message as flat form values, or `null` when a key has no field, so
+ * the caller can edit it as raw JSON rather than drop the key.
+ */
+export function flattenResetArgs(
+  args: Record<string, unknown>,
+  fields: Field[],
+): Record<string, string | boolean> | null {
+  const byName = new Map(fields.map((field) => [field.name, field]))
+  const flat: Record<string, string | boolean> = {}
+  const put = (name: string, value: unknown) => {
+    const field = byName.get(name)
+    if (!field) return false
+    flat[name] = toFormValue(field, value)
+    return true
+  }
+  for (const [name, value] of Object.entries(args)) {
+    if (name !== "startup") {
+      if (!put(name, value)) return null
+      continue
+    }
+    if (value === null || value === undefined) continue
+    if (typeof value !== "object" || Array.isArray(value)) return null
+    for (const [keyword, inner] of Object.entries(value as Record<string, unknown>)) {
+      if (!put(STARTUP_PREFIX + keyword, inner)) return null
+    }
+  }
+  return flat
 }

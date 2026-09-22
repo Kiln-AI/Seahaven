@@ -12,6 +12,8 @@
  *     any other key by name, which this mock does not yet copy.
  *   - `GET /schema` and `GET /metadata` answer, and **no CORS headers are set**,
  *     because the real server sets none either.
+ *   - `GET /seahaven/schemas` answers `/schema` plus a `reset` schema shaped
+ *     like Seahaven's; `--plain` answers 404 there, as any other environment does.
  *   - `/reset`, `/step` and `/state` over HTTP answer 501, as Seahaven's do.
  *   - the built console is served at `/console`, on this same origin.
  *
@@ -246,6 +248,68 @@ const SCHEMA = {
   },
 }
 
+// The shape `SeahavenResetRequest.for_world(world).model_json_schema()` has.
+// `team` is untyped, as Seahaven publishes a keyword only bound hooks name.
+const RESET_SCHEMA = {
+  title: "SeahavenResetRequest",
+  type: "object",
+  additionalProperties: false,
+  $defs: {
+    SeahavenStartup: {
+      title: "SeahavenStartup",
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        user_id: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          default: null,
+          title: "User Id",
+          description: "The user the instance acts as.",
+        },
+        team: { title: "Team" },
+      },
+    },
+  },
+  properties: {
+    seed: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+      default: null,
+      title: "Seed",
+      description: "Random seed for reproducible episodes",
+    },
+    episode_id: {
+      anyOf: [{ type: "string", maxLength: 255 }, { type: "null" }],
+      default: null,
+      title: "Episode Id",
+      description: "Custom episode identifier",
+    },
+    fixture: {
+      anyOf: [{ type: "string", enum: [...FIXTURES].sort() }, { type: "null" }],
+      default: null,
+      title: "Fixture",
+      description: "The fixture to start from, by id. Null starts a blank instance from the world's schema.",
+    },
+    now: {
+      anyOf: [{ type: "string" }, { type: "null" }],
+      default: null,
+      title: "Now",
+      description:
+        "The blank instance's clock, as an ISO-8601 instant. Refused with a fixture, which carries its own clock.",
+    },
+    state_format: {
+      anyOf: [{ type: "string", enum: ["seahaven.state+calls/1", "seahaven.state/1"] }, { type: "null" }],
+      default: null,
+      title: "State Format",
+      description: "The format of this episode's state documents. Null uses the world's pinned format.",
+    },
+    startup: {
+      anyOf: [{ $ref: "#/$defs/SeahavenStartup" }, { type: "null" }],
+      default: null,
+      description: "The world's own startup keywords, passed to its startup hooks.",
+    },
+  },
+}
+
 const METADATA = {
   name: PLAIN ? "gridworld" : "projecttracker",
   description: PLAIN
@@ -440,6 +504,9 @@ const server = createServer((request, response) => {
       return json(response, 200, { status: "healthy" })
     case "/schema":
       return json(response, 200, SCHEMA)
+    case "/seahaven/schemas":
+      if (PLAIN) return json(response, 404, { detail: "Not Found" })
+      return json(response, 200, { ...SCHEMA, reset: RESET_SCHEMA })
     case "/metadata":
       return json(response, 200, METADATA)
     case "/reset":

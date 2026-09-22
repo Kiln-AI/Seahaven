@@ -12,6 +12,11 @@ Nothing in here is specific to any one environment. It speaks the standard proto
 for the action, observation and state models. An environment that answers those gets a full
 interface without writing any UI code.
 
+One read is Seahaven-specific. The console fetches `GET /seahaven/schemas` first: it answers what
+`/schema` answers plus a `reset` key, the schema of the reset message, and the New environment
+dialog builds its reset form from it. Any other environment answers 404 there, so the console
+reads `/schema` and the dialog offers a JSON box for the reset arguments.
+
 > **Status: prototype.** It drives a real environment, is covered by a browser test, and is served
 > by `seahaven serve` at `/console`.
 
@@ -45,7 +50,7 @@ open http://127.0.0.1:8000/console
 For development against a real environment on `:8000`:
 
 ```sh
-npm run dev            # vite proxies /ws, /schema and /metadata to OPENENV_TARGET
+npm run dev            # vite proxies /ws, /schema, /seahaven and /metadata to OPENENV_TARGET
 ```
 
 The browser test drives the built file against the mock in Chromium and screenshots each step:
@@ -93,6 +98,7 @@ they are missing, but serving it from the environment is what makes the schema a
 | list tools | `step` frame, `{"type": "list_tools"}` | `POST /mcp` is not MCP, has no `reset`, and some servers refuse it outright |
 | read state | `state` frame | `GET /state` reads an environment that was never stepped |
 | action and state models | `GET /schema` | read-only and safe, when the page's origin is allowed to read it |
+| reset message model | `GET /seahaven/schemas` | Seahaven only; `/schema` plus a `reset` key |
 | environment name | `GET /metadata` | same |
 
 The protocol carries no request ids: the server reads one frame and answers one frame. The client
@@ -101,12 +107,12 @@ overlapping calls on one socket would pair the wrong answer with the wrong quest
 
 ## Known limits
 
-- **Reset arguments cannot be a generated form.** OpenEnv publishes no schema for what an
-  environment's `reset()` accepts, so the New environment dialog offers a JSON box under
-  Advanced. Nothing tells the dialog what the box may contain, so a misspelled key is found by the
-  server rather than by the form, and what the server does with it varies: some drop it silently,
-  and others name it back as an error. A schema for reset arguments is the one addition to the
-  standard that would close the rest.
+- **Reset arguments are a form only on Seahaven.** OpenEnv publishes no schema for what an
+  environment's `reset()` accepts, so for any environment that does not answer
+  `GET /seahaven/schemas` the New environment dialog offers a JSON box under Advanced. Nothing
+  tells the dialog what the box may contain, so a misspelled key is found by the server rather than
+  by the form, and what the server does with it varies: some drop it silently, and others name it
+  back as an error.
 - **The leave warning cannot say why.** Every browser ignores a custom `beforeunload` message and
   shows its own generic text, so the reason lives in the page instead: the sidebar names how many
   sockets are open and what closing the tab destroys.

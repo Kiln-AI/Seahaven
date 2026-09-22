@@ -56,23 +56,104 @@ await page.goto("http://127.0.0.1:8000/console", { waitUntil: "networkidle" })
 await shot(page, "empty")
 check(await page.getByText("No environment open").isVisible(), "the empty state did not render")
 
-// --- new environment, with reset arguments in the Advanced box --------------
+// --- new environment, through the generated reset form ---------------------
+//
+// The default mock answers `GET /seahaven/schemas`, so the dialog builds the
+// reset message as a form. The frame the browser sends is the proof: the
+// startup keywords go back under `startup`, and untouched fields are left out.
+
+const resetFrames = []
+page.on("websocket", (socket) => {
+  socket.on("framesent", ({ payload }) => {
+    const frame = JSON.parse(String(payload))
+    if (frame.type === "reset") resetFrames.push(frame.data)
+  })
+})
 
 await page.getByRole("button", { name: "New environment" }).first().click()
-await page.getByText("Advanced: reset arguments").click()
-await page.locator("textarea").first().fill('{\n  "fixture": "agency",\n  "seed": 7\n}')
 await page.getByPlaceholder("run 1").fill("agency run")
-await page.waitForTimeout(500)
+await page.waitForTimeout(700)
+check(
+  (await page.getByText("Advanced: reset arguments").count()) === 0,
+  "the JSON box was shown although the environment publishes a reset schema",
+)
+await page.getByRole("button", { name: "agency", exact: true }).click()
+await page.getByLabel("Seed").fill("7")
+await page.getByLabel("startup · User Id").fill("u_dana")
+// `team` is untyped, so a plain word is sent as a string without quotes.
+await page.getByLabel("startup · Team").fill("ENG")
 await shot(page, "new-env-dialog")
 check(
   await page.getByText("Issues, sprints and comments").isVisible(),
   "the dialog did not name the environment from /metadata",
 )
 
+const EXPECTED_RESET = { seed: 7, fixture: "agency", startup: { user_id: "u_dana", team: "ENG" } }
+const canonical = (value) =>
+  value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))
+    : value
+const sameMessage = (message) =>
+  JSON.stringify(canonical(message)) === JSON.stringify(canonical(EXPECTED_RESET))
+
+// A field error from a refused submit describes values the form no longer
+// holds once they have been round-tripped through raw JSON, so it is cleared.
+await page.getByLabel("Seed").fill("7.5")
+await page.getByRole("button", { name: "Open environment" }).click()
+check(await page.getByText("must be a whole number").isVisible(), "a bad seed was not flagged on submit")
+await page.getByRole("switch", { name: "Edit reset arguments as raw JSON" }).click()
+await page.getByRole("switch", { name: "Edit reset arguments as raw JSON" }).click()
+check(
+  (await page.getByText("must be a whole number").count()) === 0,
+  "a stale field error survived the round trip through raw JSON",
+)
+await page.getByLabel("Seed").fill("7")
+
+await page.getByRole("switch", { name: "Edit reset arguments as raw JSON" }).click()
+await shot(page, "new-env-raw")
+const rawText = await page.locator("textarea").first().inputValue()
+check(sameMessage(JSON.parse(rawText)), `raw mode did not show the nested reset message: ${rawText}`)
+await page.getByRole("switch", { name: "Edit reset arguments as raw JSON" }).click()
+check(
+  (await page.getByLabel("startup · User Id").inputValue()) === "u_dana",
+  "switching back from raw JSON lost the form's values",
+)
+
+// A key the form has no field for keeps the dialog in raw JSON, rather than
+// being dropped on the way back to the form.
+const rawSwitch = page.getByRole("switch", { name: "Edit reset arguments as raw JSON" })
+await rawSwitch.click()
+const withExtra = { ...JSON.parse(await page.locator("textarea").first().inputValue()), region: "eu" }
+await page.locator("textarea").first().fill(JSON.stringify(withExtra))
+await rawSwitch.click()
+check((await rawSwitch.getAttribute("aria-checked")) === "true", "raw JSON with an unknown key was left")
+check(
+  await page.getByText("The form has no field for some of these keys").isVisible(),
+  "leaving raw JSON was refused without saying why",
+)
+check(
+  (await page.locator("textarea").first().inputValue()).includes('"region"'),
+  "the raw JSON was not kept",
+)
+await page.locator("textarea").first().fill(rawText)
+await rawSwitch.click()
+
+// The same server, spelled differently, keeps the form and what is in it.
+await page.getByRole("textbox").first().fill("http://127.0.0.1:8000/")
+await page.waitForTimeout(700)
+check(
+  (await page.getByLabel("startup · User Id").inputValue()) === "u_dana",
+  "editing the URL to the same server reset the form",
+)
+
 await page.getByRole("button", { name: "Open environment" }).click()
 await page.waitForTimeout(600)
 await shot(page, "tools-empty")
 check(await page.getByText("5 tools").first().isVisible(), "the tool list did not load")
+check(
+  resetFrames.length === 1 && sameMessage(resetFrames[0]),
+  `the reset frame was not the form's message: ${JSON.stringify(resetFrames)}`,
+)
 
 // --- an optional argument keeps the hints its wrapper carries ---------------
 //
@@ -209,6 +290,13 @@ plain.on("pageerror", (error) => problems.push(`page error: ${error.message}`))
 await plain.goto("http://127.0.0.1:8001/console", { waitUntil: "networkidle" })
 await plain.getByRole("button", { name: "New environment" }).first().click()
 await plain.waitForTimeout(700)
+// No `/seahaven/schemas` here, so the reset arguments are the JSON box.
+await plain.getByText("Advanced: reset arguments").click()
+await shot(plain, "plain-new-env")
+check(
+  await plain.getByPlaceholder(/"fixture": "small_startup"/).isVisible(),
+  "an environment with no reset schema did not get the JSON box",
+)
 await plain.getByRole("button", { name: "Open environment" }).click()
 await plain.waitForTimeout(700)
 await plain.getByRole("button", { name: "north", exact: true }).click()
@@ -220,6 +308,44 @@ check(
   "the action schema form did not render for a non-tool environment",
 )
 check(await plain.getByText("0.5").first().isVisible(), "the observation did not render")
+
+// --- a reset schema that is slow to answer ----------------------------------
+//
+// The dialog does not wait on it for ever: the JSON box appears, and when the
+// schema does arrive, the form replaces the box and keeps what was typed.
+
+const slow = await context.newPage()
+slow.on("pageerror", (error) => problems.push(`page error: ${error.message}`))
+let release
+const held = new Promise((resolve) => (release = resolve))
+await slow.route("**/seahaven/schemas", async (route) => {
+  await held
+  await route.continue()
+})
+await slow.goto("http://127.0.0.1:8000/console", { waitUntil: "domcontentloaded" })
+await slow.getByRole("button", { name: "New environment" }).first().click()
+// The context remembers the last URL used, which was the plain mock's.
+await slow.getByRole("textbox").first().fill("http://127.0.0.1:8000")
+await slow.waitForTimeout(2600)
+check(
+  await slow.getByText("Advanced: reset arguments").isVisible(),
+  "a reset schema that never answered left the dialog with no reset arguments",
+)
+if (!(await slow.getByPlaceholder(/"fixture": "small_startup"/).isVisible())) {
+  await slow.getByText("Advanced: reset arguments").click()
+}
+await slow.getByPlaceholder(/"fixture": "small_startup"/).fill('{"fixture": "big_co", "startup": {"user_id": "u_sam"}}')
+release()
+await slow.waitForTimeout(600)
+await shot(slow, "slow-schema-form")
+check(
+  (await slow.getByLabel("startup · User Id").inputValue()) === "u_sam",
+  "a late reset schema dropped what was typed into the JSON box",
+)
+check(
+  (await slow.getByRole("button", { name: "big_co", exact: true }).getAttribute("class")).includes("border-accent"),
+  "a late reset schema did not carry the typed fixture into the form",
+)
 
 await browser.close()
 
