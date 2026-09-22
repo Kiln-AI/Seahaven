@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Functional Spec: Reset Schema
@@ -98,6 +98,9 @@ It has `additionalProperties: false`, because `SeahavenEnv.reset` refuses any ke
   wrapped so that null is also allowed (pydantic's nullable form).
 - The list is read from the fixtures directory **on each request**, so a fixture written while the
   server runs appears without a restart. The rest of the schema is fixed when the app is built.
+- `reset_cls` stays `state_cls`-shaped: one class, built once, passed where `state_cls` is. Only
+  its `model_json_schema()` output is refreshed, by filling the fixture enum at schema-generation
+  time.
 - A world with no fixtures directory, or an empty one, publishes `fixture` as null-only: the only
   value it accepts is null. It does not publish an empty `enum`, which is not valid JSON Schema.
 - Fixture descriptions are not published. A plain `enum` cannot carry them, and `enum` is what
