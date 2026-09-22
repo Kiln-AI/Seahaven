@@ -278,8 +278,9 @@ export function parseArgsObject(text: string): { value: Record<string, unknown>;
 export const STARTUP_PREFIX = "startup."
 
 /**
- * The reset schema as one flat field list: the top-level fields, then the
- * world's startup keywords, named `startup.<keyword>`.
+ * The reset schema as one flat field list, in the schema's property order, with
+ * `startup` expanded in place into the world's startup keywords, named
+ * `startup.<keyword>`.
  *
  * `startupOpen` is true when the world accepts startup keywords the schema does
  * not name; those can only be sent as raw JSON.
@@ -290,7 +291,7 @@ export function resetFieldsOf(reset: JsonSchema): { fields: Field[]; startupOpen
   const nullOnly = Object.entries(reset.properties ?? {})
     .filter(([, property]) => isNullOnly(property))
     .map(([name]) => name)
-  const top = fieldsOf(reset, ["startup", ...nullOnly], { untypedAsText: true })
+  const top = fieldsOf(reset, nullOnly, { untypedAsText: true })
   const raw = reset.properties?.startup
   if (!raw) return { fields: top, startupOpen: false }
   const startup = unwrapNullable(deref(raw, reset), reset)
@@ -299,7 +300,8 @@ export function resetFieldsOf(reset: JsonSchema): { fields: Field[]; startupOpen
     name: STARTUP_PREFIX + field.name,
     label: `startup · ${field.label}`,
   }))
-  return { fields: [...top, ...inner], startupOpen: startup.additionalProperties === true }
+  const fields = top.flatMap((field) => (field.name === "startup" ? inner : [field]))
+  return { fields, startupOpen: startup.additionalProperties === true }
 }
 
 function isNullOnly(schema: JsonSchema): boolean {

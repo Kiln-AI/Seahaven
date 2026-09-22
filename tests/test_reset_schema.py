@@ -81,13 +81,15 @@ def test_the_reference_world_publishes_its_reset_message() -> None:
     reset = extended["reset"]
     assert reset["title"] == "SeahavenResetRequest"
     assert reset["additionalProperties"] is False
-    assert sorted(reset["properties"]) == [
-        "episode_id",
+    # In the order the console lays its form out: fixture and startup first,
+    # OpenEnv's own fields last.
+    assert list(reset["properties"]) == [
         "fixture",
-        "now",
-        "seed",
         "startup",
+        "now",
         "state_format",
+        "seed",
+        "episode_id",
     ]
     assert _fixture_ids(reset) == ["agency", "empty", "small_startup"]
     assert "seahaven.state/1" in reset["properties"]["state_format"]["anyOf"][0]["enum"]

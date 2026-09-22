@@ -315,6 +315,20 @@ class SeahavenState(State):
     )
 
 
+# The console lays its reset form out in `properties` order, and pydantic puts
+# the inherited OpenEnv fields first. The fields not named here keep their own
+# order, after these.
+RESET_ORDER = ("fixture", "startup", "now", "state_format")
+
+
+def _order_properties(schema: dict[str, Any], leading: tuple[str, ...]) -> None:
+    properties = schema["properties"]
+    first = {name: properties[name] for name in leading if name in properties}
+    schema["properties"] = first | {
+        name: value for name, value in properties.items() if name not in first
+    }
+
+
 class SeahavenResetRequest(ResetRequest):
     """The reset message: OpenEnv's two fields and the keywords `SeahavenEnv.reset` adds.
 
@@ -324,7 +338,9 @@ class SeahavenResetRequest(ResetRequest):
     # `forbid` over the base's `allow`, because `SeahavenEnv.reset` refuses every
     # key it does not name. `control_tools` is one it names and ignores, so it is
     # not a field: publishing it would advertise a control that does nothing.
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_extra=lambda schema: _order_properties(schema, RESET_ORDER)
+    )
 
     fixture: str | None = Field(
         default=None,

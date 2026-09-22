@@ -469,15 +469,16 @@ base `State`. Publishing the world's own model needs openenv 0.5 or newer on the
 
 OpenEnv publishes no schema for the `reset` message. `GET /seahaven/schemas` answers the same three
 keys as `GET /schema`, plus a fourth, `reset`: the JSON Schema of the `data` a `reset` frame
-carries, for this world.
+carries, for this world. The schema lists its properties in the order of this table, so a form
+built from the schema shows the fields in that order.
 
 | Property | What the schema says |
 |---|---|
-| `seed`, `episode_id` | OpenEnv's own two fields |
 | `fixture` | an `enum` of the world's fixture ids, or null for a blank instance |
+| `startup` | an object with one property for each keyword a startup hook in the world's tree names |
 | `now` | the blank instance's clock, as an ISO-8601 instant |
 | `state_format` | an `enum` of the built-in formats and the ones the world registers |
-| `startup` | an object with one property for each keyword a startup hook in the world's tree names |
+| `seed`, `episode_id` | OpenEnv's own two fields |
 
 A startup keyword is described from its hook parameter, as a tool argument is from its tool
 parameter: the annotation gives the type, the default gives the default, and

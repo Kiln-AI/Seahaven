@@ -271,23 +271,16 @@ const RESET_SCHEMA = {
     },
   },
   properties: {
-    seed: {
-      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
-      default: null,
-      title: "Seed",
-      description: "Random seed for reproducible episodes",
-    },
-    episode_id: {
-      anyOf: [{ type: "string", maxLength: 255 }, { type: "null" }],
-      default: null,
-      title: "Episode Id",
-      description: "Custom episode identifier",
-    },
     fixture: {
       anyOf: [{ type: "string", enum: [...FIXTURES].sort() }, { type: "null" }],
       default: null,
       title: "Fixture",
       description: "The fixture to start from, by id. Null starts a blank instance from the world's schema.",
+    },
+    startup: {
+      anyOf: [{ $ref: "#/$defs/SeahavenStartup" }, { type: "null" }],
+      default: null,
+      description: "The world's own startup keywords, passed to its startup hooks.",
     },
     now: {
       anyOf: [{ type: "string" }, { type: "null" }],
@@ -302,10 +295,17 @@ const RESET_SCHEMA = {
       title: "State Format",
       description: "The format of this episode's state documents. Null uses the world's pinned format.",
     },
-    startup: {
-      anyOf: [{ $ref: "#/$defs/SeahavenStartup" }, { type: "null" }],
+    seed: {
+      anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
       default: null,
-      description: "The world's own startup keywords, passed to its startup hooks.",
+      title: "Seed",
+      description: "Random seed for reproducible episodes",
+    },
+    episode_id: {
+      anyOf: [{ type: "string", maxLength: 255 }, { type: "null" }],
+      default: null,
+      title: "Episode Id",
+      description: "Custom episode identifier",
     },
   },
 }
