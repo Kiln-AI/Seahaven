@@ -118,8 +118,9 @@ composition tree. These are the same keywords the instance already accepts
   has `additionalProperties: true`. Otherwise it is `additionalProperties: false`.
 - A world with no startup keywords publishes `startup` as an object with no properties (and
   `additionalProperties` as above). It is still nullable.
-- If a startup keyword has no default, `startup` itself still stays optional at the top level. Omitting it is the same as `{}`, and the world's hook refuses the
-  missing keyword when the instance is made. The form marks the keyword as required (§5.2).
+- If a startup keyword has no default, `startup` itself still stays optional at the top level.
+  Omitting it is the same as `{}`, and the world's hook refuses the missing keyword when the
+  instance is made. The form marks the keyword as required (§5.2).
 
 **Errors, raised as `WorldBug` when the app is built:**
 
