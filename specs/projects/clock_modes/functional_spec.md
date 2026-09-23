@@ -82,8 +82,8 @@ Every reading is S. Behaviour is exactly today's.
 - Readings are live and follow the same SQL rule as `running`: one instant per SQL statement.
 - Readings follow the host's clock, so they can jump forwards or backwards if the host's clock is
   changed during a run. That is the difference from `running`.
-- `now=` together with `clock_mode="wall"` is refused, because `wall` would ignore it. The error
-  names both options. A fixture together with `wall` is accepted.
+- `now=` and a fixture are both accepted with `wall`. The instance still has a start instant (the
+  fixture's `now` or `now=`), and `wall` does not read it.
 
 ## 3. Choosing the mode
 
@@ -104,8 +104,7 @@ does not name one.
 - Optional. When omitted or null, the instance uses its world's default.
 - An unknown value is refused, naming the value and listing the four modes. The refusal happens
   before anything is created, the same way an unknown `state_format` is refused today.
-- Combines with every other reset option, including `now=` and a fixture, except `now=` with
-  `wall` (section 2.4). The same refusal applies when `wall` comes from the world's default.
+- Combines freely with every other reset option, including `now=` and a fixture.
 - The mode is fixed for the instance's life. There is no way to change it after creation.
 
 The option is available at every place that makes an instance for an eval or a test:
@@ -121,7 +120,6 @@ The option is available at every place that makes an instance for an eval or a t
 `seahaven fixture freeze` and `seahaven fixture fork` get no new flag. The instance each builds to
 run the author's generator in uses the world's default mode. An author who wants another mode for
 generation writes a generator that makes its own instance, as the projecttracker generator does.
-A `wall` default together with `freeze --now` is refused like `now=` with `wall` anywhere else.
 
 ### 3.3 Composite instances
 
