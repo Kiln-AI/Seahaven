@@ -70,8 +70,28 @@ page.on("websocket", (socket) => {
   })
 })
 
+// The URL sits behind "change", in a dialog stacked above this one.
+const changeRoot = async (target, url) => {
+  await target.getByRole("button", { name: "change", exact: true }).click()
+  await target.getByRole("textbox", { name: "Environment URL" }).fill(url)
+  await target.getByRole("button", { name: "Save", exact: true }).click()
+}
+
 await page.getByRole("button", { name: "New environment" }).first().click()
-await page.getByPlaceholder("run 1").fill("agency run")
+check(
+  (await page.getByRole("textbox", { name: "Environment URL" }).count()) === 0 &&
+    (await page.getByText("http://127.0.0.1:8000", { exact: true }).isVisible()),
+  "the dialog asked for the environment URL up front instead of showing it behind 'change'",
+)
+// Escape in the URL dialog closes that dialog and leaves the one under it open.
+await page.getByRole("button", { name: "change", exact: true }).click()
+await page.keyboard.press("Escape")
+check(
+  (await page.getByRole("dialog", { name: "Environment URL" }).count()) === 0 &&
+    (await page.getByRole("dialog", { name: "New environment" }).isVisible()),
+  "Escape in the URL dialog did not close only that dialog",
+)
+await page.getByLabel("Label", { exact: true }).fill("agency run")
 await page.waitForTimeout(700)
 check(
   (await page.getByText("Advanced: reset arguments").count()) === 0,
@@ -154,7 +174,7 @@ await page.locator("textarea").first().fill(rawText)
 await rawSwitch.click()
 
 // The same server, spelled differently, keeps the form and what is in it.
-await page.getByRole("textbox").first().fill("http://127.0.0.1:8000/")
+await changeRoot(page, "http://127.0.0.1:8000/")
 await page.waitForTimeout(700)
 check(
   (await page.getByLabel("startup · User Id").inputValue()) === "u_dana",
@@ -281,7 +301,7 @@ check(await page.getByText("Action schema").isVisible(), "the schema panel is mi
 // unaffected, which is the degradation the UI is built around.
 
 await page.getByRole("button", { name: "New environment" }).first().click()
-await page.getByRole("textbox").first().fill("http://127.0.0.1:8001")
+await changeRoot(page, "http://127.0.0.1:8001")
 await page.waitForTimeout(700)
 await page.getByRole("button", { name: "Open environment" }).click()
 await page.waitForTimeout(700)
@@ -340,8 +360,19 @@ await slow.route("**/seahaven/schemas", async (route) => {
 await slow.goto("http://127.0.0.1:8000/console", { waitUntil: "domcontentloaded" })
 await slow.getByRole("button", { name: "New environment" }).first().click()
 // The context remembers the last URL used, which was the plain mock's.
-await slow.getByRole("textbox").first().fill("http://127.0.0.1:8000")
-await slow.waitForTimeout(2600)
+await changeRoot(slow, "http://127.0.0.1:8000")
+// While the schema is held, the dialog is one spinner rather than the fields
+// that have answered so far.
+await slow.waitForTimeout(500)
+check(
+  await slow.getByRole("status", { name: "Loading environment" }).isVisible(),
+  "the dialog showed no loading state while the reset schema was pending",
+)
+check(
+  (await slow.getByLabel("Label", { exact: true }).count()) === 0,
+  "the dialog showed its fields before the reset schema answered",
+)
+await slow.waitForTimeout(2100)
 check(
   await slow.getByText("Advanced: reset arguments").isVisible(),
   "a reset schema that never answered left the dialog with no reset arguments",
