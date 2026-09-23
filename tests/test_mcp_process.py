@@ -317,9 +317,10 @@ def test_the_convenience_flags_reach_the_instance(project: Project) -> None:
         written = await client.call_tool("write_note", {"body": "hello"})
         return answered(written), answered(await client.call_tool("shop", {}))
 
-    note, shop = talk(project, work, "--now", "2024-03-05T12:00:00Z", "--seed", "7")
-    again, _ = talk(project, work, "--now", "2024-03-05T12:00:00Z", "--seed", "7")
-    other, _ = talk(project, work, "--now", "2024-03-05T12:00:00Z", "--seed", "8")
+    fixed = ("--now", "2024-03-05T12:00:00Z", "--clock-mode", "fixed")
+    note, shop = talk(project, work, *fixed, "--seed", "7")
+    again, _ = talk(project, work, *fixed, "--seed", "7")
+    other, _ = talk(project, work, *fixed, "--seed", "8")
 
     assert note["created_at"] == "2024-03-05T12:00:00.000Z"
     assert shop["now"] == "2024-03-05T12:00:00.000Z"
@@ -334,11 +335,28 @@ def test_the_environment_variables_reach_the_instance(project: Project) -> None:
     async def work(client: Client) -> Any:
         return answered(await client.call_tool("write_note", {"body": "hello"}))
 
-    note = talk(project, work, SEAHAVEN_NOW="2024-03-05T12:00:00Z", SEAHAVEN_SEED="7")
+    note = talk(
+        project,
+        work,
+        SEAHAVEN_NOW="2024-03-05T12:00:00Z",
+        SEAHAVEN_SEED="7",
+        SEAHAVEN_CLOCK_MODE="fixed",
+    )
     by_flag = talk(project, work, "--now", "2024-03-05T12:00:00Z", "--seed", "7")
 
     assert note["created_at"] == "2024-03-05T12:00:00.000Z"
     assert note["id"] == by_flag["id"]
+
+
+def test_the_clock_mode_flag_reaches_the_instance(project: Project) -> None:
+    """`tick`: each call is one second after the one before it."""
+
+    async def work(client: Client) -> list[Any]:
+        return [answered(await client.call_tool("shop", {})) for _ in range(2)]
+
+    first, second = talk(project, work, "--now", "2024-03-05T12:00:00Z", "--clock-mode", "tick")
+
+    assert (first["now"], second["now"]) == ("2024-03-05T12:00:01.000Z", "2024-03-05T12:00:02.000Z")
 
 
 def test_reset_options_reach_a_startup_hook(project: Project) -> None:
@@ -566,9 +584,9 @@ def test_a_startup_keyword_at_the_top_level_is_refused_before_anything_is_served
 
     assert finished.code == 1
     assert finished.err.splitlines() == [
-        '--reset-options does not take "region"; --reset-options takes "fixture", "now", '
-        '"seed", "startup" and "state_format", and a world\'s own startup keywords go inside '
-        '"startup": --reset-options \'{"fixture": "small_startup", "startup": '
+        '--reset-options does not take "region"; --reset-options takes "clock_mode", "fixture", '
+        '"now", "seed", "startup" and "state_format", and a world\'s own startup keywords go '
+        'inside "startup": --reset-options \'{"fixture": "small_startup", "startup": '
         '{"user_id": "u_12"}}\''
     ]
     assert finished.out == ""

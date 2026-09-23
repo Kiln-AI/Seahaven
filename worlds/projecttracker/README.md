@@ -77,10 +77,9 @@ Tests: `uv run pytest worlds/projecttracker` from the repository root, or `uv ru
   though `get_issue` and `search_issues` still find it. It can still be commented on: archiving
   freezes the issue, not the conversation about it.
 - **Ids** come from `ctx.ids.uuid()`, so a seed replays a run exactly.
-- **Lists order by a column and then by id**, which is a total order and the same on every run. The
-  tracker's clock does not move, so rows written during one episode share an instant and the id is
-  what separates them: `list_comments` is oldest-first across a fixture's history and id-ordered
-  among comments the episode itself added.
+- **Lists order by a column and then by id**, which is a total order and the same on every run. Rows
+  written during one episode can share an instant, and the id is what separates them:
+  `list_comments` is oldest first, and in id order among comments that share an instant.
 - **Error codes** are this product's, in `SCREAMING_SNAKE`; the framework's own codes never reach an
   agent, which is the error handler's job. `run_sql` is the one door that shows SQLite's own text,
   because a SQL console's errors are SQL errors.

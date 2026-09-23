@@ -33,6 +33,7 @@ import apsw
 
 from seahaven import control
 from seahaven.call import Handler, Middleware
+from seahaven.clock import DEFAULT_CLOCK_MODE, ClockMode, check_clock_mode
 from seahaven.composition import (
     NAME,
     RESERVED_NODE_NAMES,
@@ -124,6 +125,7 @@ class World:
         schema: str,
         *,
         state_format: str | None = None,
+        default_clock_mode: ClockMode = DEFAULT_CLOCK_MODE,
         description: str | None = None,
         mcp_server_name: str | None = None,
         mcp_server_instructions: str | None = None,
@@ -142,6 +144,10 @@ class World:
         # author writes (`functional_spec.md` §6), and one name cannot be both a
         # string and a decorator. (`architecture.md` §5.2 gave it to both.)
         self.pinned_state_format = _checked_state_format(name, state_format)
+        try:
+            self.default_clock_mode = check_clock_mode(default_clock_mode)
+        except WorldBug as error:
+            raise WorldBug(f"world {name!r}: {error}") from None
         self.name = name
         self.version = version
         self.schema = schema
@@ -512,6 +518,7 @@ class World:
         *,
         seed: int | None = None,
         now: str | datetime | None = None,
+        clock_mode: ClockMode | None = None,
         state_format: str | None = None,
         control_tools: bool = False,
         startup: Mapping[str, Any] | None = None,
@@ -519,15 +526,16 @@ class World:
         """Make a live instance: a private copy of a fixture, or a blank one.
 
         `now` sets a blank instance's clock and is refused with a fixture, which
-        carries its own. `state_format` answers in another of this world's
-        formats for this instance alone, in place of the world's pin.
-        `control_tools=True` makes the framework's own tools -- the deprecated
-        `controller_run_sql` -- callable on this instance; without it they are
-        not callable at all, and their names answer `UnknownTool` like any name
-        the world does not have. `startup` is the world's own namespace: every
-        keyword in it is passed to the startup hooks that named it, and a
-        keyword no hook names is refused. The instance is a context manager and
-        leaving the block destroys it.
+        carries its own. `clock_mode` is the mode the instance's clock runs in,
+        `None` for the world's default. `state_format` answers in another of
+        this world's formats for this instance alone, in place of the world's
+        pin. `control_tools=True` makes the framework's own tools -- the
+        deprecated `controller_run_sql` -- callable on this instance; without it
+        they are not callable at all, and their names answer `UnknownTool` like
+        any name the world does not have. `startup` is the world's own
+        namespace: every keyword in it is passed to the startup hooks that named
+        it, and a keyword no hook names is refused. The instance is a context
+        manager and leaving the block destroys it.
 
         Never from inside a tool call: a handler that wants another world reaches
         it through `ctx.worlds`, and a world that made its own instance would be
@@ -542,6 +550,7 @@ class World:
             fixture,
             seed=seed,
             now=now,
+            clock_mode=clock_mode,
             state_format=state_format,
             control_tools=control_tools,
             startup=startup,

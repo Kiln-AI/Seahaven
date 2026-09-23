@@ -5,7 +5,7 @@ import pytest
 import seahaven
 from conftest import BLANK_NOW, SMALL_STARTUP, Scaffold, an_issue
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW, clock_mode="fixed")
 
 
 def test_a_comment_is_written_and_answers_with_its_row(
@@ -53,15 +53,16 @@ def test_a_comment_does_not_touch_the_issue(
 def test_comments_written_in_one_episode_come_back_in_id_order_and_not_in_writing_order(
     instance: seahaven.Instance, scaffold: Scaffold
 ) -> None:
-    """The frozen clock's consequence, asserted rather than assumed.
+    """The `fixed` clock's consequence, asserted rather than assumed.
 
-    Every comment one episode writes carries the tracker's instant, so the
-    timestamp orders none of them and the keyset's second half -- the id -- does.
-    That is stable across runs and is not the order they were written in, which
-    is what `list_comments` says and what `AGENTS.md` tells an eval author not to
-    grade on. The property asserted is "sorted by id", exactly; that the five
-    seeded uuids here happen not to sort into writing order is a fact about this
-    seed and not something to pin.
+    Every comment one episode writes on this file's `fixed` clock shares one
+    instant, so the timestamp orders none of them and the keyset's second half --
+    the id -- does. That is stable across runs and is not the order they were
+    written in, which is what `list_comments` says of comments that share an
+    instant and what `AGENTS.md` tells an eval author not to grade on. The
+    property asserted is "sorted by id", exactly; that the five seeded uuids here
+    happen not to sort into writing order is a fact about this seed and not
+    something to pin.
     """
     issue = an_issue(instance, scaffold)
     written = [

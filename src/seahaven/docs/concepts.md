@@ -11,7 +11,7 @@ without explaining them again, so read this page first.
 | [Fixture](#fixture) | A frozen database an eval starts from |
 | [Instance](#instance) | A private copy of a fixture, for one run |
 | [Context](#context) | The `ctx` object every tool receives |
-| [Clock](#clock) | The instance's frozen point in time |
+| [Clock](#clock) | The instance's time, and how it moves |
 | [Reproducibility](#reproducibility) | Why the same run replays the same way |
 | [The change log](#the-change-log) | What the agent changed, call by call |
 
@@ -94,8 +94,8 @@ six hundred issues in it, or an empty one.
 
 Seahaven never opens a fixture. It copies it. The only way to make a fixture is to freeze an
 instance, and the YAML file records where the state came from: the world and version, the schema it
-conforms to, the frozen clock, the fixture it was forked from, a checksum of the database file, and
-a description written for whoever is choosing between fixtures.
+conforms to, the clock's reading when it was frozen, the fixture it was forked from, a checksum of
+the database file, and a description written for whoever is choosing between fixtures.
 
 You name a fixture by its id everywhere: `world.instance("agency")`, `reset(fixture="agency")`,
 `@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture list`.
@@ -113,7 +113,7 @@ under the system temp directory, and it is what a run actually drives.
 ```python
 import projecttracker
 
-with projecttracker.world.instance("small_startup", seed=7) as inst:
+with projecttracker.world.instance("small_startup", seed=7, clock_mode="fixed") as inst:
     issue = inst.call("get_issue", key="ENG-12")
     assert issue["key"] == "ENG-12"
     assert inst.fixture == "small_startup"
@@ -149,7 +149,7 @@ other instance, no process.
 | Member | What it is |
 |---|---|
 | `ctx.db` | The connection: `one`, `rows`, `execute`, `executemany`, `transaction()`, and `conn` for the raw APSW connection |
-| `ctx.clock` | The instance's frozen instant: `now()` for an aware UTC `datetime`, `iso()` for the canonical text |
+| `ctx.clock` | The instance's clock: `now()` for the current reading as an aware UTC `datetime`, `iso()` for it as canonical text, and `mode` |
 | `ctx.ids` | The seeded stream: `uuid()` and `random`, a `random.Random` seeded per instance |
 | `ctx.state` | A plain `dict` that lives as long as the instance; where a startup hook leaves what it worked out |
 | `ctx.call` | The current call: `name`, `arguments`, `tool`, `node`, and `with_arguments(**changes)` |
@@ -158,23 +158,11 @@ other instance, no process.
 
 ## Clock
 
-An instance's clock is **static**. It holds the fixture's frozen `now` for the instance's whole
-life. Every connection overrides SQLite's own date and time functions to return that instant —
-`CURRENT_TIMESTAMP`, `datetime('now')`, `strftime`, `julianday` and the rest — so SQL reads the same
-time world code does. Nothing in the data path reads the wall clock.
-
-A blank instance takes its clock from the wall time at creation, and `now=` overrides it. Freezing
-bakes that value into the fixture, where it never moves again. Those two are the only wall-clock
-reads a world makes: a blank instance's default clock, and the `created_at` stamped on a fixture
-when you freeze it.
-
-The clock is fixed *before* the blank database is built, not after, so a schema file that seeds
-reference rows of its own — `INSERT INTO plans VALUES ('free', ...)` — stamps them at that instant
-as well. A fixture frozen from such an instance carries the rows the caller's `now=` dated.
-
-Design around one consequence: **every row that one run writes carries the same timestamp.** A
-timestamp cannot order them. See
-["Things that go wrong quietly"](authoring.md#things-that-go-wrong-quietly) in authoring.md.
+Every instance has a clock of its own. World code reads it through `ctx.clock`, and SQL's date and
+time functions, such as `CURRENT_TIMESTAMP`, read the same clock. The clock starts at the fixture's
+`now`. The instance's clock mode says how the clock moves from there: `fixed`, `tick`, `running`
+(the default) or `wall`. [clock.md](clock.md) explains each mode, how to choose one, and what the
+mode means for the timestamps a world writes.
 
 ## Reproducibility
 
@@ -221,13 +209,19 @@ def roll() -> int:
 assert roll() == roll()
 ```
 
-**Seahaven offers reproducibility. It does not enforce it.** You get a frozen clock and a seeded
-stream, and those are deterministic. A world that calls `datetime.now()` or `uuid.uuid4()` gets
-exactly what it asked for, and `seahaven check` warns about both (`SH201`, `SH203`) rather than
-refusing them, because a wall-clock read is occasionally deliberate. Two more things are yours to
-get right. A list a world returns needs a deterministic tiebreak: order by a column *and* by the id,
-or two identical runs will disagree about rows that share a value. And anything outside the world,
-such as a live external tool an eval also gives the agent, is outside the promise.
+**Timestamps replay under `fixed` and `tick` only.** The same fixture, seed, clock mode and calls
+give the same timestamps under those two modes. Under `running`, a timestamp depends on how long
+the agent and the harness took, and under `wall` it also depends on the date of the run. The
+default is `running`, so pass `clock_mode="tick"` to an eval that needs timestamps that replay and
+an order between calls.
+
+**Seahaven offers reproducibility. It does not enforce it.** You get two deterministic clock modes
+and a seeded stream. A world that calls `datetime.now()` or `uuid.uuid4()` gets exactly what it
+asked for, and `seahaven check` warns about both (`SH201`, `SH203`) rather than refusing them,
+because a wall-clock read is occasionally deliberate. Two more things are yours to get right. A list
+a world returns needs a deterministic tiebreak: order by a column *and* by the id, or two identical
+runs will disagree about rows that share a value. And anything outside the world, such as a live
+external tool an eval also gives the agent, is outside the promise.
 
 ## The change log
 

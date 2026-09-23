@@ -1,4 +1,4 @@
-"""Shared fixtures: a frozen instant, a hardened database on it, and a small world.
+"""Shared fixtures: a fixed instant, a hardened database on it, and a small world.
 
 `world` and `instance` here are *not* `seahaven.pytest_plugin`'s. The framework's
 own tests need a throwaway world on `tmp_path` per test, which is what a world's
@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from seahaven import clock as clock_module
 from seahaven import instances
 from seahaven.cli import main
 from seahaven.clock import Clock
@@ -117,6 +118,16 @@ class Caller(threading.Thread):
 @pytest.fixture
 def clock() -> Clock:
     return Clock(INSTANT)
+
+
+@pytest.fixture
+def still_monotonic_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold the clock's monotonic source still, so a `running` clock reads its start exactly.
+
+    For a fixture CLI test that asserts an exact timestamp: the fixture CLI has
+    no mode flag, so its instance runs on the world's default, `running`.
+    """
+    monkeypatch.setattr(clock_module, "_monotonic_ns", lambda: 0)
 
 
 @pytest.fixture
@@ -283,15 +294,15 @@ def world(tmp_path: Path) -> World:
 
 @pytest.fixture
 def instance(world: World) -> Iterator[Instance]:
-    """A blank instance of that world, destroyed when the test ends."""
-    with world.instance(None, now=INSTANT_ISO) as live:
+    """A blank `fixed`-clock instance of that world, destroyed when the test ends."""
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as live:
         yield live
 
 
 @pytest.fixture
 def control_instance(world: World) -> Iterator[Instance]:
     """Like the `instance` fixture, with the framework's own tools callable on it."""
-    with world.instance(None, now=INSTANT_ISO, control_tools=True) as live:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed", control_tools=True) as live:
         yield live
 
 
@@ -312,7 +323,7 @@ def emporium_instance(tmp_path: Path) -> Iterator[Instance]:
 
     world = copy.copy(emporium.world)
     world.work_dir = tmp_path / "work"
-    with world.instance(None, now=INSTANT_ISO) as live:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as live:
         yield live
 
 

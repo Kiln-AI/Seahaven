@@ -12,6 +12,7 @@
     "episode_id",
     "seed",
     "now",
+    "clock_mode",
     "startup",
     "call_count",
     "state"
@@ -76,6 +77,7 @@
     "episode_id": {"type": ["string", "null"]},
     "seed": {"type": ["integer", "null"]},
     "now": {"type": ["string", "null"]},
+    "clock_mode": {"enum": ["fixed", "tick", "running", "wall", null]},
     "startup": {"type": ["object", "null"]},
     "call_count": {"type": "integer", "minimum": 0},
     "state": {

@@ -27,6 +27,7 @@ PAGES = (
     "authoring.md",
     "composition.md",
     "db_schema_and_fixtures.md",
+    "clock.md",
     "testing.md",
     "state.md",
     "serving_and_openenv.md",

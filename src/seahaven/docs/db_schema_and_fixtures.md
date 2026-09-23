@@ -76,11 +76,11 @@ compute its hash, and reports SQLite's own message when that fails.
 A schema file may also seed static reference rows — currencies, plans, a lookup table the product
 ships with — and they are part of the schema in the sense that matters: every instance of the world
 starts with them. The connection those `INSERT`s run on carries the instance's clock and its seed,
-so a seeded row built from `randomblob()` or `CURRENT_TIMESTAMP` replays like anything else a world
-writes. The wall-clock rule below is unchanged and still refuses `CURRENT_TIMESTAMP` inside a
-`CREATE` — a column default, a trigger body — so that one timestamp format is written everywhere;
-what is sanctioned here is the `INSERT` the file runs itself. Rows that belong to one *scenario* are
-a fixture's job, not the schema's.
+so a seeded row built from `randomblob()` replays like anything else a world writes, and one built
+from `CURRENT_TIMESTAMP` reads the instance's clock. The wall-clock rule below is unchanged and
+still refuses `CURRENT_TIMESTAMP` inside a `CREATE` — a column default, a trigger body — so that one
+timestamp format is written everywhere; what is sanctioned here is the `INSERT` the file runs
+itself. Rows that belong to one *scenario* are a fixture's job, not the schema's.
 
 ### Three rules
 
@@ -153,10 +153,10 @@ world_version: 1.0.0
 | `id` | the fixture's name, and the directory it sits in |
 | `world`, `world_version` | the world it was frozen from |
 | `schema_hash` | the schema it conforms to |
-| `now` | the instant every instance of this fixture is frozen at |
+| `now` | the instance's clock reading when it was frozen, and where the clock of every instance of this fixture starts |
 | `parent_id` | the fixture it was forked from, or `null` |
 | `file_sha256` | the checksum of `state.sqlite`, verified before the first copy |
-| `created_at` | real wall-clock time, and one of only two wall-clock reads a world makes |
+| `created_at` | real wall-clock time, and one of only two wall-clock reads a world makes outside the `wall` clock mode |
 | `description` | what is in the data, written for whoever is choosing between fixtures |
 
 A world that **adds other worlds** freezes one state file per store into that same directory, under
@@ -194,8 +194,10 @@ its directory and its sidecar's `id` to reach it again.
 ## Building a fixture
 
 Start from a **blank instance**: `world.instance()` with no fixture builds an empty database from
-the schema alone. Its clock is the wall time at creation unless `now=` says otherwise, and freezing
-bakes that value in for good.
+the schema alone. Its clock starts at the wall time at creation unless `now=` says otherwise.
+Freezing records the clock's reading as the fixture's `now`. Under the default `running` clock that
+is the start plus the time the instance has run, so a fixture that must be the same on every build
+is made on a `fixed` clock, as below.
 
 Fill it in one of two ways. Use the world's own tools when the point is that the data is reachable
 the way an agent would have made it. Use `inst.bulk()` when you are loading thousands of rows and a
@@ -216,7 +218,7 @@ world = seahaven.World(
     state_format="seahaven.state/1",
 )
 
-with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
+with world.instance(now="2026-06-01T09:00:00.000Z", clock_mode="fixed") as inst:
     with inst.bulk() as ctx:
         ctx.db.executemany(
             "INSERT INTO notes (id, body) VALUES (?, ?)",
@@ -243,7 +245,40 @@ one nobody can change, and a schema change means rebuilding all of them, which h
 rather than a project.
 
 `seahaven new` puts that script at `fixtures_src/generate.py`: one function per fixture, each taking
-a live instance and filling it, which is the shape the CLI calls.
+a live instance and filling it. Its `build(fixture_id, *, world=...)` freezes a fixture from a blank
+instance at the module's `NOW`, on a `fixed` clock, with the description filled in. The fixture's
+`now` is `NOW` exactly and every timestamp the builder writes is the same on each run, so a rebuild
+writes the same bytes. Run it from the world's directory:
+
+```sh
+uv run python -c "from fixtures_src.generate import build; build('empty')"
+```
+
+`world=` is there for tests: a fixture is frozen into `world.fixtures_dir`, so a test that rebuilds
+one to compare it against the committed bytes passes in `copy.copy(world)` pointed at a temporary
+directory. Moving the imported world's `fixtures_dir` instead would change it for every other caller
+in the process.
+
+Choose `NOW` once, write it in the generator, and never move it. Every fixture of the world then
+starts at the same instant.
+
+A **fork** starts from another fixture instead of a blank instance. Make it the same way: an
+instance of the parent on a `fixed` clock, filled and frozen. `freeze` records the parent as
+`parent_id`, and the fork's `now` is the parent's `now`.
+
+```py
+with world.instance("empty", clock_mode="fixed") as inst:
+    startup_with_history(inst)
+    inst.freeze(
+        "startup_with_history", "The empty tracker, plus one team and two months of issues."
+    )
+```
+
+**The CLI is for a fixture you will not rebuild.** `seahaven fixture freeze` and
+`seahaven fixture fork` call the same builder functions, but they run them in the world's default
+clock mode, `running` unless the world sets another. The fixture's `now` is then where the clock
+started plus the time the builder took, and the timestamps the builder's tool calls write differ
+from build to build.
 
 ```sh
 seahaven fixture freeze empty \
@@ -258,19 +293,10 @@ seahaven fixture fork empty startup_with_history \
 seahaven fixture list
 ```
 
-**Pass `--now` on every `freeze`, and pass the same value every time.** `freeze` starts from a blank
-instance, and a blank instance with no `--now` takes the wall clock, so leaving the flag off dates
-each fixture from the day it was built. Two fixtures of one world then sit at two different
-instants, and `seahaven check` cannot warn you, because a wall-clock instant is a perfectly valid
-timestamp. Choose the instant once, write it in the generator's docstring, and never move it.
-
-`fork` needs no `--now`. A fork inherits its parent's clock, which is the point of forking.
-
-The scaffold's `build(fixture_id, *, world=...)` is the same freeze with `--now` and the description
-filled in for you. `world=` is there for tests: a fixture is frozen into `world.fixtures_dir`, so a
-test that rebuilds one to compare it against the committed bytes passes in `copy.copy(world)`
-pointed at a temporary directory. Moving the imported world's `fixtures_dir` instead would change it
-for every other caller in the process.
+**Pass `--now` on every `freeze`, and pass the same value every time.** A blank instance with no
+`--now` starts at the wall clock, so leaving the flag off dates the fixture from the day it was
+built. `seahaven check` cannot warn you, because a wall-clock instant is a perfectly valid
+timestamp. `fork` takes no `--now`, because a fork's clock starts at its parent's `now`.
 
 ## Writing a description
 

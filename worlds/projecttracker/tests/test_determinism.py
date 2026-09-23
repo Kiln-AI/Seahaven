@@ -1,10 +1,11 @@
 """One seed, one run: the property an eval that compares two runs depends on.
 
 `functional_spec.md` §12 puts reproducibility on the world rather than on the
-framework -- Seahaven promises a fixed clock and a seeded source, and a world that
-reaches past `ctx` for either gets what it asked for. This module is where this
-world says it does not: a scripted sequence of calls against one fixture and one
-seed produces the same identifiers, the same keys and the same change log every
+framework -- Seahaven promises a clock that replays under `fixed` and `tick` and
+a seeded source, and a world that reaches past `ctx` for either gets what it
+asked for. This module is where this world says it does not: a scripted sequence
+of calls against one fixture and one seed, on a `tick` clock, produces the same
+identifiers, the same keys, the same timestamps and the same change log every
 time, and a different seed produces different identifiers.
 """
 
@@ -24,7 +25,7 @@ def scripted(seed: int) -> tuple[list[Any], list[dict[str, Any]]]:
     appends to the trail, and reads between them. A script of reads alone would
     be reproducible in any world.
     """
-    with world.instance(SMALL_STARTUP, seed=seed) as instance:
+    with world.instance(SMALL_STARTUP, seed=seed, clock_mode="tick") as instance:
         project = instance.call("list_projects")["projects"][0]
         person = instance.call("create_user", email="new@tracker.invalid", name="New")
         issue = instance.call("create_issue", project_id=project["id"], title="Filed by the script")

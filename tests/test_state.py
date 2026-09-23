@@ -75,6 +75,7 @@ def test_the_envelope_reports_the_format_the_versions_and_the_world(instance: In
         "episode_id",
         "seed",
         "now",
+        "clock_mode",
         "startup",
         "call_count",
         "state",
@@ -82,6 +83,7 @@ def test_the_envelope_reports_the_format_the_versions_and_the_world(instance: In
     assert document["format"] == SEAHAVEN_STATE_V1
     assert document["world"] == {"name": "testworld", "version": "1.0.0"}
     assert document["now"] == INSTANT_ISO
+    assert document["clock_mode"] == "fixed"
     assert document["call_count"] == 0
 
 
@@ -192,7 +194,7 @@ def test_two_identical_episodes_produce_the_same_document(tmp_path: Path) -> Non
     world = build_world(tmp_path)
 
     def episode() -> str:
-        with world.instance(None, seed=3, now=INSTANT_ISO) as live:
+        with world.instance(None, seed=3, now=INSTANT_ISO, clock_mode="fixed") as live:
             add(live, "n1", "hello", 1)
             live.call("execute", sql="UPDATE notes SET n = 2 WHERE id = 'n1'")
             document = live.state()
@@ -232,7 +234,7 @@ def test_last_step_carries_the_records_of_the_last_call_alone(world: World) -> N
 
 def test_last_step_is_idempotent_and_empty_before_any_call(world: World) -> None:
     """Scoped by the call counter, not by when `state()` was last read."""
-    with world.instance(None, state_format=SEAHAVEN_STATE_LAST_STEP_V1) as live:
+    with world.instance(None, clock_mode="fixed", state_format=SEAHAVEN_STATE_LAST_STEP_V1) as live:
         assert log_of(live.state()) == []
 
         add(live, "n1")
@@ -351,6 +353,7 @@ def test_every_built_in_answers_with_no_instance(world: World) -> None:
         assert answered["composition"] is None
         assert answered["fixture"] is None
         assert (answered["episode_id"], answered["seed"], answered["now"]) == (None, None, None)
+        assert answered["clock_mode"] is None
         assert answered["startup"] is None
         assert answered["call_count"] == 0
         assert log_of(answered) == []
@@ -408,7 +411,7 @@ def test_the_envelope_is_identical_under_a_custom_format(tmp_path: Path) -> None
         """Answer something no built-in would."""
         return {"rows": 0}
 
-    with world.instance(None, seed=7, now=INSTANT_ISO) as live:
+    with world.instance(None, seed=7, now=INSTANT_ISO, clock_mode="fixed") as live:
         add(live, "n1")
         built_in = live.state(format=SEAHAVEN_STATE_V1)
         custom = live.state(format="acme.state/1")

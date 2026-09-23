@@ -539,6 +539,21 @@ def test_a_bad_fixture_fails_the_handshake_and_names_the_fixture(tmp_path: Path)
     assert isinstance(ready.state.fatal, WorldBug)
 
 
+def test_an_unknown_clock_mode_fails_the_handshake_and_names_the_modes(tmp_path: Path) -> None:
+    ready = serve_world(build_world(tmp_path), clock_mode="tik")
+
+    async def work(client: Client) -> None:
+        raise AssertionError("the handshake should not have succeeded")
+
+    with pytest.raises(BaseException) as raised:
+        ready.talk(work)
+
+    error = leaf(raised.value)
+    assert isinstance(error, MCPError)
+    assert "unknown clock mode 'tik'; the clock modes are 'fixed'" in error.error.message
+    assert isinstance(ready.state.fatal, WorldBug)
+
+
 def test_a_startup_hook_that_raises_carries_its_triple_to_the_client(tmp_path: Path) -> None:
     """A `ToolError` out of a startup hook is `{code, message, details}` in the error's data."""
     world = build_world(tmp_path)
@@ -833,7 +848,7 @@ def test_serve_speaks_the_protocol_over_real_pipes_and_exits_on_eof(tmp_path: Pa
     """The whole exchange against `serve()` itself: the handshake, two calls, then EOF."""
     work_dir = tmp_path / "work"
     finished = run_server_process(
-        {"now": "2024-03-05T12:00:00Z"},
+        {"now": "2024-03-05T12:00:00Z", "clock_mode": "fixed"},
         [
             *handshake(),
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
