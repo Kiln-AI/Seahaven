@@ -313,9 +313,10 @@ identity.
 Every connection overrides SQLite's `current_timestamp`, `current_date`, `current_time` and the
 `'now'` argument of `datetime`, `date`, `time`, `strftime`, `julianday`, `unixepoch` and `timediff`
 to return the clock's reading, so SQL sees the same time world code does. One SQL statement takes
-one reading, and a trigger it fires shares that reading. The overrides are registered as innocuous,
-so schema objects may reference them. What they return compares and sorts correctly against the
-canonical text a world stores.
+one reading, and a trigger it fires shares that reading. Two rare cases are exceptions: see the
+[clock modes risk report](https://github.com/Kiln-AI/Seahaven/blob/main/specs/projects/clock_modes/risk_report.md).
+The overrides are registered as innocuous, so schema objects may reference them. What they return
+compares and sorts correctly against the canonical text a world stores.
 
 ## `Ids`
 

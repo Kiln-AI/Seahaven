@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Backlog: Clock Modes
@@ -9,14 +9,13 @@ closed or dismissed through the standard phase flow.
 
 ## Open
 
-- **Choose and implement a fix for the per-statement reading.** Decide between F1 and F2 in
-  `risk_report.md`, or neither. Implement the chosen fix, and turn the strict `xfail` tests it
-  resolves into passing tests.
-- **Qualify "one SQL statement takes one reading" in the docs.** The bundled docs
-  (`concepts.md`, `reference/api.md`) state it without qualification. Today R4 (comment-led
-  statements) and R6 (interleaved cursors) are exceptions. Update the docs to match whatever the
-  F1/F2 decision leaves true.
+_None._
 
 ## Closed
 
-_None yet._
+- **Choose and implement a fix for the per-statement reading.** Dismissed: the maintainer chose
+  neither F1 nor F2. R4 and R6 are rare and narrow, and the strict `xfail` tests stay as the record
+  of them.
+- **Qualify "one SQL statement takes one reading" in the docs.** Closed with one sentence in
+  `reference/api.md` that names the exceptions as rare and links to `risk_report.md`. The
+  maintainer asked for no more than that.

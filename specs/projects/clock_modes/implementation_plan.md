@@ -35,5 +35,5 @@ status: complete
   counting active statements with a `SQLITE_TRACE_PROFILE` end event); what fails, and how
   visibly, if the trace is removed or never fires; the measured cost. Each risk gets a verdict
   and, where one is warranted, a test added to the suite or a follow-up proposed.
-- [ ] **Phase 5: Backlog.** Review open backlog items with the user, then close or dismiss each
+- [x] **Phase 5: Backlog.** Review open backlog items with the user, then close or dismiss each
   through the standard phase flow.

@@ -331,6 +331,9 @@ With this prototype in place, the full framework suite passes and all four `xfai
 
 ## Follow-ups
 
+**Decision (maintainer):** neither fix. The docs name the exceptions in one sentence that
+links here, and the strict `xfail` tests stay.
+
 1. Decide between F2 and F1.
    - F2: remove all four `xfail` markers.
    - F1: remove the `xfail` from
