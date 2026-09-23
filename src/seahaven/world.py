@@ -269,6 +269,11 @@ class World:
         """
         return frozenset().union(*(hook.accepts for hook in self._startup_hooks))
 
+    @property
+    def state_formats(self) -> frozenset[str]:
+        """The names of the state formats this world registered, without the built-ins."""
+        return frozenset(self._state_formats)
+
     # Three overloads, so that a registered tool keeps the type it was written
     # with: `@world.tool` hands the function back as itself and a factory's `Tool`
     # comes back parameterised, which is what `inst.call(fn, ...)` and

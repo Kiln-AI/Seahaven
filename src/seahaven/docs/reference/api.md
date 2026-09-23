@@ -136,6 +136,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |
 | `world.accepted_startup_kwargs` | every startup keyword some hook names |
+| `world.state_formats` | the names of the state formats this world registers, without the built-ins |
 | `world.added_worlds` | what `add_world` recorded, in registration order. Read-only |
 | `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
 | `world.name`, `world.version`, `world.description`, `world.mcp_server_instructions`, `world.schema`, `world.schema_hash`, `world.fixtures_dir`, `world.pinned_state_format` | as given, plus the hash of the normalised schema |

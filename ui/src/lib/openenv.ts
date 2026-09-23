@@ -274,6 +274,8 @@ export type EnvSchema = {
   action?: JsonSchema
   observation?: JsonSchema
   state?: JsonSchema
+  /** The reset message. Only `GET /seahaven/schemas` answers it; see `fetchSchema`. */
+  reset?: JsonSchema
 }
 
 export type EnvMetadata = {
@@ -302,7 +304,26 @@ export async function fetchJson<T>(root: string, path: string): Promise<T | null
   }
 }
 
-export const fetchSchema = (root: string) => fetchJson<EnvSchema>(root, "schema")
+/**
+ * The environment's models: `GET /schema`, plus the reset message when the server publishes one.
+ *
+ * Seahaven-specific code in an otherwise generic console. `GET /seahaven/schemas` answers what
+ * `/schema` answers plus a `reset` key, which OpenEnv does not publish. Any other environment
+ * answers 404 there, and the console falls back to `/schema` and the reset JSON box. If OpenEnv
+ * accepts `reset` in `/schema`, this becomes a plain `/schema` read.
+ */
+export async function fetchSchema(root: string): Promise<EnvSchema | null> {
+  const extended = await fetchJson<EnvSchema>(root, "seahaven/schemas")
+  if (extended && isObjectSchema(extended.reset)) return extended
+  return fetchJson<EnvSchema>(root, "schema")
+}
+
+function isObjectSchema(value: unknown): value is JsonSchema {
+  const isObject = (candidate: unknown) =>
+    candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)
+  return isObject(value) && isObject((value as JsonSchema).properties)
+}
+
 export const fetchMetadata = (root: string) => fetchJson<EnvMetadata>(root, "metadata")
 
 /** `true` when the action schema is the fixed MCP tool-call triple rather than a real action. */
