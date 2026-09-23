@@ -1,7 +1,7 @@
 """A live world: a private copy of a fixture, and everything a call into it needs.
 
 An instance is a working directory holding one file per node of its world's
-composition, a connection on each, a frozen clock they share, and per node a
+composition, a connection on each, one clock they share, and per node a
 seeded id stream and a state dict -- plus a change log and a call log kept in
 memory, and one lock over the whole of it. A world that adds nothing has one
 node, so its instance is the one file it has always been. `world.instance(...)`
@@ -65,7 +65,7 @@ from seahaven.changes import (
     render_log,
     tracked_tables,
 )
-from seahaven.clock import Clock
+from seahaven.clock import Clock, ClockMode, check_clock_mode
 from seahaven.composition import (
     ROOT_PATH,
     Composition,
@@ -674,8 +674,13 @@ class Instance:
                 return target.node.agent_chain(ctx, call)
 
     def _next_ordinal(self) -> int:
-        """The ordinal of the call about to run, counting from 0. The lock is held."""
+        """The ordinal of the call about to run, counting from 0. The lock is held.
+
+        The one place a call is counted, so it is also where a `tick` clock moves:
+        during call `i` the clock has counted `i + 1` calls.
+        """
         self._call_count += 1
+        self.clock._call_started()
         return self._call_count - 1
 
     @contextmanager
@@ -991,6 +996,7 @@ class InstanceManager:
         *,
         seed: int | None = None,
         now: str | datetime | None = None,
+        clock_mode: ClockMode | None = None,
         state_format: str | None = None,
         episode_id: str | None = None,
         control_tools: bool = False,
@@ -1003,6 +1009,9 @@ class InstanceManager:
         in the directory it has today. A composite fixture carries one frozen file
         per node and every one of them is copied; a blank instance builds every
         node from its own world's DDL.
+
+        `clock_mode` is the mode the instance's clock runs in, in place of the
+        root world's default.
 
         `state_format` is the format this instance answers `state()` in, in place
         of the root world's pin, and `episode_id` the id every document of the
@@ -1027,16 +1036,18 @@ class InstanceManager:
         composition = world.composition()
         # Everything else that can be refused is refused here, before a directory
         # exists: an unknown startup keyword, a startup value no state document
-        # could carry, a format nothing registered, an id that is not an id, a
-        # fixture that is missing, modified or frozen from another schema, and
-        # `now=` where the fixture already carries the clock. A creation that
-        # cannot succeed copies nothing and leaves nothing behind.
+        # could carry, a clock mode that does not exist, a format nothing
+        # registered, an id that is not an id, a fixture that is missing,
+        # modified or frozen from another schema, and `now=` where the fixture
+        # already carries the clock. A creation that cannot succeed copies
+        # nothing and leaves nothing behind.
         _check_startup_keywords(composition, keywords)
         serialised_startup = _serialised_startup(keywords)
         # On the root, and only the root: an added world's registrations are
         # never consulted (`functional_spec.md` §6).
         format_name = state_format if state_format is not None else world.pinned_state_format
         formatter = world.resolve_state_format(format_name)
+        mode = check_clock_mode(clock_mode) if clock_mode is not None else world.default_clock_mode
         fixture = self._fixture(composition, fixture_id, now) if fixture_id is not None else None
         _sweep_once(self)
 
@@ -1054,8 +1065,15 @@ class InstanceManager:
             # The fixture id, or the world's name for a blank instance, so one
             # caller seed against two fixtures gives two streams.
             base = instance_seed(fixture_id if fixture_id is not None else world.name, seed)
+            # Made before anything is built or copied: a `running` clock counts
+            # from here, and a blank instance's schema reads it.
+            if fixture is not None:
+                clock = Clock.from_iso(fixture.now, mode)
+            elif now is not None:
+                clock = _clock_from(now, mode)
+            else:
+                clock = Clock(Clock.wall().now(), mode)
             if fixture is None:
-                clock = _clock_from(now) if now is not None else Clock.wall()
                 for node in composition.nodes:
                     build_blank(
                         directory / node.file_name,
@@ -1065,7 +1083,6 @@ class InstanceManager:
                     ).close()
             else:
                 _copy_fixture(fixture, composition, directory)
-                clock = Clock.from_iso(fixture.now)
             info = InstanceInfo(id=instance_id, fixture=fixture_id, seed=base)
             for node in composition.nodes:
                 runtime[node.key] = _open_node(node, directory, clock, base, info)
@@ -1306,8 +1323,8 @@ class InstanceManager:
         return root / process / self._world.name / instance_id
 
 
-def _clock_from(now: str | datetime) -> Clock:
-    return Clock.from_iso(now) if isinstance(now, str) else Clock(now)
+def _clock_from(now: str | datetime, mode: ClockMode) -> Clock:
+    return Clock.from_iso(now, mode) if isinstance(now, str) else Clock(now, mode)
 
 
 def node_seed(base: bytes, path: str) -> bytes:

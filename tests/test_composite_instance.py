@@ -68,7 +68,10 @@ def test_each_node_carries_its_own_worlds_schema(tmp_path: Path) -> None:
 
 
 def test_every_node_is_open_on_the_instances_clock(tmp_path: Path) -> None:
-    with two_levels(tmp_path).instance(None, now=INSTANT_ISO) as live, live.bulk() as ctx:
+    with (
+        two_levels(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="fixed") as live,
+        live.bulk() as ctx,
+    ):
         for db in (ctx.db, ctx.worlds.child.db, ctx.worlds.child.worlds.grand.db):
             assert db.one("SELECT datetime('now') AS n") == {"n": INSTANT_ISO}
 

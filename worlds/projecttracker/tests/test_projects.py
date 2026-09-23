@@ -5,7 +5,7 @@ import pytest
 import seahaven
 from conftest import AGENCY, BLANK_NOW, Scaffold
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW, clock_mode="fixed")
 
 
 def test_creating_a_project_answers_with_the_row(

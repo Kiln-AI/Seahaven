@@ -87,6 +87,7 @@ def test_the_reference_world_publishes_its_reset_message() -> None:
         "fixture",
         "startup",
         "now",
+        "clock_mode",
         "state_format",
         "seed",
         "episode_id",
@@ -190,6 +191,22 @@ def test_registered_state_formats_follow_the_built_ins(world: World) -> None:
         "notes.summary/1",
     ]
     assert world.state_formats == frozenset({"notes.summary/1"})
+
+
+def test_clock_mode_is_published_as_the_four_modes(world: World) -> None:
+    """Inline, as `state_format` is, so the console offers the modes as a choice."""
+    schema = _reset_schema(world)
+    clock_mode = schema["properties"]["clock_mode"]
+    assert clock_mode["anyOf"] == [
+        {"type": "string", "enum": ["fixed", "tick", "running", "wall"]},
+        {"type": "null"},
+    ]
+    assert clock_mode["default"] is None
+    assert clock_mode["description"] == (
+        "How the instance's clock moves: fixed, tick, running or wall. Null uses the world's "
+        "default."
+    )
+    assert "ClockMode" not in schema.get("$defs", {})
 
 
 # --- startup --------------------------------------------------------------------

@@ -281,6 +281,40 @@ def test_a_copy_registers_on_itself_alone(tmp_path: Path) -> None:
     assert world.startup_hooks == ()
 
 
+def test_the_default_clock_mode_is_running(tmp_path: Path) -> None:
+    world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)
+
+    assert world.default_clock_mode == "running"
+
+
+@pytest.mark.parametrize("mode", ["fixed", "tick", "running", "wall"])
+def test_a_world_takes_any_clock_mode_as_its_default(tmp_path: Path, mode: Any) -> None:
+    world = World(
+        "w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN, default_clock_mode=mode
+    )
+
+    assert world.default_clock_mode == mode
+    assert copy.copy(world).default_clock_mode == mode
+
+
+def test_an_unknown_default_clock_mode_is_refused_naming_the_world(tmp_path: Path) -> None:
+    unknown: Any = "tik"
+    with pytest.raises(WorldBug) as raised:
+        World(
+            "w",
+            "1.0.0",
+            SCHEMA,
+            fixtures_dir=tmp_path,
+            state_format=PIN,
+            default_clock_mode=unknown,
+        )
+
+    assert str(raised.value) == (
+        "world 'w': unknown clock mode 'tik'; the clock modes are 'fixed', 'tick', 'running' "
+        "and 'wall'"
+    )
+
+
 def test_a_copy_carries_the_state_formats(tmp_path: Path) -> None:
     """The fifth registry, snapshotted like the other four."""
     world = World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN)

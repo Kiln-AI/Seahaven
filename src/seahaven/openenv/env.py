@@ -31,7 +31,7 @@ import uuid
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.mcp_types import (
@@ -53,6 +53,7 @@ from openenv.core.env_server.types import (
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from seahaven.call import name_of, serialise
+from seahaven.clock import ClockMode
 from seahaven.errors import (
     INTERNAL_ERROR_CODE,
     INTERNAL_ERROR_MESSAGE,
@@ -63,6 +64,14 @@ from seahaven.errors import (
 from seahaven.instances import Instance
 from seahaven.state import BUILTIN_FORMATS, document
 from seahaven.world import RegisteredStartupHook, World
+
+# Pydantic publishes a PEP 695 alias as a `$ref` to a definition of its own; the
+# `Literal` behind it publishes the enum inline, the shape `state_format` has.
+# The checker keeps the alias, which it cannot see through `__value__`.
+if TYPE_CHECKING:
+    _ClockModeField = ClockMode
+else:
+    _ClockModeField = ClockMode.__value__
 
 __all__ = [
     "FileRef",
@@ -84,7 +93,8 @@ README_NAME = "README.md"
 # shape, which forbids extra keys, and `Observation` forbids a sibling field, so
 # `metadata` is the only declared free-form space on the frame. The key is
 # namespaced because `metadata` is shared: `reset` already writes `fixture`,
-# `now` and `tools` at its top level, and upstream may add keys of its own.
+# `now`, `clock_mode` and `tools` at its top level, and upstream may add keys of
+# its own.
 SEAHAVEN_ERROR_KEY = "seahaven_error"
 
 # How much of a UUID a correlation id keeps. Long enough that two ids in one
@@ -97,8 +107,9 @@ class SeahavenObservation(CallToolObservation):
     """What a tool call answers with: exactly one of `result` and `error`.
 
     This is the shape of a `step` on a `CallToolAction`, and of nothing else.
-    `reset` answers a plain `Observation` with `fixture`, `now` and `tools` in
-    its `metadata`: no tool was called, so nothing there is a tool's result.
+    `reset` answers a plain `Observation` with `fixture`, `now`, `clock_mode`
+    and `tools` in its `metadata`: no tool was called, so nothing there is a
+    tool's result.
 
     It subclasses OpenEnv's `CallToolObservation` rather than `Observation` so
     that upstream's MCP `tools/call` path, which checks for that type, keeps
@@ -262,7 +273,7 @@ class SeahavenState(State):
     # subclass's fields were published at all.
     #
     # Declared in `functional_spec.md` §3.1's order, less `episode_id`, which the
-    # base carries. A field the document always writes is required here; the five
+    # base carries. A field the document always writes is required here; the six
     # it answers `null` for default to `None`, so reading one off a frame that
     # left it out answers `None` rather than raising.
     format: str = Field(
@@ -291,7 +302,17 @@ class SeahavenState(State):
     )
     now: str | None = Field(
         default=None,
-        description="The instance's clock as an ISO-8601 instant, or null before the first reset.",
+        description=(
+            "The instance's clock when this document was produced, as an ISO-8601 instant, or "
+            "null before the first reset."
+        ),
+    )
+    clock_mode: _ClockModeField | None = Field(
+        default=None,
+        description=(
+            "How the instance's clock moves: fixed, tick, running or wall; null before the "
+            "first reset."
+        ),
     )
     startup: dict[str, Any] | None = Field(
         default=None,
@@ -318,7 +339,7 @@ class SeahavenState(State):
 # The console lays its reset form out in `properties` order, and pydantic puts
 # the inherited OpenEnv fields first. The fields not named here keep their own
 # order, after these.
-RESET_ORDER = ("fixture", "startup", "now", "state_format")
+RESET_ORDER = ("fixture", "startup", "now", "clock_mode", "state_format")
 
 
 def _order_properties(schema: dict[str, Any], leading: tuple[str, ...]) -> None:
@@ -352,7 +373,15 @@ class SeahavenResetRequest(ResetRequest):
     now: str | None = Field(
         default=None,
         description=(
-            "The blank instance's clock, as an ISO-8601 instant, e.g. 2024-03-05T12:00:00Z."
+            "Where a blank instance's clock starts, as an ISO-8601 instant, e.g. "
+            "2024-03-05T12:00:00Z."
+        ),
+    )
+    clock_mode: _ClockModeField | None = Field(
+        default=None,
+        description=(
+            "How the instance's clock moves: fixed, tick, running or wall. Null uses the "
+            "world's default."
         ),
     )
     state_format: str | None = Field(
@@ -456,6 +485,9 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         *,
         fixture: str | None = None,
         now: str | None = None,
+        # `ClockMode` and not `str`, which a wire value may be: OpenEnv binds by
+        # name only, and `create` refuses a value that is not a mode at runtime.
+        clock_mode: ClockMode | None = None,
         state_format: str | None = None,
         control_tools: Any = None,
         startup: Mapping[str, Any] | None = None,
@@ -465,21 +497,24 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
 
         Answers a plain `Observation` whose `metadata` carries `fixture` (the
         fixture the instance was made from, or `None` for a blank one), `now`
-        (the instance's clock as an ISO-8601 instant) and `tools` (how many the
-        instance lists). It is `metadata` and not a tool result because no tool
-        was called, and because OpenEnv's serializer copies a non-empty
-        `metadata` to the top level of the wire envelope, where a client that
-        knows nothing of Seahaven's observation classes still finds it.
+        (the instance's clock as an ISO-8601 instant), `clock_mode` (how that
+        clock moves) and `tools` (how many the instance lists). It is `metadata`
+        and not a tool result because no tool was called, and because OpenEnv's
+        serializer copies a non-empty `metadata` to the top level of the wire
+        envelope, where a client that knows nothing of Seahaven's observation
+        classes still finds it.
         `done` is `False` and `reward` is `None`, as on every observation here.
 
         `fixture=None` is a blank instance built from the world's DDL, whose clock
-        is the wall time unless `now=` says otherwise; a fixture carries its own
-        clock and `now=` with one is refused. `state_format=` answers this
-        episode's `state` message in another of the root world's formats, in
-        place of the world's pin, and an unregistered one is refused before
-        anything is copied. Those are the instance's own rules and not a second
-        set: everything here is passed straight through, including `startup`,
-        the world's own keyword namespace.
+        starts at the wall time unless `now=` says otherwise; a fixture carries
+        its own start and `now=` with one is refused. `clock_mode=` is the mode
+        the clock runs in, the world's default when it is not given.
+        `state_format=` answers this episode's `state` message in another of the
+        root world's formats, in place of the world's pin. An unknown mode or an
+        unregistered format is refused before anything is copied. Those are the
+        instance's own rules and not a second set: everything here is passed
+        straight through, including `startup`, the world's own keyword
+        namespace.
 
         This signature is the reset wire schema. OpenEnv has no schema of its
         own for a reset message: its server introspects this method to bind the
@@ -548,6 +583,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
             fixture,
             seed=seed,
             now=now,
+            clock_mode=clock_mode,
             state_format=state_format,
             episode_id=episode_id or str(uuid.uuid4()),
             control_tools=self.include_control_tools,
@@ -558,6 +594,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
             metadata={
                 "fixture": instance.fixture,
                 "now": instance.clock.iso(),
+                "clock_mode": instance.clock.mode,
                 "tools": len(instance.tools()),
             }
         )

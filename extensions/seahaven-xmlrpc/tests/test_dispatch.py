@@ -15,7 +15,7 @@ import seahaven
 import seahaven_xmlrpc
 from conftest import NOW, RPC, method_call, rpc
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=NOW, clock_mode="fixed")
 
 
 def test_a_method_call_reaches_the_handler_and_comes_back_as_a_method_response(

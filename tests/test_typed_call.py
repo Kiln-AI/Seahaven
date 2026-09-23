@@ -511,7 +511,7 @@ def test_a_result_that_cannot_be_rendered_still_rolls_the_call_back(tmp_path: Pa
 def test_the_committed_tree_is_reached_by_reference(tmp_path: Path) -> None:
     world = copy.copy(emporium.world)
     world.work_dir = tmp_path / "work"
-    with world.instance(None, now=INSTANT_ISO) as live:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as live:
         settled = live.call(billing.settle_order, total=100)
 
         # `settle_order` belongs to one node, and reaches two more by name.

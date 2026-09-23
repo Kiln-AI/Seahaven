@@ -86,8 +86,13 @@ def _port_of(server: uvicorn.Server) -> int:
 def test_the_typed_client_lists_and_calls_this_worlds_tools() -> None:
     """The flow an eval runs: connect, reset onto a fixture, list, call, read state."""
     with serving() as url, SeahavenClient(base_url=url) as env:
-        reset = env.reset(fixture="empty")
-        assert reset.observation.metadata == {"fixture": "empty", "now": FIXTURE_NOW, "tools": 27}
+        reset = env.reset(fixture="empty", clock_mode="fixed")
+        assert reset.observation.metadata == {
+            "fixture": "empty",
+            "now": FIXTURE_NOW,
+            "clock_mode": "fixed",
+            "tools": 27,
+        }
         names = {tool["name"] for tool in env.list_tools()}
         assert {"create_issue", "search_issues", "run_sql"} <= names
         observation = env.call("create_user", email="ada@tracker.invalid", name="Ada")

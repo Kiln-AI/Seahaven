@@ -175,12 +175,13 @@ neither, in a workspace with no admin such as a blank instance or `empty`, is `I
 `user_id` naming nobody is a `WorldBug` rather than a product error, because it comes from the
 eval's `reset` and not from the agent.
 
-**Order within one run.** The clock does not move, so every row one run writes shares a
-`created_at`. Reading `issue_events` in the order things happened means `ORDER BY created_at,
-rowid`. `list_comments` cannot do that, because a keyset cursor carries its tiebreaker as a value
-and `rowid` is not a projected column, so it orders by `(created_at, id)` and says so in its
-docstring: oldest first across the fixture's history, then id order among the comments one run
-wrote. Do not write an eval that grades on the order of comments an agent added. Grade on the rows.
+**Order within one run.** Rows one run writes can share a `created_at`: every row under the `fixed`
+clock, the rows of one call under `tick`, and rows written in the same millisecond under the
+default `running` clock. Reading `issue_events` in the order things happened means
+`ORDER BY created_at, rowid`. `list_comments` cannot do that, because a keyset cursor carries its
+tiebreaker as a value and `rowid` is not a projected column, so it orders by `(created_at, id)` and
+says so in its docstring: oldest first, then id order among comments that share an instant. Do not
+write an eval that grades on the order of comments an agent added. Grade on the rows.
 
 ## The fixtures
 

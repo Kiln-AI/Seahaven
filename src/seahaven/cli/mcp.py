@@ -11,10 +11,11 @@ code to import, which belongs beside the command in the configuration file where
 a reader of that file can see it.
 
 **The general door and the convenience flags do not mix.** `--reset-options` is
-the whole of what `world.instance()` is called with; `--fixture`, `--seed` and
-`--now` are convenience spellings of three of its keys, because JSON inside an
-`.mcp.json` args array is painful to quote. Combining the two is refused rather
-than merged: a user who has to reason about which fixture wins has already lost.
+the whole of what `world.instance()` is called with; `--fixture`, `--seed`,
+`--now` and `--clock-mode` are convenience spellings of four of its keys, because
+JSON inside an `.mcp.json` args array is painful to quote. Combining the two is
+refused rather than merged: a user who has to reason about which fixture wins
+has already lost.
 
 **A world's own startup keywords go inside `"startup"`,** which is the namespace
 `world.instance()` gives them. A key the signature does not name is refused
@@ -49,11 +50,16 @@ __all__ = [
 
 MISSING_EXTRA = 'seahaven mcp needs the mcp extra: pip install "seahaven[mcp]"'
 
-# The three keyword arguments of `world.instance()` that are common enough to
-# have a flag of their own, and the variable each one answers to. `state_format`
-# is not here: the state document is not published over MCP, so the format it
-# would be rendered in has no reader (`functional_spec.md` §2.1).
-CONVENIENCE = {"fixture": "SEAHAVEN_FIXTURE", "seed": "SEAHAVEN_SEED", "now": "SEAHAVEN_NOW"}
+# The keyword arguments of `world.instance()` that are common enough to have a
+# flag of their own, and the variable each one answers to. `state_format` is not
+# here: the state document is not published over MCP, so the format it would be
+# rendered in has no reader (`functional_spec.md` §2.1).
+CONVENIENCE = {
+    "fixture": "SEAHAVEN_FIXTURE",
+    "seed": "SEAHAVEN_SEED",
+    "now": "SEAHAVEN_NOW",
+    "clock_mode": "SEAHAVEN_CLOCK_MODE",
+}
 
 # The general door: a JSON object passed to `world.instance()` whole, which is
 # how a world's own startup keywords are reached, inside `"startup"`.
@@ -143,13 +149,24 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
             "not allowed with a fixture, which carries its own"
         ),
     )
+    # A string, not `choices=`: an unknown mode is `world.instance()`'s one-line
+    # refusal and exit 1, like every other refusal here, not an argparse usage error.
+    parser.add_argument(
+        "--clock-mode",
+        metavar="MODE",
+        default=None,
+        help=(
+            "how the instance's clock moves: fixed, tick, running or wall "
+            f"(${CONVENIENCE['clock_mode']}); the default is the world's"
+        ),
+    )
     parser.add_argument(
         GENERAL_FLAG,
         metavar="JSON",
         default=None,
         help=(
             f"a JSON object passed to world.instance() whole (${GENERAL_VARIABLE}); "
-            "not allowed with --fixture, --seed or --now"
+            "not allowed with --fixture, --seed, --now or --clock-mode"
         ),
     )
     parser.set_defaults(handler=run)
@@ -190,7 +207,7 @@ def resolve_options(args: argparse.Namespace, environ: Mapping[str, str]) -> Opt
     convenience = {
         name: given
         for name, variable in CONVENIENCE.items()
-        if (given := _source(f"--{name}", variable, getattr(args, name), environ)) is not None
+        if (given := _source(_flag(name), variable, getattr(args, name), environ)) is not None
     }
     general = _source(GENERAL_FLAG, GENERAL_VARIABLE, args.reset_options, environ)
     if general is not None and convenience:
@@ -201,6 +218,11 @@ def resolve_options(args: argparse.Namespace, environ: Mapping[str, str]) -> Opt
         name: _seed(given) if name == "seed" else given.value for name, given in convenience.items()
     }
     return _with_a_seed(reset_options)
+
+
+def _flag(name: str) -> str:
+    """The command-line spelling of a convenience keyword: `clock_mode` is `--clock-mode`."""
+    return f"--{name.replace('_', '-')}"
 
 
 @dataclass(frozen=True)
@@ -319,8 +341,9 @@ def _with_a_seed(reset_options: dict[str, Any]) -> Options:
     fixture replays the same ids on every launch. That is right for a test and
     wrong here: a user relaunches their MCP client all day and expects a world
     that moved on, not one that reset to the same ids (`functional_spec.md` §4).
-    The clock is not part of this either way: it is the fixture's own `now`, or
-    wall time for a blank instance, and no seed moves it.
+    The clock is not part of this either way: it starts at the fixture's own
+    `now`, or wall time for a blank instance, and runs in the world's default
+    mode unless one is given. No seed moves it.
 
     A `"seed"` key inside a `--reset-options` object counts as given, whatever
     its value, so a caller who deliberately passes `{"seed": null}` gets the

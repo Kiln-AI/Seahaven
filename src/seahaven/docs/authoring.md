@@ -549,7 +549,7 @@ except seahaven.WorldBug as error:
 unknown-keyword detection for the whole world. A misspelled startup keyword would then silently do
 nothing, instead of failing before the instance exists.
 
-A hook may name any keyword, including `fixture`, `seed`, `now`, `state_format` and
+A hook may name any keyword, including `fixture`, `seed`, `now`, `clock_mode`, `state_format` and
 `control_tools`: those are parameters of `world.instance` and `reset`, and a startup keyword sits
 inside `startup=`, where it cannot collide with one. Hooks put what they worked out in `ctx.state`,
 and tools read it from there. A principal is application code: the world stores `user_id`, and its
@@ -682,11 +682,14 @@ it. See [db_schema_and_fixtures.md](db_schema_and_fixtures.md).
 
 ## Things that go wrong quietly
 
-**Ordering within one run.** The clock does not move, so every row one run writes carries the same
-`created_at`, and ordering by it is not an order. For raw SQL the answer is `ORDER BY created_at,
-rowid`. For a *tool* there is no complete answer: a keyset cursor has to carry its tiebreaker as a
-value, `rowid` is not a column a world projects, and `ctx` offers no monotonic per-instance counter
-to page on instead. Order by `(created_at, id)`, say so in the tool's docstring, and grade evals on
+**Ordering within one run.** A timestamp does not order the rows one run writes. Under the `fixed`
+clock every row carries the same `created_at`. Under `tick` each call has its own instant, one
+second after the call before it, so `created_at` orders rows across calls, but the rows one call
+writes share an instant. Under `running`, rows written in the same millisecond share one, and a
+`wall` clock can also move backwards. For raw SQL the answer is `ORDER BY created_at, rowid`. For
+a *tool* there is no complete answer: a keyset cursor has to carry its tiebreaker as a value,
+`rowid` is not a column a world projects, and `ctx` offers no monotonic per-instance counter to
+page on instead. Order by `(created_at, id)`, say so in the tool's docstring, and grade evals on
 the state document rather than on the order of an activity feed.
 
 **Lists without a tiebreak.** `ORDER BY created_at DESC` over rows that share an instant is not

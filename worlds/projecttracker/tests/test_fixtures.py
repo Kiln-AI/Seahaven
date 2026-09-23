@@ -220,7 +220,7 @@ def test_every_timestamp_is_inside_the_span_the_fixture_claims(
     which is the tracker's horizon.
     """
     module = generate()
-    with world.instance(fixture_id) as instance:
+    with world.instance(fixture_id, clock_mode="fixed") as instance:
         db = instance.inspect()
         floor = module._shift(instance.clock, span_days)
         horizon = module._shift(instance.clock, -module.DUE_HORIZON_DAYS)
@@ -319,7 +319,7 @@ def test_the_state_file_carries_no_journal_or_lock_file_beside_it() -> None:
         ]
 
 
-@pytest.mark.seahaven(fixture="empty")
+@pytest.mark.seahaven(fixture="empty", clock_mode="fixed")
 def test_an_instance_of_the_empty_fixture_starts_at_the_frozen_instant_with_no_rows(
     instance: seahaven.Instance,
 ) -> None:
@@ -329,7 +329,7 @@ def test_an_instance_of_the_empty_fixture_starts_at_the_frozen_instant_with_no_r
     assert instance.call("list_users") == {"users": [], "next_cursor": None, "has_next": False}
 
 
-@pytest.mark.seahaven(fixture=SMALL_STARTUP)
+@pytest.mark.seahaven(fixture=SMALL_STARTUP, clock_mode="fixed")
 def test_an_instance_of_a_populated_fixture_is_the_tracker_the_description_promises(
     instance: seahaven.Instance,
 ) -> None:

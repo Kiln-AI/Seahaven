@@ -16,7 +16,7 @@ import pytest
 import seahaven
 from conftest import AGENCY, BLANK_NOW, Scaffold, an_issue
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW, clock_mode="fixed")
 
 
 def walk(instance: seahaven.Instance, **arguments: Any) -> list[list[str]]:

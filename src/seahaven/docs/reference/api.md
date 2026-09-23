@@ -46,7 +46,8 @@ import seahaven
 
 seahaven.World, seahaven.Instance, seahaven.Ctx, seahaven.Tool, seahaven.Call
 seahaven.Worlds, seahaven.WorldHandle
-seahaven.Db, seahaven.Clock, seahaven.Ids, seahaven.LogRecord, seahaven.CallRecord
+seahaven.Db, seahaven.Clock, seahaven.ClockMode, seahaven.Ids
+seahaven.LogRecord, seahaven.CallRecord
 seahaven.Fixture
 seahaven.SeahavenError, seahaven.WorldBug
 seahaven.ToolError, seahaven.ArgumentError, seahaven.DbError, seahaven.UnknownTool
@@ -65,6 +66,7 @@ class World:
         schema: str,
         *,
         state_format: str | None = None,
+        default_clock_mode: ClockMode = "running",
         description: str | None = None,
         mcp_server_name: str | None = None,
         mcp_server_instructions: str | None = None,
@@ -88,25 +90,25 @@ class World:
 
 One per world package, built at import in `world.py`. `schema` is the world's `CREATE TABLE`
 statements as one string, usually from `sql_files`. `name` and `version` are informational and
-appear in the OpenEnv metadata and in every fixture's sidecar. `state_format` is required: it is
-the format `inst.state()` answers in, and a world constructed without one is refused with the
-built-in names in the message. `description` is the one-line description the OpenEnv metadata
-publishes. It is a free string, unvalidated, and the only thing that sets that line; a world that
-gives none, or gives a blank string, publishes `Seahaven world <name>`. `mcp_server_name` is the
-name the MCP handshake publishes; a world that gives none publishes its own `name`. Give it when
-the world emulates a real product whose own MCP server publishes another name. The name is not held
-to the world-name rule below, because it never becomes a path: capitals, spaces and `&` are all
-accepted. A blank name is refused, and so is one longer than 128 characters.
-`mcp_server_instructions` is the MCP `instructions` string a client reads before it calls a tool.
-It is a free string too, unvalidated and untrimmed, and every string a world gives is sent as
-given, the empty one included; a world that gives none sends no instructions at all, and the
-handshake leaves the field out.
-`fixtures_dir` defaults to `fixtures/` at the project root, found by walking up from the
-constructing module to the directory holding `pyproject.toml`, and to `fixtures/` beside the
-package where there is none. `work_dir` is where instance copies are kept; the default is a
-per-process directory under the system temp directory, which is swept of previous processes'
-leftovers, and a directory you name is used exactly as given and never swept. `untracked_tables`
-names tables the change log's sessions do not attach.
+appear in the OpenEnv metadata and in every fixture's sidecar. `state_format` is required: it is the
+format `inst.state()` answers in, and a world constructed without one is refused with the built-in
+names in the message. `default_clock_mode` is the clock mode an instance of this world gets when the
+caller names none: `fixed`, `tick`, `running` or `wall` (see [`Clock`](#clock)). `description` is
+the one-line description the OpenEnv metadata publishes. It is a free string, unvalidated, and the
+only thing that sets that line; a world that gives none, or gives a blank string, publishes
+`Seahaven world <name>`. `mcp_server_name` is the name the MCP handshake publishes; a world that
+gives none publishes its own `name`. Give it when the world emulates a real product whose own MCP
+server publishes another name. The name is not held to the world-name rule below, because it never
+becomes a path: capitals, spaces and `&` are all accepted. A blank name is refused, and so is one
+longer than 128 characters. `mcp_server_instructions` is the MCP `instructions` string a client
+reads before it calls a tool. It is a free string too, unvalidated and untrimmed, and every string a
+world gives is sent as given, the empty one included; a world that gives none sends no instructions
+at all, and the handshake leaves the field out. `fixtures_dir` defaults to `fixtures/` at the
+project root, found by walking up from the constructing module to the directory holding
+`pyproject.toml`, and to `fixtures/` beside the package where there is none. `work_dir` is where
+instance copies are kept; the default is a per-process directory under the system temp directory,
+which is swept of previous processes' leftovers, and a directory you name is used exactly as given
+and never swept. `untracked_tables` names tables the change log's sessions do not attach.
 
 A `World` whose schema does not execute cannot be constructed: the schema is built in memory to
 compute the schema hash, and SQLite's own message is reported.
@@ -128,7 +130,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call it; there is nothing to decorate |
 | `world.state_format(name)` | register a state format of this world's own, as a decorator. The name is `<family>/<major>` and may not begin with `seahaven.` |
 | `world.resolve_state_format(name)` | the formatter a name answers to: a built-in, or one this world registered. Asked of the root of an instance and of nothing else |
-| `world.instance(fixture=None, *, seed=None, now=None, state_format=None, control_tools=False, startup=None)` | make an instance; a context manager. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance. `startup` is the world's own keywords, passed to the startup hooks that name them |
+| `world.instance(fixture=None, *, seed=None, now=None, clock_mode=None, state_format=None, control_tools=False, startup=None)` | make an instance; a context manager. `now` is where a blank instance's clock starts. `clock_mode` is how the clock moves, `None` for `world.default_clock_mode`. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance. `startup` is the world's own keywords, passed to the startup hooks that name them |
 | `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
@@ -141,6 +143,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.composition()` | the sealed tree: its nodes, their paths and the flat tool surface. Sealed lazily and cached until the next registration anywhere in the process |
 | `world.name`, `world.version`, `world.description`, `world.mcp_server_instructions`, `world.schema`, `world.schema_hash`, `world.fixtures_dir`, `world.pinned_state_format` | as given, plus the hash of the normalised schema |
 | `world.mcp_server_name` | the name the MCP handshake publishes: as given, or `world.name` when the world gives none |
+| `world.default_clock_mode` | the clock mode an instance gets when the caller names none |
 
 Registration validates immediately and raises `WorldBug`; the full list of what is refused is in
 [../authoring.md](../authoring.md).
@@ -270,20 +273,48 @@ rather than the statement, so read it straight after an `INSERT`.
 
 `db.conn` is there for what the wrapper does not cover, such as blob I/O or an exec trace. The
 invariants: **do not close it, change its pragmas or its authorizer, or open a second connection to
-the instance file.** The clock functions, the change log's per-call session and the per-call
-transaction all use that one connection.
+the instance file, and do not remove the trace registered under the id `seahaven.clock`.** The
+clock functions, the change log's per-call session and the per-call transaction all use that one
+connection, and the trace is how the clock gives each SQL statement one reading.
 
 ## `Clock`
 
 ```py
+type ClockMode = Literal["fixed", "tick", "running", "wall"]
+
+
 class Clock:
-    def now(self): ...  # an aware UTC datetime
-    def iso(self): ...  # the canonical text: 2026-06-01T09:00:00.000Z
+    def __init__(self, now: datetime, mode: ClockMode = "fixed") -> None: ...
+    def now(self): ...  # the current reading, an aware UTC datetime
+    def iso(self): ...  # the current reading as canonical text: 2026-06-01T09:00:00.000Z
+
+    mode: ClockMode  # how the clock moves, read-only
 ```
 
-Static for the life of the instance. Every connection overrides SQLite's `current_timestamp`,
-`current_date`, `current_time` and the `'now'` argument of `datetime`, `date`, `time`, `strftime`,
-`julianday`, `unixepoch` and `timediff` to return it, so SQL sees the same instant world code does.
+An instance's clock, read through `ctx.clock` or `inst.clock`. The framework makes it when it makes
+the instance, in the instance's mode, and every connection and context of the instance reads the
+one object. Each call to `now()` or `iso()` is one reading, and reading never moves the clock.
+
+| Mode | Reading |
+|---|---|
+| `fixed` | the start instant |
+| `tick` | the start instant plus one second per call dispatched so far; every reading inside call `i` (counting from 0) is the start instant plus `i + 1` seconds |
+| `running` | the start instant plus the time elapsed since the instance was made, on a monotonic clock |
+| `wall` | the host's current UTC time |
+
+Every reading is truncated to milliseconds. [../clock.md](../clock.md) says what the
+start instant is and which modes replay.
+
+`Clock(datetime)` built directly is a `fixed` clock at that instant, which is also the way to render
+a datetime as canonical text. Building a `Clock` does not choose or change an instance's mode: that
+is `world.instance(clock_mode=...)` and `World(default_clock_mode=...)`. A `Clock` compares by
+identity.
+
+Every connection overrides SQLite's `current_timestamp`, `current_date`, `current_time` and the
+`'now'` argument of `datetime`, `date`, `time`, `strftime`, `julianday`, `unixepoch` and `timediff`
+to return the clock's reading, so SQL sees the same time world code does. One SQL statement takes
+one reading, and a trigger it fires shares that reading. Two rare cases are exceptions: see the
+[clock modes risk report](https://github.com/Kiln-AI/Seahaven/blob/main/specs/projects/clock_modes/risk_report.md).
 The overrides are registered as innocuous, so schema objects may reference them. What they return
 compares and sorts correctly against the canonical text a world stores.
 
@@ -588,7 +619,7 @@ See [../serving_and_openenv.md](../serving_and_openenv.md) and [../state.md](../
 
 Installing `seahaven` activates the plugin. It adds two fixtures, `world` (session-scoped) and
 `instance` (one per test); one marker, `@pytest.mark.seahaven(fixture, seed=None, now=None,
-state_format=None, control_tools=False, startup=None)`; and one option,
+clock_mode=None, state_format=None, control_tools=False, startup=None)`; and one option,
 `--seahaven-world module:attr`. See [../testing.md](../testing.md).
 
 ## The concurrency gate

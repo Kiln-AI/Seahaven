@@ -31,7 +31,7 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
 
     ```python
     with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
-        env.reset(fixture="empty", seed=7).observation.metadata  # fixture, now, tools
+        env.reset(fixture="empty", seed=7).observation.metadata  # fixture, now, clock_mode, tools
         tools = env.list_tools()
         obs = env.call("ping", message="hello")
         obs.result, obs.error, obs.seahaven_error
@@ -42,18 +42,19 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
 
     The observation parameter is OpenEnv's base `Observation`, because a reset
     and a tool call are not the same shape. The server answers a reset with a
-    plain `Observation` whose `metadata` carries `fixture`, `now` and `tools`,
-    and typing the parameter this way is what keeps `.result` off a reset:
-    `_parse_result` below says what a typed client makes of that frame. `call`,
-    and `step` on a `CallToolAction`, answer a `SeahavenObservation`, the shape
-    of a tool call.
+    plain `Observation` whose `metadata` carries `fixture`, `now`, `clock_mode`
+    and `tools`, and typing the parameter this way is what keeps `.result` off
+    a reset: `_parse_result` below says what a typed client makes of that
+    frame. `call`, and `step` on a `CallToolAction`, answer a
+    `SeahavenObservation`, the shape of a tool call.
 
     `state()` answers the whole state document (`functional_spec.md` §3.1) plus
     OpenEnv's `step_count`: `.state` is the formatter's output, everything else
     but `step_count` is the framework's envelope, and
     `.model_dump(exclude={"step_count"})` is the document a harness saves as
     `final_state` -- byte for byte what `inst.state()` answers in process.
-    `reset(state_format=...)` chooses the format for the episode.
+    `reset(state_format=...)` chooses the format for the episode, and
+    `reset(clock_mode=...)` how its clock moves.
 
     A tool error arrives on the observation and never raises, and exactly one of
     `obs.result` and `obs.error` is set. `obs.error` is OpenEnv's own

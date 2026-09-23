@@ -45,9 +45,9 @@ MARKER = "seahaven"
 WORLD_OPTION = "--seahaven-world"
 
 _MARKER_SIGNATURE = (
-    f"{MARKER}(fixture, seed=None, now=None, state_format=None, control_tools=False, "
-    "startup=None): the fixture the `instance` fixture is created from; fixture=None is a "
-    "blank instance"
+    f"{MARKER}(fixture, seed=None, now=None, clock_mode=None, state_format=None, "
+    "control_tools=False, startup=None): the fixture the `instance` fixture is created from; "
+    "fixture=None is a blank instance"
 )
 
 _EXAMPLE = (
@@ -135,10 +135,10 @@ def _refuse_two_markers_on_one_node(item: pytest.Item) -> None:
 def _fixture_and_arguments(marker: pytest.Mark) -> tuple[str | None, dict[str, Any]]:
     """The fixture the marker names, and everything else it passes to the world.
 
-    `seed`, `now` and `startup` are whatever is left after `fixture` is taken
-    out: the plugin does not enumerate `world.instance`'s parameters, so a
-    marker reaches whichever ones the installed Seahaven has, and a name that is
-    not one of them fails in the call.
+    `seed`, `now`, `clock_mode` and `startup` are whatever is left after
+    `fixture` is taken out: the plugin does not enumerate `world.instance`'s
+    parameters, so a marker reaches whichever ones the installed Seahaven has,
+    and a name that is not one of them fails in the call.
     """
     if len(marker.args) > 1:
         pytest.fail(

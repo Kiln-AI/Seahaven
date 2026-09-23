@@ -472,8 +472,9 @@ directory. The root's file is `state.sqlite`, as it has always been, and an adde
 `state.payments__tax.sqlite`. Every file carries its own world's schema and gets every per-file rule
 Seahaven has.
 
-- **One clock** for the whole instance. Every connection gets the same overrides, so every time tool
-  in every added world reads the same instant.
+- **One clock** for the whole instance, in the root world's clock mode unless the caller names one.
+  Every connection gets the same overrides, so every tool in every added world reads the same
+  clock, and the added worlds' own `default_clock_mode` is not used.
 - **One seed**, and each node draws ids from its own stream, salted with its canonical path. Adding
   or removing a node never perturbs another node's ids, and the same fixture and seed reproduce
   every node. SQL's `random()` and `randomblob()` are seeded per node from the same salt, so a
@@ -526,9 +527,9 @@ spells anything else — a separator, a `..`, a drive letter, a character outsid
 is refused when it is read, because both readers join it onto the fixture directory and follow the
 result, and the sidecar supplies the hash too.
 
-- **Genesis** yields a blank file per node, each with its own schema, at one clock. Fill them
+- **Genesis** yields a blank file per node, each with its own schema, on one clock. Fill them
   through the host's tools, the added worlds' tools, and `inst.bulk()`. Every node of a composite
-  fixture is built in one instance at one instant. There is no path that combines stores frozen at
+  fixture is built in one instance, on one clock. There is no path that combines stores frozen at
   different times.
 - **Freeze** checks *every* node against its own world's schema before it writes anything, then
   vacuums, hashes and publishes atomically. All or nothing: a drifted third node mints nothing, and

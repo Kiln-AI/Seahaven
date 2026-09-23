@@ -287,7 +287,7 @@ const RESET_SCHEMA = {
       default: null,
       title: "Now",
       description:
-        "The blank instance's clock, as an ISO-8601 instant, e.g. 2024-03-05T12:00:00Z.",
+        "Where a blank instance's clock starts, as an ISO-8601 instant, e.g. 2024-03-05T12:00:00Z.",
     },
     state_format: {
       anyOf: [{ type: "string", enum: ["seahaven.state+calls/1", "seahaven.state/1"] }, { type: "null" }],

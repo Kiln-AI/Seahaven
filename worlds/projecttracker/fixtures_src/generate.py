@@ -2,26 +2,20 @@ r"""How every fixture in `fixtures/` is made. Committed, because it is the recip
 
 A fixture is a binary artifact, and a binary artifact with no source is one
 nobody can change. This module is that source: one function per fixture, each
-taking a live instance and filling it, which is exactly the shape the CLI calls:
+taking a live instance and filling it.
 
-    uv run seahaven fixture freeze small_startup \
-        --now 2026-06-01T09:00:00.000Z \
-        --run fixtures_src.generate:small_startup \
-        --description "..."
-
-**`--now` is not optional here, whatever the CLI's default says.** `freeze`
-starts from a blank instance, and a blank instance with no `--now` takes the wall
-clock -- so the command without the flag mints a fixture dated today and quietly
-breaks the invariant two paragraphs below. It has to be `NOW`, spelled out,
-because the CLI imports one function from this module and cannot see the
-constant. `fork` needs no `--now`: a fork inherits its parent's clock, which is
-the point of forking.
-
-Running this module does the same thing itself, from the repository root, passes
-`NOW` for you and carries the descriptions with it, which is why it is the way to
-rebuild a fixture here:
+Running this module is the way to rebuild a fixture here. From the repository
+root it freezes from a blank instance at `NOW` on a `fixed` clock, and carries
+the descriptions with it:
 
     uv run python worlds/projecttracker/fixtures_src/generate.py small_startup
+
+Each builder is also the shape `seahaven fixture freeze --run` calls, but the
+CLI does not make these fixtures. It makes its instance in the world's default
+clock mode, `running`, whose clock moves while the builder works: the fixture's
+`now` would be `NOW` plus the time the builder took, every timestamp a tool
+writes would differ from run to run, and the fixture would no longer match the
+bytes committed here.
 
 `build` and `main` both take `world=`, defaulting to this package's. A fixture is
 frozen into the world it is handed, so that is how `tests/test_fixtures.py`
@@ -337,10 +331,14 @@ def build(fixture_id: str, *, world: seahaven.World | None = None) -> seahaven.F
 
     The instance is destroyed whether the build succeeds or not, and a failure
     leaves no fixture directory behind: `freeze` publishes by rename.
+
+    The clock is `fixed`, whatever the world's default: regeneration is promised
+    to be byte-identical, and a clock that moved while the builder ran would
+    stamp every run's rows, and the fixture's `now`, differently.
     """
     into = world if world is not None else _package_world()
     builder = BUILDERS[fixture_id]
-    with into.instance(None, now=NOW) as inst:
+    with into.instance(None, now=NOW, clock_mode="fixed") as inst:
         builder(inst)
         return inst.freeze(fixture_id, DESCRIPTIONS[fixture_id])
 

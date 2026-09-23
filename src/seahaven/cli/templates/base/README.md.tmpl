@@ -9,7 +9,7 @@ A Seahaven world.
 | Schema | `items(id, name, created_at)` |
 | Tools | `create_item(name)`, `get_item(item_id)` |
 | Errors | `NOT_FOUND`, `INVALID_INPUT`, `INTERNAL` (`src/$package/errors.py`) |
-| Fixtures | none yet; freeze the first one with `seahaven fixture freeze` |
+| Fixtures | none yet; see [Making a fixture](#making-a-fixture) |
 
 ## Using it
 
@@ -23,6 +23,18 @@ with $package.world.instance(None) as instance:
 
 Serve it over OpenEnv with `uv run seahaven serve`, and run its tests with
 `uv run pytest`.
+
+## Making a fixture
+
+`fixtures_src/generate.py` is the recipe for every fixture. Its `build` freezes one from a blank
+instance on a `fixed` clock, so a rebuild writes the same bytes. From this directory:
+
+```sh
+uv run python -c "from fixtures_src.generate import build; build('empty')"
+```
+
+That writes `fixtures/empty/`. For each new fixture, add a builder to `generate.py` and its entries
+in `BUILDERS` and `DESCRIPTIONS`.
 
 ## Conventions
 
