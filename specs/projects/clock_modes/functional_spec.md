@@ -4,26 +4,25 @@ status: draft
 
 # Functional Spec: Clock Modes
 
-An instance's clock gets a **mode**, chosen per instance at reset, with a per-world default. Three
+An instance's clock gets a **mode**, chosen per instance at reset, with a per-world default. Four
 modes:
 
 | Mode | What the clock reads | Deterministic |
 |---|---|---|
 | `fixed` | The start instant, for the instance's whole life. Today's behaviour. | Yes |
 | `tick` | The start instant plus one second per tool call dispatched so far. | Yes |
-| `realtime` | The start instant plus the real time elapsed since the instance was created. | No |
+| `running` | The start instant plus the real time elapsed since the instance was created. | No |
+| `wall` | The host's real wall-clock time, on every reading. The start instant is not used. | No |
 
-The default for every world is `realtime` unless the world sets another. Seahaven is pre-v1, so
+The default for every world is `running` unless the world sets another. Seahaven is pre-v1, so
 changing the default away from today's frozen clock is accepted (see `project_overview.md`).
-
-> **Name.** `realtime` replaces the working name `progressing` from the overview. The spelling is
-> the enum value everywhere below; renaming it is a find-and-replace on this document.
 
 ## 1. Terms
 
 - **Start instant (S).** Where an instance's clock begins: the fixture's `now` for an instance
   forked from a fixture; `now=` for a blank instance given one; the wall clock at creation for a
-  blank instance without one. This is unchanged from today, and applies in every mode.
+  blank instance without one. This is unchanged from today. `fixed`, `tick` and `running` count
+  from S; `wall` ignores it.
 - **Reading.** Any time something asks the clock what time it is: `ctx.clock.now()`,
   `ctx.clock.iso()`, `inst.clock.now()` / `.iso()`, and every SQL date and time function resolving
   `'now'` (`CURRENT_TIMESTAMP`, `CURRENT_DATE`, `CURRENT_TIME`, `datetime()`, `datetime('now')`,
@@ -36,7 +35,7 @@ changing the default away from today's frozen clock is accepted (see `project_ov
   `ctx.worlds` handle, and `tools()`. This definition already exists and is reused unchanged.
 
 A reading never changes the clock in any mode. Only calls (in `tick`) and the passage of real time
-(in `realtime`) move it.
+(in `running` and `wall`) move it.
 
 ## 2. The modes
 
@@ -59,7 +58,7 @@ Every reading is S. Behaviour is exactly today's.
 - Two calls never share an instant, so ordering rows by timestamp orders them by call. Rows written
   within one call still share an instant.
 
-### 2.3 `realtime`
+### 2.3 `running`
 
 - When an instance is created, the framework records S and the moment of creation on a monotonic
   clock. Creation is the moment the clock is made, before a blank instance's schema is built and
@@ -75,6 +74,17 @@ Every reading is S. Behaviour is exactly today's.
 - The clock keeps running while the instance is idle between calls.
 - Two readings close together may be equal, because of millisecond truncation.
 
+### 2.4 `wall`
+
+- Every reading is the host's current UTC wall-clock time, truncated to milliseconds. S is not
+  used: an instance forked from a fixture dated 2026-06-01 reads today's date from its first
+  reading, and the fixture's rows keep their own dates.
+- Readings are live and follow the same SQL rule as `running`: one instant per SQL statement.
+- Readings follow the host's clock, so they can jump forwards or backwards if the host's clock is
+  changed during a run. That is the difference from `running`.
+- `now=` together with `clock_mode="wall"` is refused, because `wall` would ignore it. The error
+  names both options. A fixture together with `wall` is accepted.
+
 ## 3. Choosing the mode
 
 ### 3.1 The world's default
@@ -82,9 +92,9 @@ Every reading is S. Behaviour is exactly today's.
 `World(..., default_clock_mode=...)` sets the mode an instance of the world gets when the reset
 does not name one.
 
-- Optional. When omitted, the world's default is `realtime`.
+- Optional. When omitted, the world's default is `running`.
 - Validated when the `World` is created. An unknown value is refused with an error naming the value
-  and listing `fixed`, `tick` and `realtime`.
+  and listing `fixed`, `tick`, `running` and `wall`.
 - Readable as `world.default_clock_mode`.
 
 ### 3.2 Per instance: the `clock_mode` reset option
@@ -92,21 +102,26 @@ does not name one.
 `clock_mode` is a new Seahaven reset option, beside `fixture`, `seed`, `now` and `state_format`.
 
 - Optional. When omitted or null, the instance uses its world's default.
-- An unknown value is refused, naming the value and listing the three modes. The refusal happens
+- An unknown value is refused, naming the value and listing the four modes. The refusal happens
   before anything is created, the same way an unknown `state_format` is refused today.
-- Combines freely with every other reset option, including `now=` and a fixture.
+- Combines with every other reset option, including `now=` and a fixture, except `now=` with
+  `wall` (section 2.4). The same refusal applies when `wall` comes from the world's default.
 - The mode is fixed for the instance's life. There is no way to change it after creation.
 
-The option is available at every place a reset option is accepted today:
+The option is available at every place that makes an instance for an eval or a test:
 
 | Place | Spelling |
 |---|---|
 | Python | `world.instance(fixture, ..., clock_mode="tick")` |
-| OpenEnv `reset` | `clock_mode` field in the reset request; the reset schema publishes it as an enum of the three values, with a description; the console form shows it after `now` |
+| OpenEnv `reset` | `clock_mode` field in the reset request; the reset schema publishes it as an enum of the four values, with a description; the console form shows it after `now` |
 | OpenEnv Python client | the same keyword the client already forwards for the other reset options |
 | `seahaven mcp` | `--clock-mode MODE` convenience flag, `SEAHAVEN_CLOCK_MODE` environment variable, and `"clock_mode"` inside `--reset-options` JSON; refused together with `--reset-options` like the other convenience flags |
 | pytest plugin | `clock_mode=` on the marker and the fixture factory, like `now=` and `state_format=` |
-| `seahaven fixture freeze` / `fork` | `--clock-mode MODE` flag; default is the world's default |
+
+`seahaven fixture freeze` and `seahaven fixture fork` get no new flag. The instance each builds to
+run the author's generator in uses the world's default mode. An author who wants another mode for
+generation writes a generator that makes its own instance, as the projecttracker generator does.
+A `wall` default together with `freeze --now` is refused like `now=` with `wall` anywhere else.
 
 ### 3.3 Composite instances
 
@@ -120,6 +135,12 @@ every connection and every added world's tools read the one clock.
 
 - `ctx.clock.mode` and `inst.clock.mode` answer the instance's mode, as its string value.
 - `ctx.clock.now()` and `ctx.clock.iso()` answer the current reading as defined in section 2.
+- `seahaven.Clock` stays public. `Clock(datetime)` builds a `fixed` clock at that instant, which is
+  also a way to render a datetime as canonical timestamp text. Moving clocks are made by the
+  framework when it creates an instance; a world author does not build one. The class docstring
+  says what a `Clock` is (an instance's clock, read through `ctx.clock`), what constructing one
+  directly gives (a `fixed` clock), and what it is not (a way to choose or change an instance's
+  mode, which is the `clock_mode` reset option and the world's default).
 
 ### 4.2 The state document
 
@@ -137,21 +158,25 @@ reading at the end of the reset.
 ### 4.4 Freezing
 
 - A fixture's `now` is the instance's clock reading at the moment of the freeze, in every mode. A
-  `realtime` instance started at 1998-01-01 and frozen after 40 minutes has a fixture `now` of
-  1998-01-01 plus 40 minutes. A `tick` instance frozen after 12 calls has `S + 12s`.
-- An instance forked from that fixture starts at the fixture's `now`, in whatever mode it is given,
-  so a `realtime` or `tick` instance picks up from where the frozen one stopped.
+  `running` instance started at 1998-01-01 and frozen after 40 minutes has a fixture `now` of
+  1998-01-01 plus 40 minutes. A `tick` instance frozen after 12 calls has `S + 12s`. A `wall`
+  instance has the wall-clock time of the freeze.
+- An instance forked from that fixture starts at the fixture's `now`, in whatever mode it is given
+  except `wall`, so a `running` or `tick` instance picks up from where the frozen one stopped.
 - A fixture does not record a clock mode. The sidecar format does not change.
 
 ### 4.5 Reproducibility
 
 - `fixed` and `tick` are deterministic: the same fixture, seed, mode and calls produce the same
   result and the same timestamps, as `fixed` does today.
-- `realtime` is not: timestamps depend on how long the agent and the harness took. The docs say so,
-  and point to `tick` for an eval that needs replayable timestamps with an order between calls.
-- A fixture generator that must produce the same fixture every time it runs has to use `fixed` or
-  `tick`. Under `realtime` the fixture's `now` and every timestamp the generator wrote depend on how
-  long generation took. The projecttracker generator passes `clock_mode="fixed"` for this reason.
+- `running` and `wall` are not: timestamps depend on how long the agent and the harness took, and
+  for `wall` on the date of the run. The docs say so, and point to `tick` for an eval that needs
+  replayable timestamps with an order between calls.
+- The docs' statement that a world reads the wall clock in exactly two places becomes true of
+  `fixed`, `tick` and `running` only.
+- The framework does not make fixture generation deterministic. A generator that wants the same
+  fixture on every run picks a deterministic mode itself. The projecttracker generator already
+  promises byte-identical regeneration, so it passes `clock_mode="fixed"`.
 
 ## 5. Schema rules
 
@@ -162,8 +187,9 @@ is; no new rule is added.
 
 ## 6. Reference world and tests
 
-- The projecttracker world keeps the framework default (`realtime`). Its fixture generator pins
+- The projecttracker world keeps the framework default (`running`). Its fixture generator pins
   `clock_mode="fixed"` (section 4.5).
+- `wall` is tested against a stubbed wall clock, not by sleeping.
 - Framework and projecttracker tests that assert exact timestamps pin `fixed` or `tick`. Tests
   that exercise the new modes pin the mode they test. No test depends on the default except the
   tests of the default itself.
@@ -175,7 +201,7 @@ is; no new rule is added.
 
 The bundled docs change where they describe the clock as frozen or static:
 
-- `concepts.md` "Clock": the three modes, the default, how to choose one; "Reproducibility": which
+- `concepts.md` "Clock": the four modes, the default, how to choose one; "Reproducibility": which
   modes replay.
 - `authoring.md` "Ordering within one run": `tick` orders rows across calls.
 - `state.md`: the `clock_mode` envelope field and what `now` means for a moving clock.
