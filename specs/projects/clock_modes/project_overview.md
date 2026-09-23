@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Clock Modes
@@ -18,3 +18,8 @@ The existing behaviour stays available as **fixed**.
 - New Seahaven reset option: `clock_mode`, an enum of `fixed`, `tick` and `progressing`. Optional;
   uses the world's default if not set.
 - New world creation option: `default_clock_mode`. Optional; defaults to `progressing`.
+
+## Notes
+
+- Seahaven is pre-v1, so changing the default from a fixed clock to `progressing` for every
+  existing world is accepted (decided).
