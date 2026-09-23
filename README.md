@@ -25,9 +25,8 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
 - **[Any interface](src/seahaven/docs/authoring.md#writing-a-tool).** Tools for REST
   APIs, sandboxed SQL, search, or any custom format.
 - **[Parallel Worlds](src/seahaven/docs/serving_and_openenv.md).** Serve hundreds of instances per process, one instance per connection, thousands of tool calls per second.
-- **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same fixture, same random
-  seed, and a clock that is fixed or ticks once per call: the same run, every time. Python and SQL
-  read one clock.
+- **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same initial state (fixture),
+  same clock/time, same random seed: the same run, every time. Across Python and SQL.
 - **[Change log](src/seahaven/docs/state.md).** Every row the agent changed, call by call, in one
   versioned document with the provenance to read it. Grade on state, not on transcripts.
 - **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
