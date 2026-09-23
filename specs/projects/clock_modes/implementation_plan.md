@@ -23,7 +23,7 @@ status: complete
   Examples that show a moving clock use `tick`. The scaffold `README.md.tmpl` Fixtures row points
   at `build` in `fixtures_src/generate.py` but gives no runnable way to call it: give a verified
   invocation, or revise the row.
-- [ ] Phase 4: Risk report. A written assessment, `specs/projects/clock_modes/risk_report.md`, of
+- [x] Phase 4: Risk report. A written assessment, `specs/projects/clock_modes/risk_report.md`, of
   whether the per-statement SQL reading (architecture §3, `trace_v2` with `SQLITE_TRACE_STMT`) is
   safe and robust. It covers at least: SQLite's documented guarantees for `SQLITE_TRACE_STMT` and
   where they are loose ("possibly at other times"); nested statements a user function runs on the
@@ -35,3 +35,5 @@ status: complete
   counting active statements with a `SQLITE_TRACE_PROFILE` end event); what fails, and how
   visibly, if the trace is removed or never fires; the measured cost. Each risk gets a verdict
   and, where one is warranted, a test added to the suite or a follow-up proposed.
+- [ ] **Phase 5: Backlog.** Review open backlog items with the user, then close or dismiss each
+  through the standard phase flow.

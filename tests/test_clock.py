@@ -1,16 +1,18 @@
 """The clock in each of its modes, and SQL reading it through SQLite's own date functions."""
 
+import io
 import itertools
 import os
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import apsw
+import apsw.ext
 import pytest
 
 from seahaven import clock as clock_module
@@ -27,6 +29,9 @@ from seahaven.db import Db, open_instance
 from seahaven.errors import WorldBug
 from seahaven.sandbox import Authorizer, run_statement
 from tests.conftest import INSTANT, INSTANT_ISO
+
+if TYPE_CHECKING:  # a name that lives in apsw's stubs, not in the extension module
+    from apsw import SQLiteValue
 
 CANONICAL = f"strftime('{CANONICAL_FORMAT}', ?)"
 
@@ -525,3 +530,149 @@ def test_a_failed_statements_reading_is_not_reused(running: Db) -> None:
         running.conn.execute("SELECT CURRENT_TIMESTAMP, abs(-9223372036854775807 - 1)").fetchall()
 
     assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(2)}
+
+
+def test_a_statement_abandoned_after_its_first_row_takes_a_new_reading_when_run_again(
+    running: Db,
+) -> None:
+    sql = "SELECT CURRENT_TIMESTAMP AS at FROM (VALUES (1), (2))"
+    cursor = running.conn.execute(sql)
+    assert next(cursor) == (_after(1),)
+    cursor.close()
+
+    assert running.conn.execute(sql).fetchall() == [(_after(2),), (_after(2),)]
+
+
+# ------------------------------------------- what the per-statement reading relies on
+#
+# `specs/projects/clock_modes/risk_report.md` is the assessment these belong to.
+# SQLite reports a statement that starts while another is executing with its text
+# prefixed `-- `, and APSW reports such an event as trigger activity: that is what
+# keeps a nested statement and a virtual table's own queries inside their caller's
+# reading.
+
+
+def test_a_nested_statement_shares_its_callers_reading(running: Db) -> None:
+    conn = running.conn
+    conn.execute(
+        "CREATE TABLE stamps ("
+        "  id TEXT NOT NULL PRIMARY KEY,"
+        "  a TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),"
+        "  b TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)"
+        ") STRICT"
+    )
+
+    def stamp_in_python(*_args: SQLiteValue) -> SQLiteValue:
+        return conn.execute("SELECT CURRENT_TIMESTAMP").get
+
+    conn.create_scalar_function("stamp_in_python", stamp_in_python, 0)
+    conn.execute("INSERT INTO stamps (id) VALUES (stamp_in_python())")
+
+    assert _stamped(running) == [{"id": _after(1), "a": _after(1), "b": _after(1)}]
+
+
+def test_a_virtual_tables_own_queries_share_the_statements_reading(running: Db) -> None:
+    """FTS5 runs statements of its own on the connection, in the middle of the caller's."""
+    running.conn.execute(
+        "CREATE TABLE stamps ("
+        "  id INTEGER PRIMARY KEY,"
+        "  body TEXT NOT NULL,"
+        "  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),"
+        "  indexed_at TEXT"
+        ") STRICT;"
+        "CREATE VIRTUAL TABLE stamps_fts USING fts5(body, content='stamps', content_rowid='id');"
+        "CREATE TRIGGER index_stamp AFTER INSERT ON stamps BEGIN"
+        "  INSERT INTO stamps_fts (rowid, body) VALUES (NEW.id, NEW.body);"
+        "  UPDATE stamps SET indexed_at = CURRENT_TIMESTAMP WHERE id = NEW.id;"
+        " END"
+    )
+    running.execute("INSERT INTO stamps (body) VALUES ('hello world')")
+
+    assert running.one("SELECT created_at, indexed_at FROM stamps") == {
+        "created_at": _after(1),
+        "indexed_at": _after(1),
+    }
+
+
+def test_a_statement_re_prepared_after_a_schema_change_takes_a_fresh_reading(
+    running: Db, tmp_path: Path
+) -> None:
+    """A second connection changes the schema, and the cached statement is re-prepared."""
+    running.conn.execute(
+        "CREATE TABLE anchor (id INTEGER PRIMARY KEY) STRICT; INSERT INTO anchor VALUES (1)"
+    )
+    sql = "SELECT CURRENT_TIMESTAMP AS at, datetime('now') AS again FROM anchor"
+    assert running.one(sql) == {"at": _after(1), "again": _after(1)}
+
+    other = apsw.Connection(str(tmp_path / "running.sqlite"))
+    try:
+        other.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY) STRICT")
+    finally:
+        other.close()
+
+    assert running.one(sql) == {"at": _after(2), "again": _after(2)}
+
+
+@pytest.mark.parametrize(
+    "tracing",
+    [
+        pytest.param(lambda conn: conn.set_profile(lambda *_: None), id="set_profile"),
+        pytest.param(
+            lambda conn: conn.trace_v2(apsw.SQLITE_TRACE_STMT, lambda _: None), id="no-id"
+        ),
+        pytest.param(lambda conn: conn.trace_v2(0, None), id="no-id-removed"),
+    ],
+)
+def test_other_trace_apis_leave_the_clocks_trace_in_place(
+    running: Db, tracing: Callable[[apsw.Connection], None]
+) -> None:
+    tracing(running.conn)
+
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(1)}
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(2)}
+
+
+def test_apsws_own_tracer_leaves_the_clocks_trace_in_place(running: Db) -> None:
+    with apsw.ext.Trace(io.StringIO(), db=running.conn):
+        assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(1)}
+
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(2)}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="risk_report.md R4: APSW reports a statement whose text starts with '-- ' as"
+    " trigger activity, so it keeps the previous statement's reading",
+)
+def test_a_statement_led_by_a_line_comment_takes_a_fresh_reading(running: Db) -> None:
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(1)}
+
+    assert running.one("-- a note\nSELECT CURRENT_TIMESTAMP AS at") == {"at": _after(2)}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="risk_report.md R6: a statement started between another's rows drops that"
+    " statement's reading",
+)
+def test_a_statement_keeps_its_reading_while_another_runs_between_its_rows(
+    running: Db, plain: apsw.Connection
+) -> None:
+    """Only a date function with an argument that changes per row is evaluated per row."""
+    conn = running.conn
+    conn.execute(
+        "CREATE TABLE due (at TEXT NOT NULL) STRICT;"
+        "INSERT INTO due VALUES ('2024-01-01'), ('2024-01-02'), ('2024-01-03')"
+    )
+    ages = []
+    for (age,) in conn.execute("SELECT timediff('now', at) FROM due"):
+        ages.append(age)
+        running.one("SELECT CURRENT_TIMESTAMP AS at")
+
+    reference = [
+        plain.execute("SELECT timediff(?, ?)", (_after(1), day)).get
+        for day in ("2024-01-01", "2024-01-02", "2024-01-03")
+    ]
+    assert ages == reference

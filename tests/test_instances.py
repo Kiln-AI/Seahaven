@@ -1993,6 +1993,56 @@ def test_tick_reads_outside_a_call_never_tick(tmp_path: Path) -> None:
         assert instance.call("now")["python"] == after(3)
 
 
+def test_tick_a_comment_led_statement_in_a_call_reads_its_calls_instant(tmp_path: Path) -> None:
+    """The previous call's `COMMIT` and this call's `BEGIN` are statements, and each drops the
+    reading."""
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        instance.call("now")
+
+        rows = instance.call("rows", sql="-- when is it?\nSELECT CURRENT_TIMESTAMP AS at")
+
+        assert rows == [{"at": after(2)}]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="risk_report.md R4: a statement whose text starts with '-- ' keeps the previous"
+    " statement's reading, which on the inspect() handle can be from before a call",
+)
+def test_tick_a_comment_led_read_through_inspect_reads_the_current_instant(
+    tmp_path: Path,
+) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        inspect = instance.inspect()
+        assert inspect.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": INSTANT_ISO}
+        instance.call("now")
+
+        assert inspect.one("-- when is it?\nSELECT CURRENT_TIMESTAMP AS at") == {"at": after(1)}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="risk_report.md R6: a statement run between another's rows after a call has"
+    " started drops that statement's reading, so its later rows read the new instant",
+)
+def test_tick_a_read_through_inspect_keeps_its_reading_across_a_call(tmp_path: Path) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        inspect = instance.inspect()
+        cursor = inspect.conn.execute(
+            "WITH d(n) AS (VALUES (1), (2), (3)) SELECT datetime('now', '+' || n || ' days') FROM d"
+        )
+        first = next(cursor)
+        instance.call("now")
+        inspect.one("SELECT 1 AS one")
+
+        start = datetime.fromisoformat(INSTANT_ISO)
+        assert [first, *cursor] == [
+            (f"{start + timedelta(days=n):%Y-%m-%dT%H:%M:%S.%f}"[:-3] + "Z",) for n in (1, 2, 3)
+        ]
+
+
 def test_tick_a_nested_call_sees_the_outer_calls_instant(tmp_path: Path) -> None:
     host = build_world(tmp_path)
     child = composable_world("child")
