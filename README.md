@@ -24,10 +24,9 @@ copies in milliseconds, run an agent in each, see exactly what it changed, then 
   `small_startup`, `agency` or `big_co`, and reuse them across evals. Immutable and hash-verified.
 - **[Any interface](src/seahaven/docs/authoring.md#writing-a-tool).** Tools for REST
   APIs, sandboxed SQL, search, or any custom format.
-- **[Serving](src/seahaven/docs/serving_and_openenv.md).** Hundreds of instances per process, one
-  private instance per session, thousands of tool calls per second.
+- **[Parallel Worlds](src/seahaven/docs/serving_and_openenv.md).** Serve hundreds of instances per process, one instance per connection, thousands of tool calls per second.
 - **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same fixture, same frozen
-  clock, same seeded ids: the same run, every time. The clock is frozen in Python and in SQL.
+  clock, same random seed: the same run, every time. The clock is frozen across Python and SQL.
 - **[Change log](src/seahaven/docs/state.md).** Every row the agent changed, call by call, in one
   versioned document with the provenance to read it. Grade on state, not on transcripts.
 - **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
