@@ -116,8 +116,8 @@ A WebSocket connection is one session, and one session holds one instance.
 
 - **`reset(fixture=..., seed=..., startup=...)`** creates the instance. `reset()` with no fixture
   creates a blank instance from the schema, whose clock starts at wall time unless `now=` says
-  otherwise. Passing `now=` together with a fixture is refused, because the fixture carries its own
-  start instant.
+  otherwise. An instance of a fixture starts at the fixture's `now`, and `now=` can move that start
+  later ([clock.md](clock.md#starting-a-fixture-later)).
   Everything is passed straight to `world.instance(...)`, so the rules are the ones you already know
   from running in process.
 - **A second `reset`** destroys the current instance before making the new one, so a session never
@@ -132,7 +132,7 @@ A WebSocket connection is one session, and one session holds one instance.
 |---|---|
 | `fixture=` | the frozen starting state to copy. Omit it for a blank instance, built from the world's schema |
 | `seed=` | the seed behind `ctx.ids`, and behind SQL's `random()` and `randomblob()` |
-| `now=` | where the clock starts, for a blank instance only. A fixture carries its own, and `now=` with one is refused |
+| `now=` | where the clock starts. Omit it for the fixture's `now`, or for wall time on a blank instance. With a fixture, it must not be earlier than the fixture's `now` |
 | `clock_mode=` | how the clock moves: `fixed`, `tick`, `running` or `wall`. Omit it for the world's default ([clock.md](clock.md)) |
 | `episode_id=` | your own id for the episode, echoed back on `state` so a trajectory ties to your run |
 | `state_format=` | the format the `state` message answers in, in place of the world's pin ([state.md](state.md)) |

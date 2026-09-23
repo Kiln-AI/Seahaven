@@ -191,7 +191,7 @@ class Fixture:
 
     @property
     def now(self) -> str:
-        """The clock every instance of this fixture starts at."""
+        """Where every instance of this fixture starts its clock, unless `now=` is later."""
         return self.meta.now
 
     @property

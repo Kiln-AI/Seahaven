@@ -181,10 +181,22 @@ def test_reset_with_now_puts_a_blank_instance_at_that_time(env: SeahavenEnv) -> 
     assert env.instance.clock.iso() == INSTANT_ISO
 
 
-def test_reset_refuses_now_with_a_fixture(env: SeahavenEnv, world: World) -> None:
+def test_reset_with_a_later_now_starts_a_fixtures_instance_there(
+    env: SeahavenEnv, world: World
+) -> None:
     fixture_id = make_fixture(world)
-    with pytest.raises(WorldBug, match="now= applies to blank instances only"):
-        env.reset(fixture=fixture_id, now=INSTANT_ISO)
+    later = "2024-03-08T12:00:00.123Z"
+    observation = env.reset(fixture=fixture_id, now=later, clock_mode="fixed")
+    assert observation.metadata["now"] == later
+    assert call(env, "rows", sql="SELECT datetime('now') AS now, id FROM notes").result == [
+        {"now": later, "id": "n0"}
+    ]
+
+
+def test_reset_refuses_a_now_earlier_than_the_fixtures(env: SeahavenEnv, world: World) -> None:
+    fixture_id = make_fixture(world)
+    with pytest.raises(WorldBug, match=f"earlier than {INSTANT_ISO}, the now of fixture 'start'"):
+        env.reset(fixture=fixture_id, now="2024-03-05T12:00:00.000Z")
     assert env.instance is None
 
 

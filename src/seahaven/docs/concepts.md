@@ -160,9 +160,9 @@ other instance, no process.
 
 Every instance has a clock of its own. World code reads it through `ctx.clock`, and SQL's date and
 time functions, such as `CURRENT_TIMESTAMP`, read the same clock. The clock starts at the fixture's
-`now`. The instance's clock mode says how the clock moves from there: `fixed`, `tick`, `running`
-(the default) or `wall`. [clock.md](clock.md) explains each mode, how to choose one, and what the
-mode means for the timestamps a world writes.
+`now`, or at a later `now=` given to `world.instance(...)`. The instance's clock mode says how the
+clock moves from there: `fixed`, `tick`, `running` (the default) or `wall`. [clock.md](clock.md)
+explains each mode, how to choose one, and what the mode means for the timestamps a world writes.
 
 ## Reproducibility
 

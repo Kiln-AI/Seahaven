@@ -1038,9 +1038,9 @@ class InstanceManager:
         # exists: an unknown startup keyword, a startup value no state document
         # could carry, a clock mode that does not exist, a format nothing
         # registered, an id that is not an id, a fixture that is missing,
-        # modified or frozen from another schema, and `now=` where the fixture
-        # already carries the clock. A creation that cannot succeed copies
-        # nothing and leaves nothing behind.
+        # modified or frozen from another schema, and a `now=` earlier than the
+        # fixture's own. A creation that cannot succeed copies nothing and leaves
+        # nothing behind.
         _check_startup_keywords(composition, keywords)
         serialised_startup = _serialised_startup(keywords)
         # On the root, and only the root: an added world's registrations are
@@ -1067,10 +1067,10 @@ class InstanceManager:
             base = instance_seed(fixture_id if fixture_id is not None else world.name, seed)
             # Made before anything is built or copied: a `running` clock counts
             # from here, and a blank instance's schema reads it.
-            if fixture is not None:
-                clock = Clock.from_iso(fixture.now, mode)
-            elif now is not None:
+            if now is not None:
                 clock = _clock_from(now, mode)
+            elif fixture is not None:
+                clock = Clock.from_iso(fixture.now, mode)
             else:
                 clock = Clock(Clock.wall().now(), mode)
             if fixture is None:
@@ -1241,7 +1241,7 @@ class InstanceManager:
         for difference in check_composition(fixture.meta, composition):
             _log.info("fixture %s of world %s: %s", fixture_id, self._world.name, difference)
         if now is not None:
-            raise WorldBug("now= applies to blank instances only: a fixture carries its own clock")
+            _check_not_before_fixture(fixture, now)
         return fixture
 
     def _make_instance_dir(self, instance_id: str) -> Path:
@@ -1325,6 +1325,22 @@ class InstanceManager:
 
 def _clock_from(now: str | datetime, mode: ClockMode) -> Clock:
     return Clock.from_iso(now, mode) if isinstance(now, str) else Clock(now, mode)
+
+
+def _check_not_before_fixture(fixture: Fixture, now: str | datetime) -> None:
+    """Refuse a start instant earlier than the fixture's own `now`.
+
+    The fixture's rows are dated by its clock, so an earlier start would give the
+    instance rows created in its future.
+    """
+    requested = _clock_from(now, "fixed")
+    frozen = Clock.from_iso(fixture.now)
+    if requested.now() < frozen.now():
+        raise WorldBug(
+            f"now={requested.iso()} is earlier than {frozen.iso()}, the now of fixture "
+            f"{fixture.id!r}: the fixture's rows are dated by its clock, so start the instance "
+            "at or after it"
+        )
 
 
 def node_seed(base: bytes, path: str) -> bytes:
