@@ -12,7 +12,8 @@ seahaven fixture fork <parent> <id> --run module:function --description <text> [
 seahaven serve [--host HOST] [--port PORT] [--max_concurrent_envs N] [--concurrency N]
                [--session-timeout SECONDS] [--include-control-tools] [--no-console]
                [--world module:attr]
-seahaven mcp [--fixture NAME] [--seed N] [--now ISO] [--reset-options JSON] [--world module:attr]
+seahaven mcp [--fixture NAME] [--seed N] [--now ISO] [--clock-mode MODE] [--reset-options JSON]
+             [--world module:attr]
 ```
 
 Every command exits `0` on success and `1` on failure, and a failure is one line on stderr with the
@@ -131,7 +132,7 @@ result to `fixtures/<id>/`.
 |---|---|
 | `--run module:function` | **required.** The generator: a function taking the live instance and filling it |
 | `--description <text>` | **required.** What the fixture holds and what scenarios it supports, for eval authors |
-| `--now <ts>` | the instant to freeze the clock at; the default is the wall clock at creation |
+| `--now <ts>` | the instant the blank instance's clock starts at; the default is the wall clock at creation |
 
 ```sh
 seahaven fixture freeze empty \
@@ -144,13 +145,20 @@ seahaven fixture freeze empty \
 it was built, and nothing will tell you, because a wall-clock instant is a perfectly valid
 timestamp. See [../db_schema_and_fixtures.md](../db_schema_and_fixtures.md).
 
+The instance runs in the world's default clock mode, which is `running` unless the world sets
+another. The fixture's `now` is then `--now` plus the time the generator took, and every timestamp
+the generator writes from the clock differs from run to run. To rebuild a fixture to the same bytes,
+freeze it from a generator that makes its own instance with `clock_mode="fixed"`, as the scaffold's
+`build` does.
+
 The command refuses an id whose directory already exists.
 
 ## `seahaven fixture fork <parent> <id>`
 
 Creates an instance of `parent`, runs the generator against it, and freezes the result with
-`parent_id` set. It takes the same `--run` and `--description`, and no `--now`: a fork inherits its
-parent's clock, which is the point of forking.
+`parent_id` set. It takes the same `--run` and `--description`, and no `--now`: a fork's clock
+starts at its parent's `now`, which is the point of forking. It runs in the world's default clock
+mode, as `freeze` does.
 
 ```sh
 seahaven fixture fork empty small_startup \
@@ -197,20 +205,22 @@ command says so and exits 1.
 | `--fixture NAME` | `SEAHAVEN_FIXTURE` | a blank instance | the fixture the instance starts from |
 | `--seed N` | `SEAHAVEN_SEED` | a random seed, written to stderr | the caller seed, an integer; the framework refuses a negative one, and one that does not fit in 8 bytes |
 | `--now ISO` | `SEAHAVEN_NOW` | wall time at creation | the clock a blank instance starts at; the framework refuses it together with a fixture |
-| `--reset-options JSON` | `SEAHAVEN_RESET_OPTIONS` | none | a JSON object of the keyword arguments `world.instance()` is called with; not allowed with `--fixture`, `--seed` or `--now` |
+| `--clock-mode MODE` | `SEAHAVEN_CLOCK_MODE` | the world's default | how the instance's clock moves: `fixed`, `tick`, `running` or `wall` |
+| `--reset-options JSON` | `SEAHAVEN_RESET_OPTIONS` | none | a JSON object of the keyword arguments `world.instance()` is called with; not allowed with `--fixture`, `--seed`, `--now` or `--clock-mode` |
 | `--world module:attr` | -- | the convention | which world to serve |
 
 ```sh
 uv run --extra mcp seahaven mcp
 uv run --extra mcp seahaven mcp --fixture small_startup --seed 7
+uv run --extra mcp seahaven mcp --fixture small_startup --clock-mode tick
 uv run --extra mcp seahaven mcp --reset-options '{"startup": {"reviewer": "ada"}}'
 ```
 
 `--reset-options` is the whole of what `world.instance()` is called with, and the only way to reach
-a world's own startup keywords, which go inside `"startup"`. `--fixture`, `--seed` and `--now` are
-convenience spellings of three of its keys. Giving `--reset-options` together with one of those
-three flags is refused rather than merged, and so is a key `world.instance()` does not take. An
-instance this command makes never has control tools, and `--reset-options` refuses the
+a world's own startup keywords, which go inside `"startup"`. `--fixture`, `--seed`, `--now` and
+`--clock-mode` are convenience spellings of four of its keys. Giving `--reset-options` together with
+one of those four flags is refused rather than merged, and so is a key `world.instance()` does not
+take. An instance this command makes never has control tools, and `--reset-options` refuses the
 `"control_tools"` key that would ask for them.
 
 Read [../serving_and_openenv.md](../serving_and_openenv.md#serving-one-world-to-an-mcp-client) for

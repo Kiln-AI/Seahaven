@@ -7,6 +7,7 @@ to something that already worked, so the first failure they see is one they made
 """
 
 import os
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -17,6 +18,7 @@ import pytest
 
 from seahaven.cli import CliError
 from seahaven.cli.new import HUB_FILES, render, seahaven_requirement
+from seahaven.fixtures import load
 from tests.conftest import CliResult, run_cli
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
@@ -140,6 +142,36 @@ def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
         check=False,
     )
     assert finished.returncode == 0, finished.stdout + finished.stderr
+
+
+def test_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
+    """The command under the README's "Making a fixture", run as written.
+
+    `uv run python` is this interpreter with the package on `PYTHONPATH`, as in
+    the pytest test above: the scaffold's own environment would install seahaven
+    from an index it has not been published to.
+    """
+    readme = (scaffold / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Making a fixture\n", 1)[1]
+    command = section.split("```sh\n", 1)[1].split("\n```", 1)[0]
+    launcher = "uv run python "
+    assert command.startswith(launcher)
+
+    finished = subprocess.run(
+        [sys.executable, *shlex.split(command.removeprefix(launcher))],
+        cwd=scaffold,
+        env={**os.environ, "PYTHONPATH": str(scaffold / "src")},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert finished.returncode == 0, finished.stdout + finished.stderr
+    generator = (scaffold / "fixtures_src" / "generate.py").read_text(encoding="utf-8")
+    fixture = load(scaffold / "fixtures" / "empty")
+    assert fixture.id == "empty"
+    assert f'NOW = "{fixture.now}"' in generator
 
 
 def test_nothing_is_imported_and_no_world_is_built(scaffold: Path) -> None:

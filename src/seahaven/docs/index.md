@@ -65,9 +65,9 @@ with world.instance(now="2026-06-01T09:00:00.000Z", clock_mode="fixed") as inst:
 Five things in that example are worth naming, because the rest of these pages use them constantly.
 `World` is the declaration. `@world.tool` publishes a function to the agent; its signature becomes
 the JSON schema the agent sees, and its docstring becomes the description. `inst` is an instance of
-the world. `ctx.clock` is frozen, so the timestamp is the same on every replay. `inst.state()` is
-the document an eval grades: what the run left behind in the database, and enough provenance to
-read it.
+the world. `ctx.clock` is the instance's clock, and `clock_mode="fixed"` holds it at `now`, so the
+timestamp is the same on every replay. `inst.state()` is the document an eval grades: what the run
+left behind in the database, and enough provenance to read it.
 
 A real world spreads the same parts over a package instead of one file, and adds fixtures, error
 types and an error handler. `seahaven new <name>` writes that layout for you.

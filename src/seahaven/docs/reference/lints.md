@@ -92,7 +92,7 @@ of them, in a column default, a trigger body, a view, a generated column or a pa
 whole schema is searched through `sqlite_master`, with comments and string literals excluded.
 
 **Why.** The problem is the text rather than the instant. An instance's clock overrides make a
-default in the schema read the frozen instant anyway, but what SQLite *writes* is `2026-06-01
+default in the schema read the instance's clock anyway, but what SQLite *writes* is `2026-06-01
 09:00:00`, and every other door of a world writes `2026-06-01T09:00:00.000Z`. One format across
 every door is the rule, and two formats in one column is a comparison that fails for a reason nobody
 will find quickly.
@@ -126,9 +126,9 @@ foreign key in `001_` and created in `002_` is a common cause.
 is resolved through the module's own imports, so `datetime.now()`, `datetime.datetime.now()` and
 `from datetime import datetime as dt; dt.now()` are one rule and not three.
 
-**Why.** An instance's time is its fixture's, everywhere. A timestamp from the machine's clock in
-fixture-relative data is nearly always a mistake: the row is dated years after everything around it,
-and the run does not replay.
+**Why.** An instance's time is its own clock's, which starts at its fixture's `now`. A timestamp
+from the machine's clock in fixture-relative data is nearly always a mistake: the row is dated years
+after everything around it, and the run does not replay.
 
 **A warning and not an error**, because it is sometimes deliberate. `middleware/` is exempt
 outright, since a real clock timing a real call in a logging layer is exactly right.

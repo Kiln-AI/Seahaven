@@ -115,8 +115,9 @@ for a server that should answer the protocol and nothing else.
 A WebSocket connection is one session, and one session holds one instance.
 
 - **`reset(fixture=..., seed=..., startup=...)`** creates the instance. `reset()` with no fixture
-  creates a blank instance from the schema, whose clock is wall time unless `now=` says otherwise.
-  Passing `now=` together with a fixture is refused, because the fixture carries its own clock.
+  creates a blank instance from the schema, whose clock starts at wall time unless `now=` says
+  otherwise. Passing `now=` together with a fixture is refused, because the fixture carries its own
+  start instant.
   Everything is passed straight to `world.instance(...)`, so the rules are the ones you already know
   from running in process.
 - **A second `reset`** destroys the current instance before making the new one, so a session never
@@ -131,7 +132,8 @@ A WebSocket connection is one session, and one session holds one instance.
 |---|---|
 | `fixture=` | the frozen starting state to copy. Omit it for a blank instance, built from the world's schema |
 | `seed=` | the seed behind `ctx.ids`, and behind SQL's `random()` and `randomblob()` |
-| `now=` | the clock, for a blank instance only. A fixture carries its own, and `now=` with one is refused |
+| `now=` | where the clock starts, for a blank instance only. A fixture carries its own, and `now=` with one is refused |
+| `clock_mode=` | how the clock moves: `fixed`, `tick`, `running` or `wall`. Omit it for the world's default ([concepts.md](concepts.md#clock)) |
 | `episode_id=` | your own id for the episode, echoed back on `state` so a trajectory ties to your run |
 | `state_format=` | the format the `state` message answers in, in place of the world's pin ([state.md](state.md)) |
 | `startup=` | an object of the world's own startup keywords, passed to its startup hooks, so a world can be set up per episode |
@@ -153,11 +155,11 @@ refused rather than delivered:
 ```
 
 `reset` answers a plain OpenEnv `Observation`, not the shape of a tool call, because no tool was
-called. Its `metadata` carries `fixture`, `now` and `tools` (the fixture the instance was made from,
-the instance's clock, and how many tools the instance lists), and the server also copies that
-`metadata` to the top level of the envelope, so a client that knows nothing of Seahaven's
-observation classes still finds it. `done` is `false` and `reward` is `null`, as on every
-observation.
+called. Its `metadata` carries `fixture`, `now`, `clock_mode` and `tools` (the fixture the instance
+was made from, the clock's reading and its mode, and how many tools the instance lists), and the
+server also copies that `metadata` to the top level of the envelope, so a client that knows nothing
+of Seahaven's observation classes still finds it. `done` is `false` and `reward` is `null`, as on
+every observation.
 
 Listing the tools does not need a `reset`. The tool list belongs to the world rather than to the
 episode, so a client may ask for it before it starts.
@@ -171,9 +173,10 @@ shape, so there is nothing per-world to generate.
 from seahaven.openenv import SeahavenClient
 
 with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
-    # A private copy of the fixture, made in milliseconds. The seed makes the
-    # run replayable: same fixture, same seed, same ids and the same clock.
-    env.reset(fixture="small_startup", seed=7)
+    # A private copy of the fixture, made in milliseconds. The seed and the tick
+    # clock make the run replayable: same fixture, same seed, same ids and the
+    # same timestamps.
+    env.reset(fixture="small_startup", seed=7, clock_mode="tick")
 
     # The world's tool surface, as JSON schemas, ready to hand to a model.
     for tool in env.list_tools():
@@ -189,7 +192,7 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     # Writes are writes: the next read sees them.
     env.call("transition_issue", issue_id=observation.result["id"], status="done")
 
-    print(env.state().now)  # the instance's frozen instant
+    print(env.state().now)  # the clock's reading: the fixture's now, plus 2 s
 ```
 
 Every call is awaitable in asynchronous code and direct in synchronous code. That is the stock
@@ -323,7 +326,8 @@ envelope field of the document is a typed field on the model:
 | `world` | `WorldRef` | the root world's `name` and `version` |
 | `composition` | `dict[str, NodeRef] \| None` | every node of the instance, keyed by canonical path; `null` before the first `reset` |
 | `fixture` | `FixtureRef \| None` | the fixture's `id`, and `nodes` keyed by the same path; `null` for a blank instance |
-| `episode_id`, `now` | `str \| None` | the episode id `reset` was given or minted, and the instance clock |
+| `episode_id`, `now` | `str \| None` | the episode id `reset` was given or minted, and the clock's reading when the document was produced |
+| `clock_mode` | `ClockMode \| None` | how the instance's clock moves: `fixed`, `tick`, `running` or `wall` |
 | `seed` | `int \| None` | the seed `reset` was given |
 | `startup` | `dict[str, Any] \| None` | the world's own startup keywords, reset's `startup`, rendered as JSON at instance creation |
 | `call_count` | `int` | how many calls were dispatched |
@@ -337,9 +341,9 @@ from `seahaven.openenv` beside `SeahavenState`. The model keeps OpenEnv's `extra
 newer server can talk to an older client: read the fields you know and ignore the rest.
 
 Before the first `reset` there is no instance, so `composition`, `fixture`, `episode_id`, `seed`,
-`now` and `startup` are `null`, `call_count` is 0, and the world's pinned formatter runs with no
-instance. A blank instance is still told apart from no instance, because a blank instance has a
-`now` and a `composition`.
+`now`, `clock_mode` and `startup` are `null`, `call_count` is 0, and the world's pinned formatter
+runs with no instance. A blank instance is still told apart from no instance, because a blank
+instance has a `now` and a `composition`.
 
 **Choosing the format.** `reset(state_format="…")` selects the format for that episode, in place of
 the root world's pin. The `state` message itself carries no arguments, so one episode answers in one
@@ -422,9 +426,9 @@ A `reset` and its answer, in full. The `metadata` inside the observation and the
 it are the same dict, copied to the top level by OpenEnv's serializer:
 
 ```json
-{"type": "reset", "data": {"fixture": "small_startup", "seed": 7}}
+{"type": "reset", "data": {"fixture": "small_startup", "seed": 7, "clock_mode": "tick"}}
 
-{"type": "observation", "data": {"observation": {"metadata": {"fixture": "small_startup", "now": "2026-06-01T09:00:00.000Z", "tools": 27}}, "reward": null, "done": false, "metadata": {"fixture": "small_startup", "now": "2026-06-01T09:00:00.000Z", "tools": 27}}}
+{"type": "observation", "data": {"observation": {"metadata": {"fixture": "small_startup", "now": "2026-06-01T09:00:00.000Z", "clock_mode": "tick", "tools": 27}}, "reward": null, "done": false, "metadata": {"fixture": "small_startup", "now": "2026-06-01T09:00:00.000Z", "clock_mode": "tick", "tools": 27}}}
 ```
 
 A tool call and its two possible answers, in full:

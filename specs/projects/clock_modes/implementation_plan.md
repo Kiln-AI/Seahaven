@@ -18,7 +18,7 @@ status: complete
   `clock_mode="fixed"` at the reset; update `"clock_mode"` in `test_server.py`'s
   `expected_document` to match; reword the `still_monotonic_time` docstring to name only the
   fixture CLI tests.
-- [ ] Phase 3: Docs. The bundled docs listed in functional spec §7, and `reference/api.md` for
+- [x] Phase 3: Docs. The bundled docs listed in functional spec §7, and `reference/api.md` for
   `Clock`, `ClockMode`, `World(default_clock_mode=...)` and `world.instance(clock_mode=...)`.
   Examples that show a moving clock use `tick`. The scaffold `README.md.tmpl` Fixtures row points
   at `build` in `fixtures_src/generate.py` but gives no runnable way to call it: give a verified

@@ -11,7 +11,7 @@ without explaining them again, so read this page first.
 | [Fixture](#fixture) | A frozen database an eval starts from |
 | [Instance](#instance) | A private copy of a fixture, for one run |
 | [Context](#context) | The `ctx` object every tool receives |
-| [Clock](#clock) | The instance's frozen point in time |
+| [Clock](#clock) | The instance's time, and how it moves |
 | [Reproducibility](#reproducibility) | Why the same run replays the same way |
 | [The change log](#the-change-log) | What the agent changed, call by call |
 
@@ -94,8 +94,8 @@ six hundred issues in it, or an empty one.
 
 Seahaven never opens a fixture. It copies it. The only way to make a fixture is to freeze an
 instance, and the YAML file records where the state came from: the world and version, the schema it
-conforms to, the frozen clock, the fixture it was forked from, a checksum of the database file, and
-a description written for whoever is choosing between fixtures.
+conforms to, the clock's reading when it was frozen, the fixture it was forked from, a checksum of
+the database file, and a description written for whoever is choosing between fixtures.
 
 You name a fixture by its id everywhere: `world.instance("agency")`, `reset(fixture="agency")`,
 `@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture list`.
@@ -149,7 +149,7 @@ other instance, no process.
 | Member | What it is |
 |---|---|
 | `ctx.db` | The connection: `one`, `rows`, `execute`, `executemany`, `transaction()`, and `conn` for the raw APSW connection |
-| `ctx.clock` | The instance's frozen instant: `now()` for an aware UTC `datetime`, `iso()` for the canonical text |
+| `ctx.clock` | The instance's clock: `now()` for the current reading as an aware UTC `datetime`, `iso()` for it as canonical text, and `mode` |
 | `ctx.ids` | The seeded stream: `uuid()` and `random`, a `random.Random` seeded per instance |
 | `ctx.state` | A plain `dict` that lives as long as the instance; where a startup hook leaves what it worked out |
 | `ctx.call` | The current call: `name`, `arguments`, `tool`, `node`, and `with_arguments(**changes)` |
@@ -158,22 +158,73 @@ other instance, no process.
 
 ## Clock
 
-An instance's clock is **static**. It holds the fixture's frozen `now` for the instance's whole
-life. Every connection overrides SQLite's own date and time functions to return that instant —
-`CURRENT_TIMESTAMP`, `datetime('now')`, `strftime`, `julianday` and the rest — so SQL reads the same
-time world code does. Nothing in the data path reads the wall clock.
+An instance's clock starts at a **start instant**: the fixture's `now`, or for a blank instance the
+`now=` it was given, or else the wall time at creation. The instance's **clock mode** says how the
+clock moves from there:
 
-A blank instance takes its clock from the wall time at creation, and `now=` overrides it. Freezing
-bakes that value into the fixture, where it never moves again. Those two are the only wall-clock
-reads a world makes: a blank instance's default clock, and the `created_at` stamped on a fixture
-when you freeze it.
+| Mode | What the clock reads | Replays |
+|---|---|---|
+| `fixed` | The start instant, for the instance's whole life | Yes |
+| `tick` | The start instant plus one second per tool call dispatched so far | Yes |
+| `running` | The start instant plus the real time elapsed since the instance was created | No |
+| `wall` | The host's current UTC time. The start instant is not used | No |
 
-The clock is fixed *before* the blank database is built, not after, so a schema file that seeds
-reference rows of its own — `INSERT INTO plans VALUES ('free', ...)` — stamps them at that instant
-as well. A fixture frozen from such an instance carries the rows the caller's `now=` dated.
+`running` is the default. A world sets its own default with `World(default_clock_mode=...)`. One
+instance takes another mode with `world.instance(clock_mode=...)`, which is also a key of `reset`
+over a server and of the pytest marker. The mode does not change for the life of the instance.
 
-Design around one consequence: **every row that one run writes carries the same timestamp.** A
-timestamp cannot order them. See
+Under `tick`, every reading inside call `i`, counting from 0, is the start instant plus `i + 1`
+seconds, however many readings the call makes. Startup hooks, and anything that reads the clock
+before the first call, see the start instant. Reading the clock never moves it, in any mode.
+
+```python
+import seahaven
+
+world = seahaven.World(
+    name="notes",
+    version="1.0.0",
+    schema="CREATE TABLE notes (id TEXT PRIMARY KEY) STRICT;",
+    state_format="seahaven.state/1",
+)
+
+
+@world.tool
+def what_time_is_it(ctx: seahaven.Ctx) -> dict[str, object]:
+    """Read the clock once in Python and once in SQL."""
+    return {"python": ctx.clock.iso(), "sql": ctx.db.one("SELECT CURRENT_TIMESTAMP AS now")}
+
+
+with world.instance(now="2026-06-01T09:00:00.000Z", clock_mode="tick") as inst:
+    assert inst.clock.mode == "tick"
+    assert inst.clock.iso() == "2026-06-01T09:00:00.000Z"
+    first = inst.call("what_time_is_it")
+    assert first == {
+        "python": "2026-06-01T09:00:01.000Z",
+        "sql": {"now": "2026-06-01T09:00:01.000Z"},
+    }
+    assert inst.call("what_time_is_it")["python"] == "2026-06-01T09:00:02.000Z"
+    assert inst.clock.iso() == "2026-06-01T09:00:02.000Z"
+```
+
+SQL reads the same clock as world code. Every connection overrides SQLite's own date and time
+functions, such as `CURRENT_TIMESTAMP`, `datetime('now')`, `strftime` and `julianday`, to return
+the clock's reading. Under `running` and `wall` the reading is taken once per SQL statement, as
+SQLite does for its own functions, so two `CURRENT_TIMESTAMP` columns of one `INSERT` get the same
+value.
+
+Under `fixed`, `tick` and `running`, a world reads the wall clock in two places only: the start
+instant of a blank instance that was given no `now=`, and the `created_at` stamped on a fixture when
+you freeze it. `running` measures elapsed time on a monotonic clock, so a change to the host's
+clock does not move it. `wall` reads the host's clock at every reading.
+
+The clock is made *before* the blank database is built, not after, so a schema file that seeds
+reference rows of its own, such as `INSERT INTO plans VALUES ('free', ...)`, stamps them from the
+instance's clock as well. Freezing records the clock's reading at that moment as the fixture's
+`now`, and every instance of the fixture starts from there.
+
+Design around one consequence: **a timestamp is not a complete order.** Under `fixed`, every row
+one run writes carries the same timestamp. Under `tick`, each call has its own instant, but the rows
+one call writes share it. See
 ["Things that go wrong quietly"](authoring.md#things-that-go-wrong-quietly) in authoring.md.
 
 ## Reproducibility
@@ -221,13 +272,19 @@ def roll() -> int:
 assert roll() == roll()
 ```
 
-**Seahaven offers reproducibility. It does not enforce it.** You get a frozen clock and a seeded
-stream, and those are deterministic. A world that calls `datetime.now()` or `uuid.uuid4()` gets
-exactly what it asked for, and `seahaven check` warns about both (`SH201`, `SH203`) rather than
-refusing them, because a wall-clock read is occasionally deliberate. Two more things are yours to
-get right. A list a world returns needs a deterministic tiebreak: order by a column *and* by the id,
-or two identical runs will disagree about rows that share a value. And anything outside the world,
-such as a live external tool an eval also gives the agent, is outside the promise.
+**Timestamps replay under `fixed` and `tick` only.** The same fixture, seed, clock mode and calls
+give the same timestamps under those two modes. Under `running`, a timestamp depends on how long
+the agent and the harness took, and under `wall` it also depends on the date of the run. The
+default is `running`, so pass `clock_mode="tick"` to an eval that needs timestamps that replay and
+an order between calls.
+
+**Seahaven offers reproducibility. It does not enforce it.** You get two deterministic clock modes
+and a seeded stream. A world that calls `datetime.now()` or `uuid.uuid4()` gets exactly what it
+asked for, and `seahaven check` warns about both (`SH201`, `SH203`) rather than refusing them,
+because a wall-clock read is occasionally deliberate. Two more things are yours to get right. A list
+a world returns needs a deterministic tiebreak: order by a column *and* by the id, or two identical
+runs will disagree about rows that share a value. And anything outside the world, such as a live
+external tool an eval also gives the agent, is outside the promise.
 
 ## The change log
 

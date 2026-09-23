@@ -17,12 +17,12 @@ def events(instance: seahaven.Instance, issue_id: str) -> list[dict[str, Any]]:
     no tool that lists events: the trail is what an eval grades on, and it
     reaches an eval through `run_sql`, the change log, or a read like this one.
 
-    `created_at, rowid`, and the second half is load bearing. An instance's clock
-    does not move, so three events written by three calls in one test all carry
-    the same instant and the timestamp orders none of them; SQLite's insertion
-    order does, and it is what "then this happened" means inside one session. A
-    fixture built over a span is ordered by the timestamp and the rowid never
-    comes into it.
+    `created_at, rowid`, and the second half is load bearing. This file's
+    instances run on a `fixed` clock, so three events written by three calls in
+    one test all carry the same instant and the timestamp orders none of them;
+    SQLite's insertion order does, and it is what "then this happened" means
+    inside one session. A fixture built over a span is ordered by the timestamp
+    and the rowid never comes into it.
     """
     return instance.inspect().rows(
         "SELECT kind, payload, actor_id FROM issue_events WHERE issue_id = ?"
@@ -363,7 +363,7 @@ def test_the_list_filters_by_label_and_wants_every_one_named(
 
 
 def test_the_list_filters_by_creation_time(instance: seahaven.Instance, scaffold: Scaffold) -> None:
-    """A blank instance's clock does not move, so nothing is after its own instant."""
+    """On the `fixed` clock this file pins, nothing is after the instance's own instant."""
     an_issue(instance, scaffold)
     assert instance.call("list_issues", created_after=BLANK_NOW)["issues"] == []
     assert (

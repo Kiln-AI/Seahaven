@@ -10,9 +10,9 @@ Commands: `uv run seahaven check` (lint; run before every commit), `uv run pytes
 `uv run seahaven fixture list`, `uv run seahaven serve`.
 
 Rules: time comes from `ctx.clock` and ids and randomness from `ctx.ids`, so a replay of the same
-fixture and seed gives the same result; SQL goes through `ctx.db` (`ctx.db.conn` is the raw APSW
-connection when you need it; never close it or change its pragmas). Fixtures are immutable: fork,
-never edit.
+fixture and seed on a `fixed` or `tick` clock gives the same result; SQL goes through `ctx.db`
+(`ctx.db.conn` is the raw APSW connection when you need it; never close it or change its pragmas).
+Fixtures are immutable: fork, never edit.
 Every tool module under tools/ and middleware/ must be imported from the package __init__.
 A world this one adds is reached with `ctx.worlds.<name>`, never by making an instance of it; prefer
 that world's own tools over direct SQL on its store.

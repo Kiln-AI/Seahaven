@@ -17,15 +17,15 @@ from projecttracker.world import world
 __all__ = ["BY_CREATION", "add_comment", "list_comments"]
 
 # By `(created_at, id)`, ascending. Across a fixture's history that is oldest
-# first, which is how a conversation is read. Within one episode it is not:
-# the instance's clock does not move, so every comment an episode writes carries
-# the same instant and the id -- a uuid -- is what actually orders them.
+# first, which is how a conversation is read. Within one episode it may not be:
+# comments an episode writes can share an instant (all of them on a `fixed`
+# clock), and among those the id -- a uuid -- is what actually orders them.
 #
 # The tiebreaker cannot be fixed here. `ORDER BY created_at, rowid` is what
 # `AGENTS.md` tells a SQL reader to use and it works for them, but a keyset cursor
 # has to carry its tiebreaker as a value and `rowid` is not a column this world
 # projects. A monotonic sequence column on `comments` would carry, and was
-# considered and not taken, for three reasons: the cause is the framework's frozen
+# considered and not taken, for three reasons: the cause is the framework's
 # clock rather than anything this table does, so the fix belongs where the cause
 # is; `components/projecttracker.md` is `status: complete` and its §1 spells this
 # table's columns, so adding one is a deviation with no correctness argument
@@ -74,10 +74,9 @@ def list_comments(
 ) -> dict[str, Any]:
     """An issue's comments, by `created_at` and then by id.
 
-    On a fixture's history that is oldest first. Comments written during one
-    episode all share the tracker's instant -- its clock does not move -- and are
-    ordered among themselves by id, which is stable across runs but is not the
-    order they were written in.
+    That is oldest first. Comments that share an instant are ordered among
+    themselves by id, which is stable across runs but is not the order they
+    were written in.
     """
     _rows.require_issue(ctx, issue_id)
     return _pagination.page(

@@ -38,15 +38,16 @@ applies here too.
   optional `actor_id`, which wins, and a write with neither is
   `InvalidInput("actor_id", "no actor")` — which is what a blank instance and `empty` do, having
   no admin to fall back to.
-- **Order within one episode.** An instance's clock does not move, so every row a single episode
-  writes carries the same `created_at`, and the timestamp orders none of them. Two places feel it.
-  Reading `issue_events` in the order things happened means `ORDER BY created_at, rowid` — the
-  timestamp for a fixture's history, SQLite's insertion order for what the episode itself did;
+- **Order within one episode.** Rows a single episode writes can share a `created_at`: every row on
+  a `fixed` clock, the rows of one call on `tick`, and rows written in the same millisecond on the
+  default `running` clock. The timestamp is not a complete order. Two places feel it. Reading
+  `issue_events` in the order things happened means `ORDER BY created_at, rowid` — the timestamp for
+  a fixture's history, SQLite's insertion order for what the episode itself did;
   `ORDER BY created_at` alone is not wrong, it is simply not an order. `list_comments` cannot do
   that — a keyset cursor carries its tiebreaker as a value and `rowid` is not a projected column —
-  so it orders by `(created_at, id)` and says so: oldest first across a fixture's history, id order
-  among the comments one episode wrote. Do not write an eval that grades on the order of comments an
-  agent added; grade on the rows.
+  so it orders by `(created_at, id)` and says so: oldest first, id order among comments that share
+  an instant. Do not write an eval that grades on the order of comments an agent added; grade on the
+  rows.
 - **The closed-issue rule.** A `done` or `canceled` issue has no assignee: transitioning to one
   drops the assignee and records the drop, and assigning a closed issue is a `CONFLICT`. An eval may
   rely on `status IN ('done','canceled') AND assignee_id IS NOT NULL` being a state this world

@@ -88,10 +88,10 @@ def test_the_list_is_ordered_by_creation_then_id_and_says_there_is_no_more(
 ) -> None:
     """The order is `(created_at, id)`, and the second half is not decoration.
 
-    An instance's clock does not move, so three users made in one test are made
-    at one instant and the timestamp orders none of them. The id is what makes
-    the answer the same on every run -- which is exactly the case a page boundary
-    would otherwise fall inside.
+    This file's instances run on a `fixed` clock, so three users made in one test
+    are made at one instant and the timestamp orders none of them. The id is what
+    makes the answer the same on every run -- which is exactly the case a page
+    boundary would otherwise fall inside.
     """
     made = [
         instance.call("create_user", email=f"user{n}@tracker.invalid", name=f"User {n}")

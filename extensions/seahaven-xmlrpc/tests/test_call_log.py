@@ -16,9 +16,9 @@ from conftest import NOW, rpc
 
 pytestmark = pytest.mark.seahaven(fixture=None, now=NOW, clock_mode="fixed")
 
-# `rowid`, not `called_at`: the clock is frozen, so every row of one instance
-# carries the same instant and ordering by it would be resting on SQLite's
-# scan order.
+# `rowid`, not `called_at`: this file pins a `fixed` clock, so every row of one
+# instance carries the same instant and ordering by it would be resting on
+# SQLite's scan order.
 _LOG = f"SELECT method, client, called_at FROM {seahaven_xmlrpc.CALL_LOG_TABLE} ORDER BY rowid"
 
 
