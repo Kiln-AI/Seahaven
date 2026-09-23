@@ -373,8 +373,7 @@ class SeahavenResetRequest(ResetRequest):
     now: str | None = Field(
         default=None,
         description=(
-            "Where the instance's clock starts, as an ISO-8601 instant. With a fixture, it may "
-            "not be earlier than the fixture's own now."
+            "Where the instance's clock starts, as an ISO-8601 instant, e.g. 2024-03-05T12:00:00Z."
         ),
     )
     clock_mode: _ClockModeField | None = Field(
