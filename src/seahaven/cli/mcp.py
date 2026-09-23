@@ -145,8 +145,8 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         metavar="ISO",
         default=None,
         help=(
-            f"the clock a blank instance starts at (${CONVENIENCE['now']}); "
-            "not allowed with a fixture, which carries its own"
+            f"the clock the instance starts at (${CONVENIENCE['now']}); "
+            "with a fixture, no earlier than the fixture's own now"
         ),
     )
     # A string, not `choices=`: an unknown mode is `world.instance()`'s one-line

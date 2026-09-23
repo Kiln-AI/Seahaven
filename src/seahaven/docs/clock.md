@@ -6,9 +6,9 @@ starts, the four modes that say how it moves, and what they mean for the timesta
 
 ## Modes
 
-An instance's clock starts at a **start instant**: the fixture's `now`, or for a blank instance the
-`now=` it was given, or else the wall time at creation. The instance's **clock mode** says how the
-clock moves from there:
+An instance's clock starts at a **start instant**: the `now=` it was given, or else the fixture's
+`now`, or else, for a blank instance, the wall time at creation. The instance's **clock mode** says
+how the clock moves from there:
 
 | Mode | What the clock reads | Replays |
 |---|---|---|
@@ -78,7 +78,25 @@ clock does not move it. `wall` reads the host's clock at every reading.
 The clock is made *before* the blank database is built, not after, so a schema file that seeds
 reference rows of its own, such as `INSERT INTO plans VALUES ('free', ...)`, stamps them from the
 instance's clock as well. Freezing records the clock's reading at that moment as the fixture's
-`now`, and every instance of the fixture starts from there.
+`now`, and every instance of the fixture starts from there unless it is given a later `now=`.
+
+### Starting a fixture later
+
+Pass `now=` with a fixture to start the instance after the fixture's `now`. One fixture can then
+serve an eval at several times, such as three days later, when a deadline in the data has passed.
+The `small_startup` fixture of the reference world was frozen at `2026-06-01T09:00:00.000Z`:
+
+```python
+import projecttracker
+
+world = projecttracker.world
+
+with world.instance("small_startup", now="2026-06-04T09:00:00.000Z", clock_mode="fixed") as inst:
+    assert inst.clock.iso() == "2026-06-04T09:00:00.000Z"
+```
+
+A `now=` earlier than the fixture's `now` is refused. The fixture's rows are dated by its clock, so
+an earlier start would give the instance rows created in its future.
 
 ## Timestamps are not a complete order
 

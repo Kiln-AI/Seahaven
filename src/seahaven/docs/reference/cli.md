@@ -204,7 +204,7 @@ command says so and exits 1.
 |---|---|---|---|
 | `--fixture NAME` | `SEAHAVEN_FIXTURE` | a blank instance | the fixture the instance starts from |
 | `--seed N` | `SEAHAVEN_SEED` | a random seed, written to stderr | the caller seed, an integer; the framework refuses a negative one, and one that does not fit in 8 bytes |
-| `--now ISO` | `SEAHAVEN_NOW` | wall time at creation | the clock a blank instance starts at; the framework refuses it together with a fixture |
+| `--now ISO` | `SEAHAVEN_NOW` | the fixture's `now`, or wall time at creation for a blank instance | where the instance's clock starts; with a fixture, the framework refuses an instant earlier than the fixture's `now` |
 | `--clock-mode MODE` | `SEAHAVEN_CLOCK_MODE` | the world's default | how the instance's clock moves: `fixed`, `tick`, `running` or `wall` |
 | `--reset-options JSON` | `SEAHAVEN_RESET_OPTIONS` | none | a JSON object of the keyword arguments `world.instance()` is called with; not allowed with `--fixture`, `--seed`, `--now` or `--clock-mode` |
 | `--world module:attr` | -- | the convention | which world to serve |

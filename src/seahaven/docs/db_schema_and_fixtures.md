@@ -153,7 +153,7 @@ world_version: 1.0.0
 | `id` | the fixture's name, and the directory it sits in |
 | `world`, `world_version` | the world it was frozen from |
 | `schema_hash` | the schema it conforms to |
-| `now` | the instance's clock reading when it was frozen, and where the clock of every instance of this fixture starts |
+| `now` | the instance's clock reading when it was frozen, and where the clock of every instance of this fixture starts unless it is given a later `now=` |
 | `parent_id` | the fixture it was forked from, or `null` |
 | `file_sha256` | the checksum of `state.sqlite`, verified before the first copy |
 | `created_at` | real wall-clock time, and one of only two wall-clock reads a world makes outside the `wall` clock mode |

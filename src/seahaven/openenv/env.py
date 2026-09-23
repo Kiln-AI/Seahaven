@@ -373,8 +373,8 @@ class SeahavenResetRequest(ResetRequest):
     now: str | None = Field(
         default=None,
         description=(
-            "Where a blank instance's clock starts, as an ISO-8601 instant. Refused with a "
-            "fixture, which carries its own."
+            "Where the instance's clock starts, as an ISO-8601 instant. With a fixture, it may "
+            "not be earlier than the fixture's own now."
         ),
     )
     clock_mode: _ClockModeField | None = Field(
@@ -506,9 +506,9 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         `done` is `False` and `reward` is `None`, as on every observation here.
 
         `fixture=None` is a blank instance built from the world's DDL, whose clock
-        starts at the wall time unless `now=` says otherwise; a fixture carries
-        its own start and `now=` with one is refused. `clock_mode=` is the mode
-        the clock runs in, the world's default when it is not given.
+        starts at the wall time unless `now=` says otherwise; a fixture's clock
+        starts at the fixture's own `now`, or at a later `now=`. `clock_mode=`
+        is the mode the clock runs in, the world's default when it is not given.
         `state_format=` answers this episode's `state` message in another of the
         root world's formats, in place of the world's pin. An unknown mode or an
         unregistered format is refused before anything is copied. Those are the
@@ -538,8 +538,8 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         it runs before `_forget()` and the session keeps the episode it had,
         which is what the same call does in process: an unknown keyword fails at
         argument binding, before the body. Everything the world judges -- an
-        unknown startup keyword, `now=` with a fixture -- is judged while the
-        instance is being made, after the old one is gone.
+        unknown startup keyword, a `now=` before the fixture's -- is judged
+        while the instance is being made, after the old one is gone.
 
         The old instance is destroyed *before* the new one is made, so the
         session never holds two at once. A creation that then fails leaves the

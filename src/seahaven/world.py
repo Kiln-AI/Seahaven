@@ -525,11 +525,12 @@ class World:
     ) -> Instance:
         """Make a live instance: a private copy of a fixture, or a blank one.
 
-        `now` sets a blank instance's clock and is refused with a fixture, which
-        carries its own. `clock_mode` is the mode the instance's clock runs in,
-        `None` for the world's default. `state_format` answers in another of
-        this world's formats for this instance alone, in place of the world's
-        pin. `control_tools=True` makes the framework's own tools -- the
+        `now` is where the instance's clock starts. With a fixture it defaults
+        to the fixture's own `now`, and an earlier one is refused.
+        `clock_mode` is the mode the instance's clock runs in, `None` for the
+        world's default. `state_format` answers in another of this world's
+        formats for this instance alone, in place of the world's pin.
+        `control_tools=True` makes the framework's own tools -- the
         deprecated `controller_run_sql` -- callable on this instance; without it
         they are not callable at all, and their names answer `UnknownTool` like
         any name the world does not have. `startup` is the world's own

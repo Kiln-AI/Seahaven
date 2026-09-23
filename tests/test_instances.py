@@ -182,13 +182,38 @@ def test_a_fixture_carries_the_rows_its_schema_seeded_at_the_pinned_instant(
         assert seeded_plan(replayed) == frozen
 
 
-def test_now_with_a_fixture_is_refused(world: World) -> None:
-    """The fixture carries the clock; `reset(now=)` for a fixture is post-V1."""
+THREE_DAYS_LATER_ISO = "2024-03-08T12:00:00.123Z"
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        (THREE_DAYS_LATER_ISO, THREE_DAYS_LATER_ISO),
+        (INSTANT + timedelta(days=3), THREE_DAYS_LATER_ISO),
+        # The fixture's own instant is not earlier than itself.
+        (INSTANT_ISO, INSTANT_ISO),
+    ],
+)
+def test_a_later_now_starts_a_fixtures_instance_there(
+    world: World, given: str | datetime, expected: str
+) -> None:
     fixture = frozen_fixture(world)
 
-    with pytest.raises(WorldBug, match="blank instances only"):
-        world.instance(fixture, now="2030-01-01T00:00:00.000Z")
+    with world.instance(fixture, now=given, clock_mode="fixed") as instance:
+        assert instance.clock.iso() == expected
+        assert instance.call("now") == {"python": expected, "sql": expected}
+        assert instance.inspect().rows("SELECT id FROM notes") == [{"id": "n0"}]
 
+
+def test_a_now_earlier_than_the_fixtures_is_refused_naming_both(world: World) -> None:
+    fixture = frozen_fixture(world)
+
+    with pytest.raises(WorldBug) as refused:
+        world.instance(fixture, now=INSTANT - timedelta(milliseconds=1))
+
+    message = str(refused.value)
+    assert "2024-03-05T12:00:00.122Z" in message
+    assert INSTANT_ISO in message
     assert instance_dirs(world) == []
 
 
