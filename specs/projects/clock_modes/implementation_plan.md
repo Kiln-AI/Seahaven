@@ -11,7 +11,7 @@ status: complete
   creation and the `tick` advance (§4); the state envelope field (§5.1, `state.py` only); the
   `ClockMode` export; the projecttracker generator pin (§6); every existing test that asserts an
   exact timestamp pinned at its call site; the new tests for these files (§8).
-- [ ] Phase 2: Doors. OpenEnv reset option, schema order, observation and `State` field, client
+- [x] Phase 2: Doors. OpenEnv reset option, schema order, observation and `State` field, client
   docstrings (§5.1–5.2); the pytest plugin marker signature (§5.4); their tests (§8). MCP (§5.3)
   was done in phase 1. Replace the `still_monotonic_time` stub on the `test_env`, `test_server` and
   `test_client` tests, and the inline stub in projecttracker's `test_openenv`, with

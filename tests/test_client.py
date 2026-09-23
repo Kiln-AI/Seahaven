@@ -135,6 +135,7 @@ DOCUMENT_FRAME: dict[str, Any] = {
     },
     "seed": 7,
     "now": INSTANT_ISO,
+    "clock_mode": "tick",
     "startup": {"tenant": "globex"},
     "call_count": 2,
     "state": {
@@ -170,6 +171,7 @@ def test_parse_state_answers_a_typed_state(client: SeahavenClient) -> None:
     assert state.fixture.id == "start"
     assert state.fixture.nodes["payments"].file_sha256 == "d" * 64
     assert (state.seed, state.now, state.call_count) == (7, INSTANT_ISO, 2)
+    assert state.clock_mode == "tick"
     assert state.startup == {"tenant": "globex"}
     # `state` is untyped on purpose: the format owns its shape, so it arrives as
     # the dict the formatter produced and nothing validates it here.
@@ -243,7 +245,7 @@ def test_a_reset_frame_parses_through_the_step_hook_with_only_its_metadata(
     client is parameterised on `Observation` so that reading it does not
     type-check.
     """
-    facts = {"fixture": "start", "now": INSTANT_ISO, "tools": 6}
+    facts = {"fixture": "start", "now": INSTANT_ISO, "clock_mode": "fixed", "tools": 6}
     result = client._parse_result(
         {"observation": {"metadata": facts}, "reward": None, "done": False, "metadata": facts}
     )
@@ -263,12 +265,12 @@ def test_the_observation_model_refuses_a_frame_it_does_not_know(client: Seahaven
 # --- the client, on a server -----------------------------------------------
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_client_drives_a_world_synchronously(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
-        reset = env.reset(now=INSTANT_ISO)
+        reset = env.reset(now=INSTANT_ISO, clock_mode="fixed")
         assert isinstance(reset.observation, SeahavenObservation)
         assert reset.observation.metadata["now"] == INSTANT_ISO
+        assert reset.observation.metadata["clock_mode"] == "fixed"
         assert reset.observation.result is None
         names = [tool["name"] for tool in env.list_tools()]
         assert "rows" in names and "controller_run_sql" not in names
@@ -284,11 +286,10 @@ def test_the_client_drives_a_world_synchronously(world: World) -> None:
         assert state.state["db"]["log"][0]["key"] == {"id": "n1"}
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_client_drives_a_world_asynchronously(world: World) -> None:
     async def drive(url: str) -> None:
         async with SeahavenClient(base_url=url) as env:
-            await env.reset(now=INSTANT_ISO)
+            await env.reset(now=INSTANT_ISO, clock_mode="fixed")
             names = [tool["name"] for tool in await env.list_tools()]
             assert "rows" in names
             observation = await env.call("rows", sql="SELECT 1 AS n")

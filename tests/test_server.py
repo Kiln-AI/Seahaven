@@ -147,16 +147,16 @@ def trivial_world(tmp_path: Path) -> Iterator[World]:
 # --- the section 7 flow, both clients --------------------------------------
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_typed_client_drives_a_session_end_to_end(world: World) -> None:
     fixture_id = _freeze(world)
     with serving(world) as url, SeahavenClient(base_url=url) as env:
-        reset = env.reset(fixture=fixture_id, seed=7)
+        reset = env.reset(fixture=fixture_id, seed=7, clock_mode="fixed")
         assert isinstance(reset.observation, SeahavenObservation)
         assert reset.observation.result is None
         assert reset.observation.metadata == {
             "fixture": fixture_id,
             "now": INSTANT_ISO,
+            "clock_mode": "fixed",
             "tools": 6,
         }
         assert [tool["name"] for tool in env.list_tools()] == [
@@ -206,7 +206,6 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
         assert state["fixture"]["id"] == fixture_id
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_a_reset_frame_carries_its_facts_at_the_top_level_of_the_envelope(world: World) -> None:
     """The raw wire, with no client at all: `metadata` is a sibling of `observation`.
 
@@ -218,9 +217,9 @@ def test_a_reset_frame_carries_its_facts_at_the_top_level_of_the_envelope(world:
     """
     fixture_id = _freeze(world)
     with serving(world) as url:
-        frame = asyncio.run(_raw_reset(url, fixture=fixture_id))
+        frame = asyncio.run(_raw_reset(url, fixture=fixture_id, clock_mode="fixed"))
     assert frame["type"] == "observation"
-    facts = {"fixture": fixture_id, "now": INSTANT_ISO, "tools": 6}
+    facts = {"fixture": fixture_id, "now": INSTANT_ISO, "clock_mode": "fixed", "tools": 6}
     assert frame["data"] == {
         "observation": {"metadata": facts},
         "reward": None,
@@ -421,7 +420,12 @@ SCHEMA = json.loads((Path(__file__).parent / "state_v1.schema.json").read_text()
 # The one episode both clients drive: a fixture, a seed, a named episode, a
 # startup keyword and one write, so no envelope field below is left at its
 # default.
-EPISODE: dict[str, Any] = {"seed": 7, "episode_id": "ep-1", "startup": {"tenant": "globex"}}
+EPISODE: dict[str, Any] = {
+    "seed": 7,
+    "episode_id": "ep-1",
+    "clock_mode": "fixed",
+    "startup": {"tenant": "globex"},
+}
 WRITE = CallToolAction(tool_name="execute", arguments={"sql": insert("n1")})
 
 
@@ -458,7 +462,7 @@ def expected_document(world: World, fixture_id: str) -> dict[str, Any]:
         "episode_id": "ep-1",
         "seed": 7,
         "now": INSTANT_ISO,
-        "clock_mode": "running",
+        "clock_mode": "fixed",
         "startup": {"tenant": "globex"},
         "call_count": 1,
         "state": {
@@ -479,7 +483,6 @@ def expected_document(world: World, fixture_id: str) -> dict[str, Any]:
     }
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_whole_document_arrives_over_the_websocket(document_world: World) -> None:
     """Every field of `functional_spec.md` §3.1, with the value it has in process."""
     fixture_id = _freeze(document_world)
@@ -491,7 +494,6 @@ def test_the_whole_document_arrives_over_the_websocket(document_world: World) ->
     assert state.step_count == 1
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_stock_client_sees_the_same_document(document_world: World) -> None:
     """No Seahaven on the client side at all: the document is plain JSON.
 
@@ -514,7 +516,6 @@ def test_the_stock_client_sees_the_same_document(document_world: World) -> None:
     assert stock == document
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_document_over_the_wire_validates_against_the_published_schema(
     document_world: World,
 ) -> None:
@@ -567,6 +568,19 @@ def test_an_unknown_state_format_is_an_error_frame_and_the_session_survives(worl
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
+def test_a_clock_mode_reaches_the_instance_over_the_wire(world: World) -> None:
+    """The mode travels in the reset, and the clock, the observation and `state` follow it."""
+    one_tick_later = "2024-03-05T12:00:01.123Z"
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        with pytest.raises(RuntimeError, match="unknown clock mode 'tik'"):
+            env.reset(clock_mode="tik")
+        reset = env.reset(now=INSTANT_ISO, clock_mode="tick")
+        assert reset.observation.metadata["clock_mode"] == "tick"
+        assert env.call("now").result == {"python": one_tick_later, "sql": one_tick_later}
+        state = env.state()
+    assert (state.clock_mode, state.now) == ("tick", one_tick_later)
+
+
 # --- sessions --------------------------------------------------------------
 
 
@@ -584,14 +598,13 @@ def test_two_sessions_are_independent(world: World) -> None:
         assert first.state().episode_id != second.state().episode_id
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_an_unknown_startup_keyword_is_an_error_frame_and_the_session_survives(
     world: World,
 ) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         with pytest.raises(RuntimeError, match=r"unknown startup keyword\(s\)"):
             env.reset(startup={"nonsense": 1})
-        reset = env.reset(now=INSTANT_ISO)
+        reset = env.reset(now=INSTANT_ISO, clock_mode="fixed")
         assert reset.observation.metadata["now"] == INSTANT_ISO
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
@@ -656,7 +669,6 @@ def test_a_startup_keyword_sent_flat_reaches_no_hook(tmp_path: Path) -> None:
         assert env.state().startup == {}
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_a_stray_top_level_key_is_an_error_frame_and_the_session_survives(
     world: World,
 ) -> None:
@@ -672,7 +684,7 @@ def test_a_stray_top_level_key_is_an_error_frame_and_the_session_survives(
             env.reset(tenant="globex", fixure="agency")
         assert "startup={...}" in str(refusal.value)
         assert env.state().episode_id == "first"
-        reset = env.reset(now=INSTANT_ISO)
+        reset = env.reset(now=INSTANT_ISO, clock_mode="fixed")
         assert reset.observation.metadata["now"] == INSTANT_ISO
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
@@ -695,7 +707,6 @@ def test_a_misspelled_framework_argument_is_refused_and_builds_nothing(world: Wo
         assert env.state()["fixture"]["id"] == fixture_id
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_a_startup_that_is_not_a_dict_is_an_error_frame_and_the_session_survives(
     world: World,
 ) -> None:
@@ -703,7 +714,8 @@ def test_a_startup_that_is_not_a_dict_is_an_error_frame_and_the_session_survives
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         with pytest.raises(RuntimeError, match="startup= takes a dict"):
             env.reset(startup="oops")
-        assert env.reset(now=INSTANT_ISO).observation.metadata["now"] == INSTANT_ISO
+        reset = env.reset(now=INSTANT_ISO, clock_mode="fixed")
+        assert reset.observation.metadata["now"] == INSTANT_ISO
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
@@ -1096,7 +1108,7 @@ def test_the_web_interface_holds_an_episode_and_names_the_world(
         "done": False,
         "metadata": facts,
     }
-    assert sorted(facts) == ["fixture", "now", "tools"]
+    assert sorted(facts) == ["clock_mode", "fixture", "now", "tools"]
     assert facts["fixture"] is None
     assert facts["tools"] == 6
     # The step runs against the instance the reset made: a second environment,
@@ -1199,6 +1211,10 @@ def test_the_served_schema_publishes_the_observation_with_its_descriptions(
     state = schema["state"]
     assert state["title"] == "SeahavenState"
     assert set(SeahavenState.model_fields) <= set(state["properties"])
+    assert state["properties"]["clock_mode"]["anyOf"] == [
+        {"type": "string", "enum": ["fixed", "tick", "running", "wall"]},
+        {"type": "null"},
+    ]
     assert {
         name: state["properties"][name].get("description") for name in SeahavenState.__annotations__
     } == {

@@ -124,9 +124,8 @@ def clock() -> Clock:
 def still_monotonic_time(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hold the clock's monotonic source still, so a `running` clock reads its start exactly.
 
-    For a test that asserts an exact timestamp through a door that cannot name
-    a clock mode, and so gets the world's default, `running`: the fixture CLI
-    has no mode flag, and OpenEnv's `reset` does not take `clock_mode` yet.
+    For a fixture CLI test that asserts an exact timestamp: the fixture CLI has
+    no mode flag, so its instance runs on the world's default, `running`.
     """
     monkeypatch.setattr(clock_module, "_monotonic_ns", lambda: 0)
 

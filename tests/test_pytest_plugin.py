@@ -12,10 +12,13 @@ both, which is what keeps one test's world from answering the next one's import.
 """
 
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
 
 import pytest
+
+import seahaven
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -456,6 +459,22 @@ def test_now_passes_through(pytester: pytest.Pytester) -> None:
     pytester.runpytest().assert_outcomes(passed=1)
 
 
+def test_a_clock_mode_in_the_marker_passes_through(pytester: pytest.Pytester) -> None:
+    write_world(pytester)
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.seahaven(fixture=None, now="{NOW}", clock_mode="tick")
+        def test_it(instance):
+            assert instance.clock.mode == "tick"
+            assert instance.call("now") == "2026-01-01T00:00:01.000Z"
+            assert instance.call("now") == "2026-01-01T00:00:02.000Z"
+        """
+    )
+    pytester.runpytest().assert_outcomes(passed=1)
+
+
 def test_the_startup_keywords_pass_through(pytester: pytest.Pytester) -> None:
     """The marker's `startup=` is `world.instance`'s, and the world reads it there."""
     write_world(pytester)
@@ -584,6 +603,23 @@ def test_the_marker_is_registered(pytester: pytest.Pytester) -> None:
         """
     )
     pytester.runpytest("--strict-markers").assert_outcomes(passed=1)
+
+
+def test_the_registered_marker_names_every_keyword_world_instance_takes(
+    pytester: pytest.Pytester,
+) -> None:
+    """The marker's help is written out by hand, so it is checked against the real signature."""
+    result = pytester.runpytest("--markers")
+    line = next(line for line in result.outlines if line.startswith("@pytest.mark.seahaven("))
+    listed = line.removeprefix("@pytest.mark.seahaven(").split(")")[0].split(", ")
+    parameters = inspect.signature(seahaven.World.instance).parameters.values()
+    assert listed == [
+        parameter.name
+        if parameter.default is inspect.Parameter.empty or parameter.name == "fixture"
+        else f"{parameter.name}={parameter.default!r}"
+        for parameter in parameters
+        if parameter.name != "self"
+    ]
 
 
 def test_the_plugin_does_nothing_to_a_run_that_does_not_use_it(

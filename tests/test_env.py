@@ -114,16 +114,16 @@ def test_the_environment_is_initialised_as_an_openenv_environment(env: SeahavenE
 # --- reset -----------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_reset_makes_an_instance_and_describes_it(env: SeahavenEnv, world: World) -> None:
     fixture_id = make_fixture(world)
-    observation = env.reset(fixture=fixture_id)
+    observation = env.reset(fixture=fixture_id, clock_mode="fixed")
     instance = env.instance
     assert instance is not None
     assert instance.fixture == fixture_id
     assert observation.metadata == {
         "fixture": fixture_id,
         "now": INSTANT_ISO,
+        "clock_mode": "fixed",
         "tools": len(instance.tools()),
     }
     assert observation.done is False
@@ -155,10 +155,9 @@ def test_a_second_reset_destroys_the_first_instance(env: SeahavenEnv) -> None:
     assert first.closed
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_reset_without_a_fixture_is_a_blank_instance_at_the_wall_clock(env: SeahavenEnv) -> None:
     before = datetime.now(UTC)
-    env.reset()
+    env.reset(clock_mode="fixed")
     instance = env.instance
     assert instance is not None
     assert instance.fixture is None
@@ -170,10 +169,14 @@ def test_reset_without_a_fixture_is_a_blank_instance_at_the_wall_clock(env: Seah
     assert instance.call("rows", sql="SELECT * FROM notes") == []
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_reset_with_now_puts_a_blank_instance_at_that_time(env: SeahavenEnv) -> None:
-    observation = env.reset(now=INSTANT_ISO)
-    assert observation.metadata == {"fixture": None, "now": INSTANT_ISO, "tools": 6}
+    observation = env.reset(now=INSTANT_ISO, clock_mode="fixed")
+    assert observation.metadata == {
+        "fixture": None,
+        "now": INSTANT_ISO,
+        "clock_mode": "fixed",
+        "tools": 6,
+    }
     assert env.instance is not None
     assert env.instance.clock.iso() == INSTANT_ISO
 
@@ -242,6 +245,7 @@ RESET_PARAMETERS = (
     "episode_id",
     "fixture",
     "now",
+    "clock_mode",
     "state_format",
     "control_tools",
     "startup",
@@ -754,6 +758,7 @@ def test_state_before_reset_is_the_worlds_pinned_format_with_no_instance(
     assert state.episode_id is None
     assert state.seed is None
     assert state.now is None
+    assert state.clock_mode is None
     assert state.startup is None
     assert state.call_count == 0
     assert state.state == {"db": {"log": []}}
@@ -783,7 +788,6 @@ def test_state_before_reset_runs_a_custom_pinned_formatter_with_no_instance(
     assert state.call_count == 0
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_state_after_reset_is_the_instances_document_and_the_step_count(
     env: SeahavenEnv,
 ) -> None:
@@ -793,7 +797,7 @@ def test_state_after_reset_is_the_instances_document_and_the_step_count(
     drift from the in-process one, which is the whole reason `state.document`
     exists.
     """
-    env.reset(episode_id="ep-9")
+    env.reset(episode_id="ep-9", clock_mode="fixed")
     call(env, "execute", sql="INSERT INTO notes VALUES ('n1', 'a body', 0)")
     listing(env)
     instance = env.instance
@@ -814,12 +818,11 @@ def test_state_after_reset_carries_the_one_node_a_leaf_world_is(
     assert env.state.composition == {"main": leaf_node(world)}
 
 
-@pytest.mark.usefixtures("still_monotonic_time")
 def test_state_after_reset_carries_the_fixture_and_the_clock(
     env: SeahavenEnv, world: World
 ) -> None:
     fixture_id = make_fixture(world)
-    env.reset(fixture=fixture_id, episode_id="ep-9", seed=7)
+    env.reset(fixture=fixture_id, episode_id="ep-9", seed=7, clock_mode="fixed")
     instance = env.instance
     assert instance is not None
     state = env.state
@@ -850,6 +853,39 @@ def test_an_unknown_state_format_refuses_the_reset_and_leaves_the_session_fresh(
     with pytest.raises(WorldBug, match=r"has no state format 'acme\.state/1'"):
         env.reset(state_format="acme.state/1")
     assert env.instance is None
+    env.reset()
+    assert env.instance is not None
+
+
+def test_reset_takes_a_clock_mode_and_reports_it(env: SeahavenEnv) -> None:
+    """The mode reaches the instance, the reset observation and the state document."""
+    observation = env.reset(now=INSTANT_ISO, clock_mode="tick")
+    assert observation.metadata["clock_mode"] == "tick"
+    assert observation.metadata["now"] == INSTANT_ISO
+    one_tick_later = "2024-03-05T12:00:01.123Z"
+    assert call(env, "now").result == {"python": one_tick_later, "sql": one_tick_later}
+    state = env.state
+    assert (state.clock_mode, state.now) == ("tick", one_tick_later)
+
+
+def test_reset_without_a_clock_mode_takes_the_worlds_default(
+    env: SeahavenEnv, tmp_path: Path
+) -> None:
+    assert env.reset().metadata["clock_mode"] == "running"
+    ticking = build_world(tmp_path / "ticking", default_clock_mode="tick")
+    session = SeahavenEnv(ticking, include_control_tools=False)
+    assert session.reset(clock_mode=None).metadata["clock_mode"] == "tick"
+    assert session.state.clock_mode == "tick"
+
+
+def test_an_unknown_clock_mode_refuses_the_reset_and_leaves_the_session_fresh(
+    env: SeahavenEnv,
+) -> None:
+    unknown: Any = "tik"
+    with pytest.raises(WorldBug, match=r"unknown clock mode 'tik'; the clock modes are 'fixed'"):
+        env.reset(clock_mode=unknown)
+    assert env.instance is None
+    assert env.state.clock_mode is None
     env.reset()
     assert env.instance is not None
 
@@ -961,7 +997,14 @@ DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
         ),
         "fixture": "The fixture the instance was made from, or null for a blank one.",
         "seed": "The seed `reset` was given, or null if it was given none.",
-        "now": "The instance's clock as an ISO-8601 instant, or null before the first reset.",
+        "now": (
+            "The instance's clock when this document was produced, as an ISO-8601 instant, or "
+            "null before the first reset."
+        ),
+        "clock_mode": (
+            "How the instance's clock moves: fixed, tick, running or wall; null before the "
+            "first reset."
+        ),
         "startup": (
             "The world's own startup keywords -- reset's `startup` -- rendered as JSON when "
             "the instance was created: a hook receives the caller's value and this carries its "
