@@ -302,7 +302,7 @@ one object. Each call to `now()` or `iso()` is one reading, and reading never mo
 | `running` | the start instant plus the time elapsed since the instance was made, on a monotonic clock |
 | `wall` | the host's current UTC time |
 
-Every reading is truncated to milliseconds. [../concepts.md](../concepts.md#clock) says what the
+Every reading is truncated to milliseconds. [../clock.md](../clock.md) says what the
 start instant is and which modes replay.
 
 `Clock(datetime)` built directly is a `fixed` clock at that instant, which is also the way to render

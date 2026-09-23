@@ -97,6 +97,7 @@ Read these in order the first time. Each page assumes the ones above it.
 | [concepts.md](concepts.md) | The nine words the rest of the docs use: world, tool, schema, fixture, instance, context, clock, reproducibility, change log |
 | [authoring.md](authoring.md) | Writing a world: tools, arguments, transactions, errors, middleware, startup hooks |
 | [db_schema_and_fixtures.md](db_schema_and_fixtures.md) | The database, the schema rules, and how fixtures are built and kept |
+| [clock.md](clock.md) | The instance's clock: the four modes, choosing one, and what they mean for timestamps |
 | [testing.md](testing.md) | The pytest plugin, and what is worth testing in a world |
 | [state.md](state.md) | The document an eval grades on: the change log, the formats, and the fold |
 | [serving_and_openenv.md](serving_and_openenv.md) | `seahaven serve`, driving a world over the network, publishing it, and `seahaven mcp` |

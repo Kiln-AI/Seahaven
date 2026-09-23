@@ -77,7 +77,7 @@ every format, built in or your own.
 | `episode_id` | Over a server, the session's episode id: the one `reset` was given, or the one it minted. In process an instance is an episode, so it is the instance id |
 | `seed` | The `seed=` the caller gave, or `null`. Not the derived per-instance seed |
 | `now` | The instance's clock reading when the document was produced, as an ISO-8601 instant, the same string `inst.clock.iso()` answers. Producing a document reads the clock and never moves it |
-| `clock_mode` | How the instance's clock moves: `fixed`, `tick`, `running` or `wall` ([concepts.md](concepts.md#clock)). `null` before the first `reset` over a server |
+| `clock_mode` | How the instance's clock moves: `fixed`, `tick`, `running` or `wall` ([clock.md](clock.md)). `null` before the first `reset` over a server |
 | `startup` | The world's own startup keywords — `world.instance(startup={...})`, or the same `startup` on `reset` — rendered as JSON at instance creation. A hook receives the value the caller passed; the document carries that value's JSON rendering, so a `datetime` or a model is text or an object here. Empty when there were none |
 | `call_count` | How many calls have been dispatched to the instance. The last call's ordinal is one less. Over a server this is **not** `step_count`, which counts tool listings as well |
 | `state` | The formatter's output, and the only part of the document `format` describes |

@@ -133,7 +133,7 @@ A WebSocket connection is one session, and one session holds one instance.
 | `fixture=` | the frozen starting state to copy. Omit it for a blank instance, built from the world's schema |
 | `seed=` | the seed behind `ctx.ids`, and behind SQL's `random()` and `randomblob()` |
 | `now=` | where the clock starts, for a blank instance only. A fixture carries its own, and `now=` with one is refused |
-| `clock_mode=` | how the clock moves: `fixed`, `tick`, `running` or `wall`. Omit it for the world's default ([concepts.md](concepts.md#clock)) |
+| `clock_mode=` | how the clock moves: `fixed`, `tick`, `running` or `wall`. Omit it for the world's default ([clock.md](clock.md)) |
 | `episode_id=` | your own id for the episode, echoed back on `state` so a trajectory ties to your run |
 | `state_format=` | the format the `state` message answers in, in place of the world's pin ([state.md](state.md)) |
 | `startup=` | an object of the world's own startup keywords, passed to its startup hooks, so a world can be set up per episode |
