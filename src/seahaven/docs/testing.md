@@ -122,7 +122,7 @@ import pytest
 import seahaven
 
 
-@pytest.mark.seahaven(fixture="small_startup")
+@pytest.mark.seahaven(fixture="small_startup", clock_mode="fixed")
 def test_transitioning_an_issue_records_it_in_the_trail(instance: seahaven.Instance) -> None:
     issue = instance.call("get_issue", key="ENG-3")
     instance.call("transition_issue", issue_id=issue["id"], status="done")

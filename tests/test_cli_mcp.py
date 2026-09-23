@@ -85,7 +85,15 @@ def test_each_flag_reaches_the_reset_options(
     calls: list[Call], capsys: pytest.CaptureFixture[str]
 ) -> None:
     result = serve_mcp(
-        capsys, "--fixture", "small_startup", "--seed", "7", "--now", "2024-03-05T12:00:00Z"
+        capsys,
+        "--fixture",
+        "small_startup",
+        "--seed",
+        "7",
+        "--now",
+        "2024-03-05T12:00:00Z",
+        "--clock-mode",
+        "tick",
     )
 
     assert result.code == 0
@@ -93,6 +101,7 @@ def test_each_flag_reaches_the_reset_options(
         "fixture": "small_startup",
         "seed": 7,
         "now": "2024-03-05T12:00:00Z",
+        "clock_mode": "tick",
     }
 
 
@@ -103,12 +112,14 @@ def test_each_variable_reaches_the_reset_options(
     monkeypatch.setenv("SEAHAVEN_FIXTURE", "small_startup")
     monkeypatch.setenv("SEAHAVEN_SEED", "7")
     monkeypatch.setenv("SEAHAVEN_NOW", "2024-03-05T12:00:00Z")
+    monkeypatch.setenv("SEAHAVEN_CLOCK_MODE", "wall")
 
     assert serve_mcp(capsys).code == 0
     assert calls[0].reset_options == {
         "fixture": "small_startup",
         "seed": 7,
         "now": "2024-03-05T12:00:00Z",
+        "clock_mode": "wall",
     }
 
 
@@ -189,8 +200,27 @@ def test_the_general_variable_is_passed_whole(
             '"seed" and "now" inside the --reset-options JSON instead: '
             """--reset-options '{"fixture": "small_startup", "seed": 7}'""",
         ),
+        (
+            ["--clock-mode", "fixed", "--reset-options", "{}"],
+            {},
+            '--clock-mode cannot be combined with --reset-options; put "clock_mode" inside the '
+            "--reset-options JSON instead: "
+            """--reset-options '{"fixture": "small_startup", "seed": 7}'""",
+        ),
+        (
+            [],
+            {"SEAHAVEN_CLOCK_MODE": "tick", "SEAHAVEN_RESET_OPTIONS": "{}"},
+            "SEAHAVEN_CLOCK_MODE cannot be combined with SEAHAVEN_RESET_OPTIONS; put "
+            '"clock_mode" inside the SEAHAVEN_RESET_OPTIONS JSON instead',
+        ),
     ],
-    ids=["flag with flag", "variables and a flag", "a variable and a flag"],
+    ids=[
+        "flag with flag",
+        "variables and a flag",
+        "a variable and a flag",
+        "the clock mode flag",
+        "the clock mode variable",
+    ],
 )
 def test_the_two_doors_are_refused_together_in_the_spelling_the_user_used(
     calls: list[Call],
@@ -254,7 +284,14 @@ def test_reset_options_that_are_not_an_object_are_refused(
 
 def test_reset_options_take_the_keyword_arguments_of_world_instance() -> None:
     """The accepted keys are read off the signature, not written out twice."""
-    assert sorted(RESET_OPTION_KEYS) == ["fixture", "now", "seed", "startup", "state_format"]
+    assert sorted(RESET_OPTION_KEYS) == [
+        "clock_mode",
+        "fixture",
+        "now",
+        "seed",
+        "startup",
+        "state_format",
+    ]
     assert WITHHELD not in RESET_OPTION_KEYS
 
 
@@ -276,9 +313,9 @@ def test_a_key_world_instance_does_not_take_is_refused(
 
     assert (result.code, calls) == (1, [])
     assert result.err.strip() == (
-        '--reset-options does not take "region"; --reset-options takes "fixture", "now", '
-        '"seed", "startup" and "state_format", and a world\'s own startup keywords go inside '
-        '"startup": --reset-options \'{"fixture": "small_startup", "startup": '
+        '--reset-options does not take "region"; --reset-options takes "clock_mode", "fixture", '
+        '"now", "seed", "startup" and "state_format", and a world\'s own startup keywords go '
+        'inside "startup": --reset-options \'{"fixture": "small_startup", "startup": '
         '{"user_id": "u_12"}}\''
     )
 

@@ -106,7 +106,7 @@ def freeze_fixture(pytester: pytest.Pytester, fixture_id: str = "empty") -> None
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
-        with module.world.instance(None, now=NOW) as instance:
+        with module.world.instance(None, now=NOW, clock_mode="fixed") as instance:
             instance.call("add_note", body=FIXTURE_NOTE)
             instance.freeze(fixture_id, f"{fixture_id}, for a test")
     finally:
@@ -123,7 +123,7 @@ def test_a_marked_test_gets_an_instance_of_the_fixture_it_names(
         f"""
         import pytest
 
-        @pytest.mark.seahaven(fixture="empty")
+        @pytest.mark.seahaven(fixture="empty", clock_mode="fixed")
         def test_it(instance):
             assert instance.fixture == "empty"
             assert "{FIXTURE_NOTE}" in instance.call("bodies")
@@ -448,7 +448,7 @@ def test_now_passes_through(pytester: pytest.Pytester) -> None:
         f"""
         import pytest
 
-        @pytest.mark.seahaven(fixture=None, now="{OTHER_NOW}")
+        @pytest.mark.seahaven(fixture=None, now="{OTHER_NOW}", clock_mode="fixed")
         def test_it(instance):
             assert instance.call("now") == "{OTHER_NOW}"
         """

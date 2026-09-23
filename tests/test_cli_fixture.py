@@ -5,10 +5,12 @@ A scaffold rather than one of `tests/worlds/`: `seahaven new` writes
 something to name, and the round trip through both is the thing worth proving.
 """
 
+import itertools
 from pathlib import Path
 
 import pytest
 
+from seahaven import clock
 from seahaven.cli import CliError
 from seahaven.cli.fixture import _generator
 from seahaven.cli.new import render
@@ -33,6 +35,7 @@ def freeze(capsys: pytest.CaptureFixture[str], *argv: str) -> CliResult:
     return run_cli(capsys, "fixture", "freeze", *argv)
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_freeze_writes_a_fixture_and_prints_its_sidecar(
     world_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -58,6 +61,19 @@ def test_freeze_defaults_to_the_wall_clock(
     assert fixture.now.endswith("Z")
 
 
+def test_freeze_runs_the_generator_on_the_worlds_default_clock(
+    world_dir: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`running`: the fixture's `now` is `--now` plus the time the generator took."""
+    elapsed = itertools.count(0, 1_000_000_000)
+    monkeypatch.setattr(clock, "_monotonic_ns", lambda: next(elapsed))
+
+    assert freeze(capsys, "empty", "--run", GENERATOR, "--description", "x", "--now", NOW).code == 0
+
+    assert load(world_dir / "fixtures" / "empty").now > NOW
+
+
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_fork_records_its_parent(world_dir: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert (
         freeze(capsys, "empty", "--run", GENERATOR, "--description", "No rows.", "--now", NOW).code
@@ -69,7 +85,7 @@ def test_fork_records_its_parent(world_dir: Path, capsys: pytest.CaptureFixture[
     assert result.code == 0
     forked = load(world_dir / "fixtures" / "forked")
     assert forked.parent_id == "empty"
-    # A fork inherits the instant it was forked from; nothing reads a clock here.
+    # A fork inherits the instant it was forked from; nothing reads a wall clock here.
     assert forked.now == NOW
 
 
@@ -139,6 +155,7 @@ def test_a_run_target_that_is_not_callable_is_a_user_error(
     assert "a generator is a function" in result.err
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_list_prints_id_parent_now_and_description(
     world_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

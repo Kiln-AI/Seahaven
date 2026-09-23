@@ -113,7 +113,7 @@ under the system temp directory, and it is what a run actually drives.
 ```python
 import projecttracker
 
-with projecttracker.world.instance("small_startup", seed=7) as inst:
+with projecttracker.world.instance("small_startup", seed=7, clock_mode="fixed") as inst:
     issue = inst.call("get_issue", key="ENG-12")
     assert issue["key"] == "ENG-12"
     assert inst.fixture == "small_startup"

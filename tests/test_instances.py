@@ -15,9 +15,9 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +27,7 @@ import apsw
 import pytest
 from pydantic import Field
 
+from seahaven import clock as clock_module
 from seahaven import control, instances
 from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
@@ -37,7 +38,16 @@ from seahaven.ids import instance_seed
 from seahaven.instances import Instance, default_concurrency, set_concurrency
 from seahaven.tool import Tool
 from seahaven.world import World
-from tests.conftest import INSTANT_ISO, NOTES_SCHEMA, WAIT, Boom, Caller, build_world
+from tests.conftest import (
+    INSTANT,
+    INSTANT_ISO,
+    NOTES_SCHEMA,
+    WAIT,
+    Boom,
+    Caller,
+    build_world,
+    composable_world,
+)
 
 
 def add(instance: Instance, id: str, body: str = "a body") -> None:
@@ -65,8 +75,8 @@ def seeded_plan(instance: Instance) -> dict[str, Any]:
 
 
 def frozen_fixture(world: World, fixture_id: str = "start", notes: int = 1) -> str:
-    """A world with one fixture in it, made the only way fixtures are made."""
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    """A world with one fixture in it, made the only way fixtures are made, at `INSTANT`."""
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
         for number in range(notes):
             add(instance, f"n{number}")
         instance.freeze(fixture_id, "Some notes.")
@@ -99,7 +109,7 @@ def instance_dirs(world: World) -> list[Path]:
 def test_a_blank_instance_starts_at_the_wall_clock(world: World) -> None:
     before = datetime.now(UTC)
 
-    with world.instance(None) as instance:
+    with world.instance(None, clock_mode="fixed") as instance:
         started = instance.clock.now()
 
     assert before.replace(microsecond=before.microsecond // 1000 * 1000) <= started
@@ -110,7 +120,7 @@ def test_a_blank_instance_starts_at_the_wall_clock(world: World) -> None:
 
 @pytest.mark.parametrize("given", [INSTANT_ISO, datetime(2024, 3, 5, 12, 0, 0, 123000, tzinfo=UTC)])
 def test_an_explicit_now_is_the_instances_clock(world: World, given: str | datetime) -> None:
-    with world.instance(None, now=given) as instance:
+    with world.instance(None, now=given, clock_mode="fixed") as instance:
         assert instance.clock.iso() == INSTANT_ISO
         assert instance.call("now") == {"python": INSTANT_ISO, "sql": INSTANT_ISO}
 
@@ -124,7 +134,7 @@ def test_a_row_the_schema_seeds_is_stamped_with_the_instances_clock(tmp_path: Pa
     """
     world = build_world(tmp_path, SEEDING_SCHEMA)
 
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
         assert seeded_plan(instance)["made_at"] == INSTANT_ISO
 
 
@@ -132,7 +142,7 @@ def test_two_blank_instances_of_a_seeding_world_seed_the_same_row(tmp_path: Path
     world = build_world(tmp_path, SEEDING_SCHEMA)
 
     def seeded() -> dict[str, Any]:
-        with world.instance(None, now=INSTANT_ISO, seed=11) as instance:
+        with world.instance(None, now=INSTANT_ISO, seed=11, clock_mode="fixed") as instance:
             return seeded_plan(instance)
 
     first = seeded()
@@ -163,12 +173,12 @@ def test_a_fixture_carries_the_rows_its_schema_seeded_at_the_pinned_instant(
     fixture would replay that accident for good.
     """
     world = build_world(tmp_path, SEEDING_SCHEMA)
-    with world.instance(None, now=INSTANT_ISO, seed=11) as origin:
+    with world.instance(None, now=INSTANT_ISO, seed=11, clock_mode="fixed") as origin:
         frozen = seeded_plan(origin)
         origin.freeze("seeded", "The plans the schema writes for itself.")
 
     assert frozen["made_at"] == INSTANT_ISO
-    with world.instance("seeded") as replayed:
+    with world.instance("seeded", clock_mode="fixed") as replayed:
         assert seeded_plan(replayed) == frozen
 
 
@@ -185,7 +195,7 @@ def test_now_with_a_fixture_is_refused(world: World) -> None:
 def test_an_instance_from_a_fixture_is_a_writable_copy_at_the_fixtures_clock(world: World) -> None:
     fixture = frozen_fixture(world)
 
-    with world.instance(fixture) as instance:
+    with world.instance(fixture, clock_mode="fixed") as instance:
         assert instance.fixture == fixture
         assert instance.clock.iso() == INSTANT_ISO
         # The fixture's file is read-only; the copy is not, or nothing could run.
@@ -856,7 +866,7 @@ def test_the_gate_is_released_after_a_call_that_raised(tmp_path: Path) -> None:
     world = build_world(tmp_path)
     set_concurrency(1)
 
-    with world.instance(None) as instance:
+    with world.instance(None, clock_mode="fixed") as instance:
         for _ in range(3):
             with pytest.raises(ValueError):
                 instance.call("crash")
@@ -1840,3 +1850,286 @@ def test_a_call_queued_behind_the_gate_does_not_delay_a_destroy(
         queued.join(WAIT)  # it wakes to find its instance gone, which is its business
         destroyed.finish()
     assert queued_instance.closed
+
+
+# ---------------------------------------------------------------- clock modes
+
+
+def after(seconds: float) -> str:
+    """`INSTANT_ISO` plus `seconds`, as canonical text."""
+    later = INSTANT + timedelta(seconds=seconds)
+    return later.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@pytest.fixture
+def monotonic(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """The clock's monotonic source, in nanoseconds, as a value the test sets."""
+    now = [0]
+    monkeypatch.setattr(clock_module, "_monotonic_ns", lambda: now[0])
+    return now
+
+
+@pytest.fixture
+def wall(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
+    """The clock's wall-clock source, as a value the test sets."""
+    now = [datetime(2031, 12, 25, 6, 30, 0, 500_000, tzinfo=UTC)]
+    monkeypatch.setattr(clock_module, "_wall_now", lambda: now[0])
+    return now
+
+
+def clock_world(tmp_path: Path, schema: str = NOTES_SCHEMA, **options: Any) -> World:
+    """A world whose startup hook records the clock in Python and in SQL."""
+    world = build_world(tmp_path, schema, **options)
+
+    @world.instance_startup
+    def record(ctx: Ctx) -> None:
+        row = ctx.db.one("SELECT CURRENT_TIMESTAMP AS at")
+        assert row is not None
+        ctx.state["started"] = {"python": ctx.clock.iso(), "sql": row["at"]}
+
+    return world
+
+
+def sql_now(db: Db) -> str:
+    row = db.one("SELECT datetime('now') AS at")
+    assert row is not None
+    return str(row["at"])
+
+
+def test_an_instance_takes_the_worlds_default_clock_mode(tmp_path: Path) -> None:
+    with build_world(tmp_path).instance(None) as instance:
+        assert instance.clock.mode == "running"
+    ticking = build_world(tmp_path, default_clock_mode="tick")
+    with ticking.instance(None) as instance:
+        assert instance.clock.mode == "tick"
+
+
+@pytest.mark.parametrize("mode", ["fixed", "tick", "running", "wall"])
+def test_clock_mode_overrides_the_worlds_default(tmp_path: Path, mode: Any) -> None:
+    world = build_world(tmp_path, default_clock_mode="fixed" if mode != "fixed" else "tick")
+
+    with world.instance(None, clock_mode=mode) as instance:
+        assert instance.clock.mode == mode
+        assert instance.state()["clock_mode"] == mode
+
+
+def test_an_unknown_clock_mode_is_refused_before_a_directory_exists(world: World) -> None:
+    unknown: Any = "tik"
+
+    with pytest.raises(WorldBug, match="unknown clock mode 'tik'; the clock modes are 'fixed'"):
+        world.instance(None, clock_mode=unknown)
+    with pytest.raises(WorldBug, match="unknown clock mode 'tik'"):
+        world.instance(frozen_fixture(world), clock_mode=unknown)
+
+    assert instance_dirs(world) == []
+
+
+def test_tick_builds_and_starts_the_instance_at_the_start_instant(tmp_path: Path) -> None:
+    world = clock_world(tmp_path, SEEDING_SCHEMA)
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        assert seeded_plan(instance)["made_at"] == INSTANT_ISO
+        assert instance.ctx.state["started"] == {"python": INSTANT_ISO, "sql": INSTANT_ISO}
+        assert sql_now(instance.inspect()) == INSTANT_ISO
+        assert instance.state()["now"] == INSTANT_ISO
+        # The first call is strictly later than everything written before it.
+        assert instance.call("now") == {"python": after(1), "sql": after(1)}
+
+
+def test_tick_call_i_reads_the_start_plus_i_plus_one_seconds(tmp_path: Path) -> None:
+    world = build_world(tmp_path)
+
+    @world.tool
+    def stamp(ctx: Ctx) -> list[str]:
+        """Read the clock four times, twice in each language, and write a row with it."""
+        ctx.db.execute("INSERT INTO notes (id, body) VALUES (?, CURRENT_TIMESTAMP)", ctx.ids.uuid())
+        return [ctx.clock.iso(), sql_now(ctx.db), ctx.clock.iso(), sql_now(ctx.db)]
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        for i in range(3):
+            assert instance.call("stamp") == [after(i + 1)] * 4
+            # Between calls the clock reads the start plus `call_count` seconds.
+            assert instance.clock.iso() == after(instance.call_count)
+        bodies = instance.inspect().rows("SELECT body FROM notes ORDER BY body")
+        assert [row["body"] for row in bodies] == [after(1), after(2), after(3)]
+
+
+def test_tick_counts_a_call_that_raised(tmp_path: Path) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        with pytest.raises(Boom):
+            instance.call("write_then_fail", sql="INSERT INTO notes (id, body) VALUES ('a', 'b')")
+        with pytest.raises(ValueError):
+            instance.call("crash")
+
+        assert instance.call("now") == {"python": after(3), "sql": after(3)}
+
+
+@pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
+def test_tick_does_not_count_what_is_not_a_call(tmp_path: Path) -> None:
+    world = build_world(tmp_path)
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="tick", control_tools=True) as instance:
+        with pytest.raises(UnknownTool):
+            instance.call("no_such_tool")
+        instance.call("controller_run_sql", sql="SELECT 1")
+        instance.tools()
+        instance.inspect().one("SELECT 1 AS one")
+        instance.state()
+
+        assert instance.clock.iso() == INSTANT_ISO
+        assert instance.call("now") == {"python": after(1), "sql": after(1)}
+
+
+def test_tick_reads_outside_a_call_never_tick(tmp_path: Path) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        instance.call("now")
+        instance.call("now")
+        for _ in range(3):
+            assert sql_now(instance.inspect()) == after(2)
+            assert instance.state()["now"] == after(2)
+            with instance.bulk() as ctx:
+                assert (ctx.clock.iso(), sql_now(ctx.db)) == (after(2), after(2))
+
+        assert instance.call("now")["python"] == after(3)
+
+
+def test_tick_a_nested_call_sees_the_outer_calls_instant(tmp_path: Path) -> None:
+    host = build_world(tmp_path)
+    child = composable_world("child")
+
+    @child.tool(name="child_now")
+    def child_now(ctx: Ctx) -> dict[str, str]:
+        """The instance's clock, as the added world reads it."""
+        return {"python": ctx.clock.iso(), "sql": sql_now(ctx.db)}
+
+    @host.tool
+    def outer(ctx: Ctx) -> dict[str, Any]:
+        """Read the clock, reach the added world, and read it again."""
+        return {
+            "before": ctx.clock.iso(),
+            "inner": ctx.worlds.child.call("child_now"),
+            "after": sql_now(ctx.db),
+        }
+
+    host.add_world(child, name="child")
+
+    with host.instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        assert instance.call("outer") == {
+            "before": after(1),
+            "inner": {"python": after(1), "sql": after(1)},
+            "after": after(1),
+        }
+        assert instance.call_count == 1
+        # The added world's tool called directly is a call like any other.
+        assert instance.call("child_now") == {"python": after(2), "sql": after(2)}
+
+
+def test_running_readings_advance_with_monotonic_time(tmp_path: Path, monotonic: list[int]) -> None:
+    world = clock_world(tmp_path)
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="running") as instance:
+        assert instance.ctx.state["started"] == {"python": INSTANT_ISO, "sql": INSTANT_ISO}
+        monotonic[0] += 1_500_000_000
+        assert instance.call("now") == {"python": after(1.5), "sql": after(1.5)}
+        # The clock runs while the instance is idle, and a call does not move it.
+        monotonic[0] += 60_000_000_000
+        assert sql_now(instance.inspect()) == after(61.5)
+        assert instance.state()["now"] == after(61.5)
+
+
+@pytest.mark.parametrize("from_fixture", [False, True], ids=["blank", "fixture"])
+def test_running_starts_before_the_files_are_built_or_copied(
+    tmp_path: Path, monotonic: list[int], monkeypatch: pytest.MonkeyPatch, from_fixture: bool
+) -> None:
+    """Creation is when the clock is made, so time spent on the files is on the clock."""
+    world = clock_world(tmp_path)
+    fixture = frozen_fixture(world) if from_fixture else None
+
+    def slowly[**P, R](step: Callable[P, R]) -> Callable[P, R]:
+        def run(*args: P.args, **kwargs: P.kwargs) -> R:
+            monotonic[0] += 5_000_000_000
+            return step(*args, **kwargs)
+
+        return run
+
+    monkeypatch.setattr(instances, "build_blank", slowly(instances.build_blank))
+    monkeypatch.setattr(instances, "_copy_fixture", slowly(instances._copy_fixture))
+    now = None if from_fixture else INSTANT_ISO
+
+    with world.instance(fixture, now=now, clock_mode="running") as instance:
+        assert instance.ctx.state["started"] == {"python": after(5), "sql": after(5)}
+
+
+def test_running_freeze_records_the_reading_and_a_fork_starts_there(
+    world: World, monotonic: list[int]
+) -> None:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="running") as origin:
+        monotonic[0] += 40 * 60 * 1_000_000_000
+        fixture = origin.freeze("later", "Forty minutes in.")
+
+    assert fixture.now == after(40 * 60)
+    monotonic[0] += 3_000_000_000
+    with world.instance("later", clock_mode="running") as forked:
+        assert forked.clock.iso() == after(40 * 60)
+        monotonic[0] += 1_000_000_000
+        assert forked.call("now") == {"python": after(40 * 60 + 1), "sql": after(40 * 60 + 1)}
+
+
+def test_tick_freeze_records_the_calls_and_a_fork_picks_up_from_there(world: World) -> None:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="tick") as origin:
+        for _ in range(12):
+            origin.call("now")
+        fixture = origin.freeze("twelve", "Twelve calls in.")
+
+    assert fixture.now == after(12)
+    with world.instance("twelve", clock_mode="tick") as forked:
+        assert forked.call("now")["sql"] == after(13)
+
+
+def test_wall_reads_the_wall_clock(tmp_path: Path, wall: list[datetime]) -> None:
+    world = clock_world(tmp_path)
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="wall") as instance:
+        on_the_wall = "2031-12-25T06:30:00.500Z"
+        assert instance.ctx.state["started"] == {"python": on_the_wall, "sql": on_the_wall}
+        assert instance.call("now") == {"python": on_the_wall, "sql": on_the_wall}
+        wall[0] = datetime(2020, 1, 1, tzinfo=UTC)
+        assert sql_now(instance.inspect()) == "2020-01-01T00:00:00.000Z"
+        assert instance.state()["now"] == "2020-01-01T00:00:00.000Z"
+
+
+def test_wall_accepts_a_fixture(world: World, wall: list[datetime]) -> None:
+    fixture = frozen_fixture(world)
+
+    with world.instance(fixture, clock_mode="wall") as instance:
+        assert instance.call("now")["sql"] == "2031-12-25T06:30:00.500Z"
+        assert instance.state()["clock_mode"] == "wall"
+
+
+def test_a_composite_takes_the_roots_default_clock_mode(tmp_path: Path) -> None:
+    host = build_world(tmp_path, default_clock_mode="tick")
+    host.add_world(composable_world("child", default_clock_mode="wall"), name="child")
+
+    with host.instance(None) as instance:
+        assert instance.clock.mode == "tick"
+    with host.instance(None, clock_mode="fixed") as instance:
+        assert instance.clock.mode == "fixed"
+
+
+def test_every_node_of_a_composite_reads_one_clock(tmp_path: Path) -> None:
+    host = build_world(tmp_path)
+    child = composable_world("child")
+
+    @child.tool(name="child_now")
+    def child_now(ctx: Ctx) -> dict[str, str]:
+        """The instance's clock, as the added world reads it."""
+        return {"python": ctx.clock.iso(), "sql": sql_now(ctx.db)}
+
+    host.add_world(child, name="child")
+
+    with host.instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        assert instance.call("now") == {"python": after(1), "sql": after(1)}
+        assert instance.call("child_now") == {"python": after(2), "sql": after(2)}
+        with instance.bulk() as ctx:
+            assert {sql_now(ctx.db), sql_now(ctx.worlds.child.db)} == {after(2)}
+        assert sql_now(instance.inspect()) == after(2)

@@ -43,6 +43,7 @@ from openenv import GenericEnvClient
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 
 from projecttracker.openenv_app import app
+from seahaven import clock
 from seahaven.openenv import SeahavenClient
 
 # How long `serving` waits for uvicorn to bind, and for it to stop again.
@@ -83,8 +84,14 @@ def _port_of(server: uvicorn.Server) -> int:
     raise AssertionError("the server never started")
 
 
-def test_the_typed_client_lists_and_calls_this_worlds_tools() -> None:
+def test_the_typed_client_lists_and_calls_this_worlds_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The flow an eval runs: connect, reset onto a fixture, list, call, read state."""
+    # `reset` cannot name a clock mode yet, so the instance runs on the world's
+    # default, `running`. Holding its monotonic source still keeps it at the
+    # fixture's instant, which is what the timestamps below are compared with.
+    monkeypatch.setattr(clock, "_monotonic_ns", lambda: 0)
     with serving() as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(fixture="empty")
         assert reset.observation.metadata == {"fixture": "empty", "now": FIXTURE_NOW, "tools": 27}

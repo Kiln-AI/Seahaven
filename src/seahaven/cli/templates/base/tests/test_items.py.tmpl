@@ -10,8 +10,8 @@ world's to import. `@pytest.mark.seahaven(...)` says which fixture each test's
 instance starts from, and the instance is destroyed when the test ends.
 
 `fixture=None` is a blank instance: no fixture on disk, so this passes on a
-scaffold that has never frozen one. `now=` freezes its clock, so a timestamp is a
-value a test can name.
+scaffold that has never frozen one. `now=` sets where its clock starts and
+`clock_mode="fixed"` holds it there, so a timestamp is a value a test can name.
 """
 
 import pytest
@@ -21,7 +21,7 @@ import seahaven
 # A fixed instant, so every timestamp the world writes is a value a test can name.
 NOW = "2026-01-01T00:00:00.000Z"
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=NOW, clock_mode="fixed")
 
 
 def test_an_item_can_be_created_and_read_back(instance: seahaven.Instance) -> None:

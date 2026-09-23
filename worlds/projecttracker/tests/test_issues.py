@@ -7,7 +7,7 @@ import pytest
 import seahaven
 from conftest import BLANK_NOW, SMALL_STARTUP, Scaffold, an_issue
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW, clock_mode="fixed")
 
 
 def events(instance: seahaven.Instance, issue_id: str) -> list[dict[str, Any]]:

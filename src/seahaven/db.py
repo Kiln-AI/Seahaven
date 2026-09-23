@@ -160,7 +160,9 @@ class Db:
         Errors raised through it are APSW's, not `DbError`. Do not close it,
         change its pragmas or its authorizer, or open a second connection to the
         same file: the clock and randomness functions, the change log's per-call
-        session and the per-call transaction all run on this connection.
+        session and the per-call transaction all run on this connection. Do not
+        remove the trace registered under the id `seahaven.clock`: it is how the
+        clock gives each SQL statement one reading.
         """
         return self._conn
 

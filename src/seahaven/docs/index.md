@@ -56,7 +56,7 @@ def add_note(ctx: seahaven.Ctx, body: str) -> dict[str, str]:
     return note
 
 
-with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
+with world.instance(now="2026-06-01T09:00:00.000Z", clock_mode="fixed") as inst:
     note = inst.call("add_note", body="buy milk")
     assert note["created_at"] == "2026-06-01T09:00:00.000Z"
     assert [record["op"] for record in inst.state()["state"]["db"]["log"]] == ["insert"]

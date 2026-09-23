@@ -14,7 +14,7 @@ import seahaven
 import seahaven_xmlrpc
 from conftest import NOW, rpc
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=NOW, clock_mode="fixed")
 
 # `rowid`, not `called_at`: the clock is frozen, so every row of one instance
 # carries the same instant and ordering by it would be resting on SQLite's

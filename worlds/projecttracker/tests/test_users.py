@@ -10,7 +10,7 @@ import pytest
 import seahaven
 from conftest import BLANK_NOW, SMALL_STARTUP
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW, clock_mode="fixed")
 
 
 def test_creating_a_user_answers_with_the_row_that_was_written(

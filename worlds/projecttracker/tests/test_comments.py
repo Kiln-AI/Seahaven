@@ -5,7 +5,7 @@ import pytest
 import seahaven
 from conftest import BLANK_NOW, SMALL_STARTUP, Scaffold, an_issue
 
-pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW)
+pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW, clock_mode="fixed")
 
 
 def test_a_comment_is_written_and_answers_with_its_row(

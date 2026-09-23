@@ -263,6 +263,7 @@ def test_the_observation_model_refuses_a_frame_it_does_not_know(client: Seahaven
 # --- the client, on a server -----------------------------------------------
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_client_drives_a_world_synchronously(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         reset = env.reset(now=INSTANT_ISO)
@@ -283,6 +284,7 @@ def test_the_client_drives_a_world_synchronously(world: World) -> None:
         assert state.state["db"]["log"][0]["key"] == {"id": "n1"}
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_client_drives_a_world_asynchronously(world: World) -> None:
     async def drive(url: str) -> None:
         async with SeahavenClient(base_url=url) as env:

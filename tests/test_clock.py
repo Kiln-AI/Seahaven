@@ -1,18 +1,32 @@
-"""The frozen clock, and SQL reading it through SQLite's own date functions."""
+"""The clock in each of its modes, and SQL reading it through SQLite's own date functions."""
 
+import itertools
 import os
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
 
 import apsw
 import pytest
 
-from seahaven.clock import CANONICAL_FORMAT, Clock, register_clock_functions
-from seahaven.db import Db
+from seahaven import clock as clock_module
+from seahaven.clock import (
+    CANONICAL_FORMAT,
+    CLOCK_MODES,
+    TRACE_ID,
+    Clock,
+    ClockMode,
+    check_clock_mode,
+    register_clock_functions,
+)
+from seahaven.db import Db, open_instance
 from seahaven.errors import WorldBug
-from tests.conftest import INSTANT
+from seahaven.sandbox import Authorizer, run_statement
+from tests.conftest import INSTANT, INSTANT_ISO
 
 CANONICAL = f"strftime('{CANONICAL_FORMAT}', ?)"
 
@@ -182,27 +196,23 @@ def test_clock_requires_an_aware_instant() -> None:
 def test_an_instant_is_kept_at_the_precision_it_is_rendered_at() -> None:
     finer = Clock(INSTANT.replace(microsecond=123_456))
 
-    # Two instants nothing in the framework can tell apart are the same clock.
-    assert finer == Clock(INSTANT)
-    assert hash(finer) == hash(Clock(INSTANT))
+    # Two instants nothing in the framework can tell apart read the same.
+    assert finer.now() == Clock(INSTANT).now()
     assert finer.iso() == Clock(INSTANT).iso()
-    assert Clock.from_iso(finer.iso()) == finer
+    assert Clock.from_iso(finer.iso()).now() == finer.now()
     assert finer.now().microsecond == 123_000
 
 
-def test_clock_normalises_to_utc_and_compares_by_instant() -> None:
+def test_clock_normalises_to_utc() -> None:
     elsewhere = Clock(datetime(2024, 3, 5, 14, 0, 0, 123000, tzinfo=timezone(timedelta(hours=2))))
 
-    assert elsewhere == Clock(INSTANT)
-    assert hash(elsewhere) == hash(Clock(INSTANT))
     assert elsewhere.now() == INSTANT
     assert elsewhere.now().tzinfo == UTC
-    assert Clock(INSTANT) != INSTANT
+    assert elsewhere.iso() == INSTANT_ISO
 
 
 def test_clock_round_trips_through_canonical_text() -> None:
-    assert Clock.from_iso(Clock(INSTANT).iso()) == Clock(INSTANT)
-    assert repr(Clock(INSTANT)) == "Clock(2024-03-05T12:00:00.123Z)"
+    assert Clock.from_iso(Clock(INSTANT).iso()).now() == INSTANT
 
 
 def test_from_iso_refuses_text_that_is_not_a_timestamp() -> None:
@@ -216,3 +226,302 @@ def test_wall_truncates_to_milliseconds() -> None:
     assert wall.now().microsecond % 1000 == 0
     assert wall.now().tzinfo == UTC
     assert abs((wall.now() - datetime.now(UTC)).total_seconds()) < 5
+
+
+# ----------------------------------------------------------------- the modes
+
+# How far a stepping monotonic source moves on every read: enough to change every
+# field a date function renders, the date and the milliseconds included.
+STEP = timedelta(days=1, seconds=1, milliseconds=1)
+
+UNKNOWN_MODE = "unknown clock mode 'tik'; the clock modes are 'fixed', 'tick', 'running' and 'wall'"
+
+
+def _after(steps: int) -> str:
+    """The canonical reading of a stepping `running` clock `steps` reads after it was made.
+
+    Rendered by hand rather than through a `Clock`, because making a clock reads
+    the monotonic source, and that would be a step of its own.
+    """
+    return (INSTANT + steps * STEP).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@pytest.fixture
+def monotonic(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """The clock's monotonic source, as a value the test sets. Starts at 0."""
+    now = [0]
+    monkeypatch.setattr(clock_module, "_monotonic_ns", lambda: now[0])
+    return now
+
+
+@pytest.fixture
+def wall(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
+    """The clock's wall-clock source, as a value the test sets."""
+    now = [datetime(2031, 12, 25, 6, 30, 0, 500_999, tzinfo=UTC)]
+    monkeypatch.setattr(clock_module, "_wall_now", lambda: now[0])
+    return now
+
+
+@pytest.fixture
+def stepping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A monotonic source that moves `STEP` on every read, so no two readings agree."""
+    reads = itertools.count(0, STEP // timedelta(microseconds=1) * 1000)
+    monkeypatch.setattr(clock_module, "_monotonic_ns", lambda: next(reads))
+
+
+def test_fixed_reads_the_start_on_every_reading(monotonic: list[int], wall: list[datetime]) -> None:
+    fixed = Clock(INSTANT)
+    monotonic[0] += 5_000_000_000
+    wall[0] += timedelta(days=3)
+    fixed._call_started()
+
+    assert fixed.mode == "fixed"
+    assert fixed.now() == INSTANT
+    assert fixed.iso() == INSTANT_ISO
+
+
+def test_tick_counts_calls_started(monotonic: list[int]) -> None:
+    tick = Clock(INSTANT, "tick")
+    monotonic[0] += 5_000_000_000
+
+    assert tick.iso() == INSTANT_ISO
+    tick._call_started()
+    assert tick.now() == INSTANT + timedelta(seconds=1)
+    # Reading never moves it.
+    assert tick.now() == INSTANT + timedelta(seconds=1)
+    tick._call_started()
+    assert tick.iso() == "2024-03-05T12:00:02.123Z"
+
+
+def test_running_adds_elapsed_monotonic_time_truncated_to_milliseconds(
+    monotonic: list[int],
+) -> None:
+    running = Clock(INSTANT, "running")
+    assert running.now() == INSTANT
+
+    monotonic[0] = 1_999_999
+    assert running.now() == INSTANT + timedelta(milliseconds=1)
+    monotonic[0] = 1_000_000
+    # Truncated, never rounded, so a later read can equal an earlier one.
+    assert running.now() == INSTANT + timedelta(milliseconds=1)
+    monotonic[0] = 40 * 60 * 1_000_000_000
+    assert running.iso() == "2024-03-05T12:40:00.123Z"
+    running._call_started()
+    assert running.iso() == "2024-03-05T12:40:00.123Z"
+
+
+def test_running_counts_from_when_the_clock_was_made(monotonic: list[int]) -> None:
+    monotonic[0] = 7_000_000_000
+    running = Clock(INSTANT, "running")
+    monotonic[0] += 250_000_000
+
+    assert running.now() == INSTANT + timedelta(milliseconds=250)
+
+
+def test_running_ignores_the_wall_clock(monotonic: list[int], wall: list[datetime]) -> None:
+    running = Clock(INSTANT, "running")
+    monotonic[0] += 3_000_000_000
+    wall[0] -= timedelta(days=365)
+
+    assert running.now() == INSTANT + timedelta(seconds=3)
+
+
+def test_wall_reads_the_wall_clock_and_ignores_the_start(
+    monotonic: list[int], wall: list[datetime]
+) -> None:
+    on_the_wall = Clock(INSTANT, "wall")
+
+    assert on_the_wall.iso() == "2031-12-25T06:30:00.500Z"
+    assert on_the_wall.now().microsecond == 500_000
+    # It follows the host's clock backwards too, which `running` never does.
+    wall[0] = datetime(2020, 1, 1, tzinfo=timezone(timedelta(hours=2)))
+    assert on_the_wall.iso() == "2019-12-31T22:00:00.000Z"
+    monotonic[0] += 3_000_000_000
+    assert on_the_wall.iso() == "2019-12-31T22:00:00.000Z"
+
+
+def test_the_wall_constructor_is_a_fixed_clock_at_the_wall_clock(wall: list[datetime]) -> None:
+    clock = Clock.wall()
+    wall[0] += timedelta(hours=1)
+
+    assert clock.mode == "fixed"
+    assert clock.iso() == "2031-12-25T06:30:00.500Z"
+
+
+def test_a_clock_built_directly_is_fixed() -> None:
+    assert Clock(INSTANT).mode == "fixed"
+    assert Clock.from_iso(INSTANT_ISO).mode == "fixed"
+    assert Clock.from_iso(INSTANT_ISO, "tick").mode == "tick"
+
+
+@pytest.mark.parametrize("mode", CLOCK_MODES)
+def test_every_mode_is_accepted(mode: ClockMode) -> None:
+    assert check_clock_mode(mode) == mode
+    assert Clock(INSTANT, mode).mode == mode
+
+
+@pytest.mark.parametrize("bad", ["tik", "Fixed", "", None, 1])
+def test_an_unknown_mode_is_refused_naming_the_four(bad: Any) -> None:
+    with pytest.raises(WorldBug, match="the clock modes are 'fixed', 'tick', 'running' and 'wall'"):
+        check_clock_mode(bad)
+    with pytest.raises(WorldBug, match=re.escape(f"unknown clock mode {bad!r}")):
+        Clock(INSTANT, bad)
+
+
+def test_the_refusal_names_the_value_it_was_given() -> None:
+    with pytest.raises(WorldBug) as raised:
+        check_clock_mode("tik")
+
+    assert str(raised.value) == UNKNOWN_MODE
+
+
+def test_repr_names_the_reading_and_the_mode() -> None:
+    assert repr(Clock(INSTANT)) == "Clock(2024-03-05T12:00:00.123Z, fixed)"
+    assert repr(Clock(INSTANT, "tick")) == "Clock(2024-03-05T12:00:00.123Z, tick)"
+
+
+def test_clocks_compare_by_identity() -> None:
+    """A moving clock cannot compare, or hash, by a reading that changes."""
+    clock = Clock(INSTANT)
+
+    assert clock == clock
+    assert Clock(INSTANT) != Clock(INSTANT)
+
+
+# ------------------------------------------------- one reading per SQL statement
+
+
+@pytest.fixture
+def running(tmp_path: Path, seed: bytes, stepping: None) -> Iterator[Db]:
+    """A database on a `running` clock whose every reading is `STEP` later than the last."""
+    database = open_instance(tmp_path / "running.sqlite", Clock(INSTANT, "running"), seed)
+    try:
+        yield database
+    finally:
+        database.close()
+
+
+def _stamped(db: Db) -> list[dict[str, Any]]:
+    return db.rows("SELECT * FROM stamps ORDER BY rowid")
+
+
+def test_two_default_columns_share_one_reading(running: Db) -> None:
+    running.execute(
+        "CREATE TABLE stamps ("
+        "  id TEXT NOT NULL PRIMARY KEY,"
+        "  a TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),"
+        "  b TEXT NOT NULL DEFAULT (datetime('now'))"
+        ") STRICT"
+    )
+    running.execute("INSERT INTO stamps (id) VALUES ('x')")
+
+    assert _stamped(running) == [{"id": "x", "a": _after(1), "b": _after(1)}]
+
+
+def test_a_trigger_shares_its_statements_reading(running: Db) -> None:
+    running.execute(
+        "CREATE TABLE stamps ("
+        "  id TEXT NOT NULL PRIMARY KEY,"
+        "  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),"
+        "  touched_at TEXT"
+        ") STRICT"
+    )
+    running.execute(
+        "CREATE TRIGGER touch AFTER INSERT ON stamps BEGIN"
+        "  UPDATE stamps SET touched_at = datetime('now') WHERE id = NEW.id;"
+        " END"
+    )
+    running.execute("INSERT INTO stamps (id) VALUES ('x')")
+
+    assert _stamped(running) == [{"id": "x", "created_at": _after(1), "touched_at": _after(1)}]
+
+
+def test_every_row_of_a_multi_row_insert_shares_one_reading(running: Db) -> None:
+    running.execute("CREATE TABLE stamps (id TEXT NOT NULL PRIMARY KEY, at TEXT NOT NULL) STRICT")
+    running.execute(
+        "INSERT INTO stamps (id, at) VALUES ('a', CURRENT_TIMESTAMP), ('b', datetime()),"
+        " ('c', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+    )
+
+    assert {row["at"] for row in _stamped(running)} == {_after(1)}
+
+
+def test_the_same_statement_run_again_takes_a_later_reading(running: Db) -> None:
+    """The same text, so the second run reuses the cached prepared statement."""
+    first = running.one("SELECT CURRENT_TIMESTAMP AS at, datetime('now') AS again")
+    second = running.one("SELECT CURRENT_TIMESTAMP AS at, datetime('now') AS again")
+
+    assert first == {"at": _after(1), "again": _after(1)}
+    assert second == {"at": _after(2), "again": _after(2)}
+
+
+def test_each_executemany_binding_takes_its_own_reading(running: Db) -> None:
+    running.execute(
+        "CREATE TABLE stamps ("
+        "  id TEXT NOT NULL PRIMARY KEY,"
+        "  at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)"
+        ") STRICT"
+    )
+    running.executemany("INSERT INTO stamps (id) VALUES (?)", [("a",), ("b",), ("c",)])
+
+    assert [row["at"] for row in _stamped(running)] == [_after(1), _after(2), _after(3)]
+
+
+def test_a_statement_that_reads_no_time_takes_no_reading(running: Db) -> None:
+    running.one("SELECT 1 AS one")
+
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(1)}
+
+
+@pytest.mark.parametrize(("overridden_sql", "reference_sql"), EQUIVALENTS)
+def test_every_override_follows_a_moving_clock(
+    running: Db, plain: apsw.Connection, overridden_sql: str, reference_sql: str
+) -> None:
+    def expected(steps: int) -> Any:
+        return plain.execute(
+            f"SELECT {reference_sql}", (_after(steps),) * reference_sql.count("?")
+        ).get
+
+    assert running.conn.execute(f"SELECT {overridden_sql}").get == expected(1)
+    assert running.conn.execute(f"SELECT {overridden_sql}").get == expected(2)
+
+
+def test_a_sandboxed_statement_takes_a_fresh_reading(running: Db) -> None:
+    """The sandbox sets a cursor's `exec_trace`, which APSW runs in place of the connection's."""
+    running.execute("CREATE TABLE notes (id TEXT NOT NULL PRIMARY KEY) STRICT")
+
+    def sandboxed() -> Any:
+        result = run_statement(
+            running, "SELECT datetime('now') AS at", authorizer=Authorizer(("notes",))
+        )
+        return result.rows
+
+    assert sandboxed() == [[_after(1)]]
+    assert sandboxed() == [[_after(2)]]
+
+
+def test_another_trace_does_not_displace_the_clocks(running: Db) -> None:
+    seen: list[str] = []
+    running.conn.trace_v2(
+        apsw.SQLITE_TRACE_STMT, lambda event: seen.append(event["sql"]), id="someone else"
+    )
+
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(1)}
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(2)}
+    assert seen == ["SELECT CURRENT_TIMESTAMP AS at"] * 2
+
+
+def test_the_clock_trace_is_registered_under_its_id(running: Db) -> None:
+    """Removing it by that id is what `Db.conn` tells world code not to do."""
+    running.one("SELECT CURRENT_TIMESTAMP AS at")
+    running.conn.trace_v2(0, None, id=TRACE_ID)
+
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(1)}
+
+
+def test_a_failed_statements_reading_is_not_reused(running: Db) -> None:
+    """A statement that took a reading and then failed does not hand it to the next one."""
+    with pytest.raises(apsw.SQLError):
+        running.conn.execute("SELECT CURRENT_TIMESTAMP, abs(-9223372036854775807 - 1)").fetchall()
+
+    assert running.one("SELECT CURRENT_TIMESTAMP AS at") == {"at": _after(2)}

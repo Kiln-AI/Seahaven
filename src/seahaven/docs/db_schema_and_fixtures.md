@@ -216,7 +216,7 @@ world = seahaven.World(
     state_format="seahaven.state/1",
 )
 
-with world.instance(now="2026-06-01T09:00:00.000Z") as inst:
+with world.instance(now="2026-06-01T09:00:00.000Z", clock_mode="fixed") as inst:
     with inst.bulk() as ctx:
         ctx.db.executemany(
             "INSERT INTO notes (id, body) VALUES (?, ?)",

@@ -47,7 +47,7 @@ def link_out(fixture: Fixture, target: Path) -> None:
 
 
 def test_freeze_writes_a_directory_with_a_state_file_and_a_sidecar(world: World) -> None:
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
         add(instance, "n1")
 
         fixture = instance.freeze("start", "One note, for the tests that need one.")
@@ -61,7 +61,7 @@ def test_freeze_writes_a_directory_with_a_state_file_and_a_sidecar(world: World)
 
 
 def test_the_sidecar_carries_every_field(world: World) -> None:
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
         fixture = instance.freeze("start", "Empty.")
 
     written = sidecar_of(fixture)
@@ -124,13 +124,13 @@ def test_freezing_the_same_content_twice_gives_the_same_bytes(world: World) -> N
 
 
 def test_an_instance_can_be_made_from_what_freeze_wrote(world: World) -> None:
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
         add(instance, "n1", "frozen")
         instance.freeze("start", "One note.")
         # And the instance is still usable: `VACUUM INTO` leaves it alone.
         add(instance, "n2", "after the freeze")
 
-    with world.instance("start") as forked:
+    with world.instance("start", clock_mode="fixed") as forked:
         assert forked.inspect().rows("SELECT id FROM notes") == [{"id": "n1"}]
         assert forked.clock.iso() == INSTANT_ISO
 

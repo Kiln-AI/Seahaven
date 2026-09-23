@@ -65,6 +65,7 @@ class World:
         schema: str,
         *,
         state_format: str | None = None,
+        default_clock_mode: ClockMode = "running",
         description: str | None = None,
         mcp_server_name: str | None = None,
         mcp_server_instructions: str | None = None,

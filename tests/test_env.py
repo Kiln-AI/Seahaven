@@ -75,8 +75,8 @@ def env(world: World) -> SeahavenEnv:
 
 
 def make_fixture(world: World, fixture_id: str = "start") -> str:
-    """One fixture of a world, made the only way a fixture is ever made."""
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    """One fixture of a world, made the only way a fixture is ever made, at `INSTANT`."""
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
         instance.call("execute", sql="INSERT INTO notes VALUES ('n0', 'a body', 0)")
         instance.freeze(fixture_id, "One note.")
     return fixture_id
@@ -114,6 +114,7 @@ def test_the_environment_is_initialised_as_an_openenv_environment(env: SeahavenE
 # --- reset -----------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_reset_makes_an_instance_and_describes_it(env: SeahavenEnv, world: World) -> None:
     fixture_id = make_fixture(world)
     observation = env.reset(fixture=fixture_id)
@@ -154,6 +155,7 @@ def test_a_second_reset_destroys_the_first_instance(env: SeahavenEnv) -> None:
     assert first.closed
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_reset_without_a_fixture_is_a_blank_instance_at_the_wall_clock(env: SeahavenEnv) -> None:
     before = datetime.now(UTC)
     env.reset()
@@ -168,6 +170,7 @@ def test_reset_without_a_fixture_is_a_blank_instance_at_the_wall_clock(env: Seah
     assert instance.call("rows", sql="SELECT * FROM notes") == []
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_reset_with_now_puts_a_blank_instance_at_that_time(env: SeahavenEnv) -> None:
     observation = env.reset(now=INSTANT_ISO)
     assert observation.metadata == {"fixture": None, "now": INSTANT_ISO, "tools": 6}
@@ -780,6 +783,7 @@ def test_state_before_reset_runs_a_custom_pinned_formatter_with_no_instance(
     assert state.call_count == 0
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_state_after_reset_is_the_instances_document_and_the_step_count(
     env: SeahavenEnv,
 ) -> None:
@@ -810,6 +814,7 @@ def test_state_after_reset_carries_the_one_node_a_leaf_world_is(
     assert env.state.composition == {"main": leaf_node(world)}
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_state_after_reset_carries_the_fixture_and_the_clock(
     env: SeahavenEnv, world: World
 ) -> None:

@@ -99,6 +99,7 @@ def envelope(world: World, instance: Instance | None, format: str) -> dict[str, 
         "episode_id": instance.episode_id if instance is not None else None,
         "seed": instance.caller_seed if instance is not None else None,
         "now": instance.clock.iso() if instance is not None else None,
+        "clock_mode": instance.clock.mode if instance is not None else None,
         # Copied, not handed out: a caller that edits the document it was given
         # must not edit the instance, and every later read with it.
         "startup": copy.deepcopy(instance.startup) if instance is not None else None,

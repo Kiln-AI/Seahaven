@@ -147,6 +147,7 @@ def trivial_world(tmp_path: Path) -> Iterator[World]:
 # --- the section 7 flow, both clients --------------------------------------
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_typed_client_drives_a_session_end_to_end(world: World) -> None:
     fixture_id = _freeze(world)
     with serving(world) as url, SeahavenClient(base_url=url) as env:
@@ -205,6 +206,7 @@ def test_the_stock_client_drives_the_same_session(world: World) -> None:
         assert state["fixture"]["id"] == fixture_id
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_a_reset_frame_carries_its_facts_at_the_top_level_of_the_envelope(world: World) -> None:
     """The raw wire, with no client at all: `metadata` is a sibling of `observation`.
 
@@ -456,6 +458,7 @@ def expected_document(world: World, fixture_id: str) -> dict[str, Any]:
         "episode_id": "ep-1",
         "seed": 7,
         "now": INSTANT_ISO,
+        "clock_mode": "running",
         "startup": {"tenant": "globex"},
         "call_count": 1,
         "state": {
@@ -476,6 +479,7 @@ def expected_document(world: World, fixture_id: str) -> dict[str, Any]:
     }
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_whole_document_arrives_over_the_websocket(document_world: World) -> None:
     """Every field of `functional_spec.md` §3.1, with the value it has in process."""
     fixture_id = _freeze(document_world)
@@ -487,6 +491,7 @@ def test_the_whole_document_arrives_over_the_websocket(document_world: World) ->
     assert state.step_count == 1
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_stock_client_sees_the_same_document(document_world: World) -> None:
     """No Seahaven on the client side at all: the document is plain JSON.
 
@@ -509,6 +514,7 @@ def test_the_stock_client_sees_the_same_document(document_world: World) -> None:
     assert stock == document
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_the_document_over_the_wire_validates_against_the_published_schema(
     document_world: World,
 ) -> None:
@@ -578,6 +584,7 @@ def test_two_sessions_are_independent(world: World) -> None:
         assert first.state().episode_id != second.state().episode_id
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_an_unknown_startup_keyword_is_an_error_frame_and_the_session_survives(
     world: World,
 ) -> None:
@@ -649,6 +656,7 @@ def test_a_startup_keyword_sent_flat_reaches_no_hook(tmp_path: Path) -> None:
         assert env.state().startup == {}
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_a_stray_top_level_key_is_an_error_frame_and_the_session_survives(
     world: World,
 ) -> None:
@@ -687,6 +695,7 @@ def test_a_misspelled_framework_argument_is_refused_and_builds_nothing(world: Wo
         assert env.state()["fixture"]["id"] == fixture_id
 
 
+@pytest.mark.usefixtures("still_monotonic_time")
 def test_a_startup_that_is_not_a_dict_is_an_error_frame_and_the_session_survives(
     world: World,
 ) -> None:
@@ -1621,7 +1630,7 @@ def _request(url: str, *, method: str = "GET", data: bytes | None = None) -> tup
 
 
 def _freeze(world: World, fixture_id: str = "start") -> str:
-    with world.instance(None, now=INSTANT_ISO) as instance:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
         instance.call("execute", sql=insert("n0"))
         instance.freeze(fixture_id, "One note.")
     return fixture_id
