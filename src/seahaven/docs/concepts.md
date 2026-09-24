@@ -59,9 +59,10 @@ Arguments are validated **strictly** before the tool runs. `"5"` is not an `int`
 `bool`. An argument the tool does not declare is refused. Every violation is reported at once, so an
 agent can fix all of them in one turn instead of one per round trip.
 
-By default one call is one transaction. Seahaven begins it before the tool runs, commits it when the
-tool returns, and rolls it back if the tool raises. [authoring.md](authoring.md) covers tools in
-full.
+By default one call is one transaction (excluding
+[middleware](authoring.md#middleware-technical-notes)). Seahaven begins it before the tool runs,
+commits it when the tool returns, and rolls it back if the tool raises.
+[authoring.md](authoring.md) covers tools in full.
 
 ## Schema
 

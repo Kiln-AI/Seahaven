@@ -11,7 +11,7 @@ handler, middleware, startup hooks, the schema files, and the things that go wro
 | [What an MCP client reads](#what-an-mcp-client-reads) | The server name and the instruction string a world publishes |
 | [Writing a tool](#writing-a-tool) | Signatures, arguments, results, transactions, and what registration refuses |
 | [Errors](#errors) | This world's error shapes, the framework's own, and the error handler |
-| [Middleware](#middleware) | Wrapping every call |
+| [Middleware](#middleware) | What middleware is for, and how it runs |
 | [Instance startup](#instance-startup) | Setting an instance up before the first call |
 | [Adding another world](#adding-another-world) | The four authoring decisions composition asks of you |
 | [The schema files](#the-schema-files) | Where the SQL files go, and full-text search |
@@ -279,7 +279,8 @@ non-determinism this framework exists to prevent. The tool never sees the wire f
 
 ### Transactions
 
-By default **one call is one transaction**. Seahaven begins it before the tool runs, commits it when
+By default **one call is one transaction** (excluding
+[middleware](#middleware-technical-notes)). Seahaven begins it before the tool runs, commits it when
 the tool returns, and rolls it back if the tool raises. Nothing partial survives a tool that fails
 half way.
 
@@ -453,62 +454,54 @@ on the door.
 
 ## Middleware
 
-A middleware is anything callable as `(ctx, call, next_) -> result`. There is nothing to subclass;
-the shape is checked at registration. It may inspect or replace arguments, short-circuit, transform
-results, catch and re-raise errors, or time the call.
+A **middleware** is a function that wraps every tool call. It receives the call before the tool
+runs, decides whether and how to pass it on, and sees the result or the error on the way back. Use
+it for behaviour that applies to many tools, so that each tool does not repeat it.
 
-```python
-import logging
-from typing import Any
+A middleware is anything callable as `(ctx, call, next_) -> result`. It calls `next_(ctx, call)` to
+run the rest of the chain, and returns what it wants the caller to get. There is nothing to
+subclass; the shape is checked at registration.
 
-import seahaven
-
-world = seahaven.World(
-    name="notes",
-    version="1.0.0",
-    schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
-    state_format="seahaven.state/1",
-)
-seen: list[str] = []
-
-
+```py
 @world.middleware
-def audit(ctx: seahaven.Ctx, call: seahaven.Call, next_: seahaven.world.Handler) -> Any:
-    """Record every call, then run the rest of the chain."""
-    seen.append(call.name)
-    return next_(ctx, call)
-
-
-@world.middleware
-def default_the_body(ctx: seahaven.Ctx, call: seahaven.Call, next_: seahaven.world.Handler) -> Any:
-    """Fill in an argument the agent left out, before validation sees it."""
-    if call.name == "add_note" and "body" not in call.arguments:
-        call = call.with_arguments(body="(empty)")
-    return next_(ctx, call)
-
-
-@world.tool
-def add_note(ctx: seahaven.Ctx, body: str) -> dict[str, object]:
-    """Write a note down."""
-    return {"id": ctx.ids.uuid(), "body": body}
-
-
-with world.instance() as inst:
-    assert inst.call("add_note")["body"] == "(empty)"
-    assert seen == ["add_note"]
+def hide_database_errors(ctx: seahaven.Ctx, call: seahaven.Call, next_: Handler) -> Any:
+    """Turn a database failure into this product's own error."""
+    try:
+        return next_(ctx, call)
+    except seahaven.DbError as error:
+        raise Internal() from error
 ```
 
-- **Order is registration order, outermost first.** The error handler is registered first in the
-  scaffold and stays outermost.
-- `call` is always `ctx.call`. A layer that rewrites arguments passes the new `Call` on, and the
-  chain hands the next layer a `ctx` whose `call` is that one, so the two cannot diverge.
-- `call.with_arguments(**changes)` merges over the existing arguments and returns a copy. A `Call`
-  is frozen.
-- Middleware runs for every tool call, including the helpers' and an extension's. It does **not**
-  run for `UnknownTool`, for a tool listing, for startup hooks, or for the control tool.
-- Arguments are raw until validation runs, which happens inside the chain. A layer that wants typed
-  arguments first calls `call.tool.validate(call.arguments)` itself. The model is built once at
+Common uses:
+
+- **Mapping errors.** The [error handler](#the-error-handler) is a middleware. It turns everything
+  a tool raises into one of this world's error shapes.
+- **Access control and quotas.** Check a permission or a rate limit, and raise the product's error
+  without calling `next_`.
+- **Rewriting arguments.** Fill in a default or rename a field, then pass a new `Call` on with
+  `call.with_arguments(...)`.
+- **Shaping results.** Change what the tool returned, or render an error as the product's own
+  response document, as the [XML-RPC extension](extensions.md) does.
+- **Logging and timing.**
+
+### Middleware technical notes
+
+- **Order.** Middleware runs in registration order, outermost first. The scaffold registers the
+  error handler first, so it stays outermost and sees every error. In a world that adds other
+  worlds, the host's middleware runs first ([composition.md](composition.md#middleware)).
+- **Arguments.** Validation runs after the middleware, so a middleware sees the arguments as sent.
+  Call `call.tool.validate(call.arguments)` for typed ones. The model is built once at
   registration, so that is cheap.
+- **`call` is always `ctx.call`.** A layer that rewrites arguments passes the new `Call` on, and
+  the chain hands the next layer a `ctx` whose `call` is that one, so the two cannot diverge.
+  `call.with_arguments(**changes)` merges over the existing arguments and returns a copy. A `Call`
+  is frozen.
+- **Transactions.** Middleware runs outside the tool's transaction, so its writes commit even when
+  the tool rolls back. Wrap `next_` in `ctx.db.transaction()` to make them commit or roll back
+  together.
+- **What it wraps.** Middleware runs for every tool call, including the helpers' and an
+  extension's. It does not run for `UnknownTool`, a tool listing, startup hooks or the control
+  tool.
 
 ## Instance startup
 
