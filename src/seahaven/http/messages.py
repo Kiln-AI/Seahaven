@@ -6,6 +6,7 @@ installed. Standard library only.
 """
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,11 @@ __all__ = ["Headers", "HttpHandler", "HttpRequest", "HttpResponse"]
 type Headers = tuple[tuple[str, str], ...]
 
 JSON_CONTENT_TYPE = "application/json"
+
+# RFC 9110's `token`, which is what a header name is.
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+_BODILESS = frozenset({204, 304})
+_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
 
 
 @dataclass(frozen=True)
@@ -67,6 +73,9 @@ class HttpResponse:
         _check_headers(self.headers)
         if not isinstance(self.body, bytes | str):
             raise TypeError(f"an HttpResponse body is bytes or str, not {type(self.body).__name__}")
+        # The HTTP server sends no body for these, and closes the connection on one.
+        if self.status in _BODILESS and self.body:
+            raise ValueError(f"an HttpResponse with status {self.status} has no body")
 
     @classmethod
     def json(cls, data: Any, *, status: int = 200, headers: Headers = ()) -> HttpResponse:
@@ -89,8 +98,9 @@ def _check_status(status: object) -> None:
     # `bool` is a subclass of `int`, and `True` is never a status anyone meant.
     if isinstance(status, bool) or not isinstance(status, int):
         raise TypeError(f"an HttpResponse status is an int, not {type(status).__name__}")
-    if not 100 <= status <= 599:
-        raise ValueError(f"an HttpResponse status is from 100 to 599, not {status}")
+    # A 1xx is an interim response, which the server cannot send as the answer.
+    if not 200 <= status <= 599:
+        raise ValueError(f"an HttpResponse status is from 200 to 599, not {status}")
 
 
 def _check_headers(headers: object) -> None:
@@ -106,14 +116,23 @@ def _check_headers(headers: object) -> None:
             and isinstance(pair[1], str)
         ):
             raise TypeError(f"an HttpResponse header is a (str, str) pair, not {pair!r}")
-        for text in pair:
-            # A CR or LF would end the header line early and let the rest be read
-            # as another header; HTTP/1.1 carries header bytes as latin-1.
-            if "\r" in text or "\n" in text:
-                raise ValueError(f"an HttpResponse header has a CR or LF in it: {pair!r}")
-            try:
-                text.encode("latin-1")
-            except UnicodeEncodeError:
-                raise ValueError(
-                    f"an HttpResponse header must be encodable as latin-1, which {pair!r} is not"
-                ) from None
+        name, value = pair
+        if not _TOKEN.fullmatch(name):
+            raise ValueError(
+                f"an HttpResponse header name is letters, digits and !#$%&'*+-.^_`|~, not {name!r}"
+            )
+        # A CR or LF would end the header line early and let the rest be read as
+        # another header, and the HTTP server refuses the other control
+        # characters and whitespace at either end.
+        if _CONTROL.search(value) or value != value.strip(" \t"):
+            raise ValueError(
+                "an HttpResponse header value has no control characters other than tab, "
+                f"and no space or tab at either end: {pair!r}"
+            )
+        # HTTP/1.1 carries header bytes as latin-1.
+        try:
+            value.encode("latin-1")
+        except UnicodeEncodeError:
+            raise ValueError(
+                f"an HttpResponse header must be encodable as latin-1, which {pair!r} is not"
+            ) from None

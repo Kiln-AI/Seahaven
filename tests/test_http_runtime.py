@@ -23,6 +23,7 @@ from seahaven.http.runtime import (
     SERVER_OPTIONS,
     CapacityReached,
     CreationFailed,
+    DestroyFailed,
     Registry,
     check_reset_options,
     dispatch,
@@ -320,6 +321,59 @@ def test_close_destroys_every_instance(make_registry: MakeRegistry) -> None:
     registry.close()
     assert all(instance.closed and not instance.dir.exists() for instance in instances)
     assert registry._slots == {}
+
+
+def fail_destroy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make `destroy` do its work and then raise, as a failure to remove a directory would."""
+    real = Instance.destroy
+
+    def destroy(self: Instance) -> None:
+        real(self)
+        raise OSError("the disk went away")
+
+    monkeypatch.setattr(Instance, "destroy", destroy)
+
+
+def test_a_failed_destroy_on_put_leaves_the_id_empty_and_frees_its_place(
+    make_registry: MakeRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = make_registry(max_instances=1)
+    old = registry.run("a", the_instance)
+    with monkeypatch.context() as patch:
+        fail_destroy(patch)
+        with pytest.raises(DestroyFailed) as raised:
+            registry.put("a", {})
+    assert isinstance(raised.value.cause, OSError)
+    assert old.closed
+    assert registry._slots == {}
+    registry.run("b", the_instance)
+
+
+def test_a_failed_destroy_on_delete_still_deletes(
+    make_registry: MakeRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = make_registry(max_instances=1)
+    old = registry.run("a", the_instance)
+    with monkeypatch.context() as patch:
+        fail_destroy(patch)
+        with pytest.raises(DestroyFailed):
+            registry.delete("a")
+    assert registry._slots == {}
+    assert registry.delete("a") is False
+    assert registry.run("a", the_instance) is not old
+
+
+def test_close_logs_a_failed_destroy_and_goes_on(
+    make_registry: MakeRegistry, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    registry = make_registry()
+    instances = [registry.run(id, the_instance) for id in ("a", "b")]
+    fail_destroy(monkeypatch)
+    registry.close()
+    assert all(instance.closed for instance in instances)
+    assert registry._slots == {}
+    logged = [each.getMessage() for each in caplog.records if each.name == "seahaven.http"]
+    assert logged == ["could not destroy instance a", "could not destroy instance b"]
 
 
 # -- Registry: seeds and the clock -----------------------------------------------------------------

@@ -28,6 +28,7 @@ __all__ = [
     "SERVER_OPTIONS",
     "CapacityReached",
     "CreationFailed",
+    "DestroyFailed",
     "Registry",
     "check_reset_options",
     "dispatch",
@@ -63,6 +64,17 @@ class CapacityReached(Exception):
 
 class CreationFailed(Exception):
     """`world.instance(...)` raised. `cause` is what it raised."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+class DestroyFailed(Exception):
+    """`instance.destroy()` raised. `cause` is what it raised.
+
+    The ID holds no instance afterwards, as if the destroy had succeeded.
+    """
 
     def __init__(self, cause: Exception) -> None:
         super().__init__(str(cause))
@@ -142,7 +154,7 @@ class Registry:
 
         A body key set to `None` removes that key. Answers whether the instance
         was created rather than replaced. A replaced instance is gone even when
-        its replacement fails.
+        destroying it or creating its replacement fails.
         """
         options = {
             key: value
@@ -156,7 +168,11 @@ class Registry:
                     continue
                 existed = slot.instance is not None
                 if existed:
-                    self._discard(slot)
+                    try:
+                        self._discard(slot)
+                    except DestroyFailed:
+                        self._retire(id, slot)
+                        raise
                 slot.instance = self._create(id, slot, options)
                 return not existed
 
@@ -169,8 +185,10 @@ class Registry:
         with slot.lock:
             if slot.retired or slot.instance is None:
                 return False
-            self._discard(slot)
-            self._retire(id, slot)
+            try:
+                self._discard(slot)
+            finally:
+                self._retire(id, slot)
             return True
 
     def close(self) -> None:
@@ -184,7 +202,7 @@ class Registry:
                 if slot.instance is not None:
                     try:
                         self._discard(slot)
-                    except Exception:
+                    except DestroyFailed:
                         _log.exception("could not destroy instance %s", id)
                 self._retire(id, slot)
 
@@ -237,11 +255,16 @@ class Registry:
         return instance
 
     def _discard(self, slot: _Slot) -> None:
-        """Destroy the slot's instance and free its place. The slot lock is held."""
+        """Destroy the slot's instance and free its place. The slot lock is held.
+
+        The slot holds no instance afterwards, even when this raises.
+        """
         instance, slot.instance = slot.instance, None
         try:
             if instance is not None:
                 instance.destroy()
+        except Exception as error:
+            raise DestroyFailed(error) from error
         finally:
             self._release()
 

@@ -100,12 +100,24 @@ def handle(ctx: seahaven.Ctx, request: HttpRequest) -> HttpResponse:
                     ("set-cookie", "a=1"),
                     ("set-cookie", "b=2"),
                     ("content-length", "9999"),
+                    ("transfer-encoding", "gzip"),
                 ),
             )
         case "GET", ["context"]:
             return HttpResponse.json({"call_is_none": ctx.call is None, "now": ctx.clock.iso()})
+        case "GET", ["respond"]:
+            # The response the query describes, so a test can try what a handler might send.
+            asked = {
+                key: values[0]
+                for key, values in parse_qs(request.query, keep_blank_values=True).items()
+            }
+            return HttpResponse(
+                int(asked["status"]), headers=((asked["name"], asked["value"]),), body="made"
+            )
         case _:
-            return _error(404, "no_route")
+            return HttpResponse.json(
+                {"error": {"type": "no_route", "path": request.path}}, status=404
+            )
 
 
 def _insert(ctx: seahaven.Ctx, body: str) -> dict[str, Any]:

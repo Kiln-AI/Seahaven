@@ -73,7 +73,8 @@ def test_the_defaults_are_an_empty_200() -> None:
 @pytest.mark.parametrize(
     ("fields", "error", "words"),
     [
-        ({"status": 99}, ValueError, "from 100 to 599, not 99"),
+        ({"status": 199}, ValueError, "from 200 to 599, not 199"),
+        ({"status": 100}, ValueError, "not 100"),
         ({"status": 600}, ValueError, "not 600"),
         ({"status": True}, TypeError, "an int, not bool"),
         ({"status": 200.0}, TypeError, "an int, not float"),
@@ -81,11 +82,23 @@ def test_the_defaults_are_an_empty_200() -> None:
         ({"headers": (("a", "b", "c"),)}, TypeError, "a (str, str) pair"),
         ({"headers": (("a", 1),)}, TypeError, "a (str, str) pair"),
         ({"headers": ((b"a", "b"),)}, TypeError, "a (str, str) pair"),
-        ({"headers": (("a\r\nb", "c"),)}, ValueError, "CR or LF"),
-        ({"headers": (("a", "b\nx-injected: 1"),)}, ValueError, "CR or LF"),
+        ({"headers": (("", "c"),)}, ValueError, "header name is letters, digits"),
+        ({"headers": (("a b", "c"),)}, ValueError, "not 'a b'"),
+        ({"headers": (("a:b", "c"),)}, ValueError, "not 'a:b'"),
+        ({"headers": (("a\r\nb", "c"),)}, ValueError, "header name"),
+        ({"headers": (("é", "c"),)}, ValueError, "header name"),
+        ({"headers": (("a", "b\nx-injected: 1"),)}, ValueError, "no control characters"),
+        ({"headers": (("a", "b\r"),)}, ValueError, "no control characters"),
+        ({"headers": (("a", "b\x00"),)}, ValueError, "no control characters"),
+        ({"headers": (("a", "b\x0bc"),)}, ValueError, "no control characters"),
+        ({"headers": (("a", "b\x7f"),)}, ValueError, "no control characters"),
+        ({"headers": (("a", " b"),)}, ValueError, "no space or tab at either end"),
+        ({"headers": (("a", "b\t"),)}, ValueError, "no space or tab at either end"),
         ({"headers": (("a", "Zoë ☃"),)}, ValueError, "latin-1"),
         ({"body": {"a": 1}}, TypeError, "bytes or str, not dict"),
         ({"body": None}, TypeError, "not NoneType"),
+        ({"status": 204, "body": "x"}, ValueError, "with status 204 has no body"),
+        ({"status": 304, "body": b"x"}, ValueError, "with status 304 has no body"),
     ],
 )
 def test_a_response_is_checked_at_construction(
@@ -96,8 +109,32 @@ def test_a_response_is_checked_at_construction(
     assert words in str(raised.value)
 
 
-def test_a_latin1_header_value_is_accepted() -> None:
-    assert HttpResponse(headers=(("x-name", "Zoë"),)).headers == (("x-name", "Zoë"),)
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("x-name", "Zoë"),
+        ("x-tabbed", "a\tb c"),
+        ("x-empty", ""),
+        ("!#$%&'*+-.^_`|~09AZaz", "v"),
+    ],
+)
+def test_a_header_the_server_can_send_is_accepted(name: str, value: str) -> None:
+    assert HttpResponse(headers=((name, value),)).headers == ((name, value),)
+
+
+def test_a_json_response_with_no_body_status_is_refused() -> None:
+    with pytest.raises(ValueError, match="with status 204 has no body"):
+        HttpResponse.json({"a": 1}, status=204)
+
+
+@pytest.mark.parametrize("status", [204, 304])
+def test_an_empty_body_is_accepted_with_no_body_status(status: int) -> None:
+    assert HttpResponse(status).body_bytes == b""
+
+
+@pytest.mark.parametrize("status", [200, 599])
+def test_the_status_bounds_are_accepted(status: int) -> None:
+    assert HttpResponse(status).status == status
 
 
 def test_both_types_are_frozen() -> None:
