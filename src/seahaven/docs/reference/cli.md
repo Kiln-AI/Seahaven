@@ -3,7 +3,8 @@
 The whole command tree, as a synopsis. Every command is spelled out below it.
 
 ```text
-seahaven new <name> [--dir <path>] [--hub]
+seahaven new <name> [--dir <path>]
+seahaven hub
 seahaven check [--world module:attr]
 seahaven docs
 seahaven fixture list [--world module:attr]
@@ -24,6 +25,7 @@ argparse's own usage error and exits 2.
 | Command | What it does |
 |---|---|
 | [`seahaven new`](#seahaven-new-name) | scaffold a world |
+| [`seahaven hub`](#seahaven-hub) | add the files a world needs to publish to a hub |
 | [`seahaven check`](#seahaven-check) | run every lint |
 | [`seahaven docs`](#seahaven-docs) | print the bundled docs directory |
 | [`seahaven fixture list`](#seahaven-fixture-list) | every fixture of this world |
@@ -34,10 +36,11 @@ argparse's own usage error and exits 2.
 
 ## Finding the world
 
-Every command except `new` and `docs` acts on a world, and finds it the same way: the nearest
+Every command except `new`, `hub` and `docs` acts on a world, and finds it the same way: the nearest
 `pyproject.toml` from the working directory, the package its `[project] name` normalises to, and the
 attribute `world` on that package. A package that is not importable, or whose `world` is missing or
-is not a `seahaven.World`, is an error naming the package and the fix.
+is not a `seahaven.World`, is an error naming the package and the fix. `seahaven hub` finds the
+project the same way, but reads only `pyproject.toml` and does not import the world.
 
 `--world module:attr` overrides the convention for a layout it misses. `--world mypkg.world:world`
 names the module the `World` is built in, and the lints climb out of it to the package around it,
@@ -57,14 +60,13 @@ the generator script. No fixture is built and nothing is imported.
 | Option | What it does |
 |---|---|
 | `--dir <path>` | the directory to create the world in; the default is here |
-| `--hub` | also write the five files `openenv push` requires: `openenv.yaml`, a root `Dockerfile`, a root `__init__.py`, `client.py` and `models.py`; start `README.md` with a Hugging Face Space's settings, and add a section on connecting to the world |
 
 The package name is the world's name, normalised. `AGENTS.md` is written once and never touched
 again. It is an ordinary file the world owns, and it points an authoring agent at these docs.
 
 ```sh
 seahaven new notes
-seahaven new notes --dir ~/projects --hub
+seahaven new notes --dir ~/projects
 ```
 
 The command refuses an existing directory rather than merging into one. It also refuses a name that
@@ -76,11 +78,35 @@ The command finishes by printing what to do next. While Seahaven is unpublished,
 that list is a trap: the scaffold's `seahaven~=0.0` resolves to a placeholder release that contains
 none of the framework, so the sync succeeds and the world fails at import with `ModuleNotFoundError:
 No module named 'seahaven.world'`. `seahaven check` itself cannot start either, because the
-placeholder ships no console script. Install the framework from a checkout until publication. The
-same applies to `--hub`: the `Dockerfile` it writes runs `uv sync --extra serve`, which today builds
-an image whose container cannot start.
+placeholder ships no console script. Install the framework from a checkout until publication.
 
-A `--hub` world differs from the environment `openenv init` makes in three ways:
+## `seahaven hub`
+
+Adds what a world needs to publish to a hub, such as a Hugging Face Space. Run it in a world that
+`seahaven new` made:
+
+```sh
+seahaven new notes
+cd notes
+seahaven hub
+```
+
+The command writes the five files `openenv push` requires at the world's root: `openenv.yaml`, a
+`Dockerfile`, an `__init__.py`, `client.py` and `models.py`. It adds a Space's settings as front
+matter at the top of `README.md`, and a section on connecting to the published world after the
+`## Using it` section, or at the end of a README that has no such section. A missing `README.md` is
+created with both. [Publishing to a hub](../serving_and_openenv.md#publishing-to-a-hub) explains
+the settings and the image.
+
+The command never overwrites. It checks every file first, and if one of the five exists, or
+`README.md` already has front matter or the connecting section, it names each one and writes
+nothing. It also refuses a world with no `src/<package>/openenv_app.py`, because the `Dockerfile`
+and `openenv.yaml` serve `<package>.openenv_app:app`.
+
+While Seahaven is unpublished, the `Dockerfile` does not build a working image: its
+`uv sync --extra serve` installs the same placeholder release as `uv sync` does for `seahaven new`.
+
+A world with the hub files differs from the environment `openenv init` makes in three ways:
 
 - `openenv.yaml` has no `validation:` block, so `openenv validate` reports one failure,
   ``openenv.yaml has no `validation:` block``. The block declares a reward range and a reward

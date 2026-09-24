@@ -29,7 +29,7 @@ learn. A person working against a world by hand has a third command,
 | [The wire protocol](#the-wire-protocol) | Every frame and model, for a client in any language |
 | [The concurrency gate](#the-concurrency-gate) | What bounds tool calls, and a known defect in it |
 | [Running it in production](#running-it-in-production) | Reaping, disconnects, and scaling out |
-| [Publishing to a hub](#publishing-to-a-hub) | `seahaven new --hub`, connecting with `AutoEnv.from_hub`, and the image |
+| [Publishing to a hub](#publishing-to-a-hub) | `seahaven hub`, connecting with `AutoEnv.from_hub`, and the image |
 | [Evaluating with Kiln](#evaluating-with-kiln) | Where the scenario and the grader belong |
 | [Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) | `seahaven mcp`, and who it is for |
 | [Known problems in OpenEnv](#known-problems-in-openenv) | Routes Seahaven refuses, and why |
@@ -561,12 +561,17 @@ Seahaven does not ship keeps OpenEnv's 20 seconds.
 A world can be published as an OpenEnv environment, on a Hugging Face Space or as a Docker image,
 and driven by anyone with an OpenEnv client.
 
-`seahaven new --hub` adds the five files `openenv push` validates a directory for: `openenv.yaml`, a
-root `Dockerfile`, a root `__init__.py`, `client.py` and `models.py`. It also starts `README.md`
-with the settings a Space reads, and adds a section that tells a visitor how to connect. A world
-that does not publish to a hub carries none of this.
-[`seahaven new`](reference/cli.md#seahaven-new-name) lists where the scaffold differs from
-OpenEnv's own.
+Run `seahaven hub` in the world's directory to add what publishing needs:
+
+```sh
+seahaven hub
+```
+
+The command adds the five files `openenv push` validates a directory for: `openenv.yaml`, a root
+`Dockerfile`, a root `__init__.py`, `client.py` and `models.py`. It also starts `README.md` with the
+settings a Space reads, and adds a section that tells a visitor how to connect. It never replaces
+anything already there. A world that does not publish to a hub carries none of this.
+[`seahaven hub`](reference/cli.md#seahaven-hub) lists where the result differs from OpenEnv's own.
 
 In those settings, `sdk: docker` makes the Space run the image. `app_port: 8000` sends the Space's
 traffic to the port the server listens on. `base_path: /console` opens the Space's page on the

@@ -1,6 +1,6 @@
-"""A `seahaven new --hub` scaffold, judged by OpenEnv's own code.
+"""A world after `seahaven new` and `seahaven hub`, judged by OpenEnv's own code.
 
-`test_cli_new.py` asserts what the scaffold contains. This module asserts what
+`test_cli_hub.py` asserts what `seahaven hub` writes. This module asserts what
 upstream does with it: `openenv validate`, the structure check `openenv push`
 runs, the `app:` field and Dockerfile `CMD` the container providers read, the
 front matter a Hugging Face Space reads, and the consumer call the docs name,
@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from seahaven.cli.hub import add_hub_files
 from seahaven.cli.new import render
 
 pytest.importorskip(
@@ -48,8 +49,9 @@ NO_VALIDATION_BLOCK = "openenv.yaml has no `validation:` block"
 
 @pytest.fixture
 def published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A hub scaffold, importable the way `uv sync` makes it inside the image."""
-    root = render(WORLD, tmp_path / WORLD, hub=True)
+    """A world with the hub files, importable the way `uv sync` makes it inside the image."""
+    root = render(WORLD, tmp_path / WORLD)
+    add_hub_files(root)
     monkeypatch.syspath_prepend(str(root / "src"))
     return root
 

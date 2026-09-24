@@ -1,6 +1,6 @@
 """`seahaven`: the command, its parser, and how it finds a world.
 
-Six subcommands, one module each, and nothing in any of them that is not
+Seven subcommands, one module each, and nothing in any of them that is not
 argument parsing, world discovery or output. The work is done by code that
 already exists -- `World.instance`, `Instance.freeze`, `seahaven.openenv.serve`,
 `seahaven.lint` -- which is what keeps the CLI from becoming a second API beside
@@ -38,7 +38,17 @@ from types import ModuleType
 from seahaven.errors import SeahavenError
 from seahaven.world import DDL_DOES_NOT_EXECUTE, World
 
-__all__ = ["CliError", "Discovery", "build_parser", "discover", "find_world", "main"]
+__all__ = [
+    "CliError",
+    "Discovery",
+    "build_parser",
+    "discover",
+    "find_world",
+    "main",
+    "package_name",
+    "project_name",
+    "project_root",
+]
 
 PROJECT_FILE = "pyproject.toml"
 SOURCE_DIRNAME = "src"
@@ -99,11 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
     """
     # Imported here rather than at module top: every subcommand module imports
     # this one for `CliError` and `find_world`.
-    from seahaven.cli import check, docs, fixture, mcp, new, serve
+    from seahaven.cli import check, docs, fixture, hub, mcp, new, serve
 
     parser = argparse.ArgumentParser(prog="seahaven", description="Build and run Seahaven worlds.")
     subcommands = parser.add_subparsers(dest="command", required=True, metavar="<command>")
-    for module in (new, check, docs, fixture, serve, mcp):
+    for module in (new, hub, check, docs, fixture, serve, mcp):
         module.add_parser(subcommands)
     return parser
 
@@ -157,24 +167,27 @@ def discover(explicit: str | None, start: Path | None = None) -> Discovery:
         module_name, attribute = _split_world_option(explicit)
         _make_importable(start, start / SOURCE_DIRNAME)
         return _import(module_name, attribute, root=start)
-    root = _project_root(start)
+    root = project_root(start)
     _make_importable(root, root / SOURCE_DIRNAME)
-    return _import(_package_name(root), WORLD_ATTRIBUTE, root=root)
+    return _import(package_name(project_name(root)), WORLD_ATTRIBUTE, root=root)
 
 
-def _project_root(start: Path) -> Path:
-    """The nearest directory at or above `start` holding a `pyproject.toml`."""
+def project_root(start: Path, *, remedy: str = _OVERRIDE) -> Path:
+    """The nearest directory at or above `start` holding a `pyproject.toml`.
+
+    `remedy` ends the refusal, for a command that has no `--world` to offer.
+    """
     for directory in (start, *start.parents):
         if (directory / PROJECT_FILE).is_file():
             return directory
     raise CliError(
         f"no {PROJECT_FILE} in {start} or any directory above it, so there is no world here; "
-        f"run seahaven from inside a world's project, {_OVERRIDE}"
+        f"run seahaven from inside a world's project, {remedy}"
     )
 
 
-def _package_name(root: Path) -> str:
-    """The package a project's `[project] name` normalises to."""
+def project_name(root: Path, *, remedy: str = _OVERRIDE) -> str:
+    """The `[project] name` of the project at `root`, as written."""
     path = root / PROJECT_FILE
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -182,10 +195,8 @@ def _package_name(root: Path) -> str:
         raise CliError(f"{path}: cannot be read as TOML: {error}") from error
     name = data.get("project", {}).get("name")
     if not isinstance(name, str) or not name:
-        raise CliError(
-            f"{path} has no [project] name, so there is no package to import; {_OVERRIDE}"
-        )
-    return package_name(name)
+        raise CliError(f"{path} has no [project] name, so there is no package to import; {remedy}")
+    return name
 
 
 def package_name(name: str) -> str:
