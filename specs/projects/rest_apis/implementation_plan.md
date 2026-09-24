@@ -13,5 +13,5 @@ status: complete
       tests (architecture §2.1, §5, §8.4)
 - [x] Phase 3: the `seahaven/cli/mcp.py` split, `command.py` (`main`), its tests and the process
       test (architecture §6, §8.5)
-- [ ] Phase 4: the docs page `http_apis.md`, the `reference/api.md` section, the links from
+- [x] Phase 4: the docs page `http_apis.md`, the `reference/api.md` section, the links from
       `index.md` and `serving_and_openenv.md`, and `tests/test_docs.py` (architecture §8.7, §9)

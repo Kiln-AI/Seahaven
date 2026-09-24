@@ -51,6 +51,7 @@ from typing import Any
 import pytest
 
 import seahaven
+import seahaven.http as seahaven_http
 from seahaven import cli
 from seahaven.cli.docs import docs_path
 
@@ -382,6 +383,11 @@ _STUB_PAGE = "reference/api.md"
 # honest in both directions.
 _SERVE_EXTRA_NAMES = frozenset({"SeahavenClient", "app"})
 
+# A section of that page that documents one module's own names, whose stubs are
+# looked up in that module alone. `seahaven.http.app` and `seahaven.openenv.app`
+# share a name, and the search above would compare the one with the other.
+_SECTION_NAMESPACES = {"## `seahaven.http`": "seahaven.http"}
+
 
 def test_every_documented_signature_matches_the_code(receivers: dict[str, object]) -> None:
     """A stub signature in the reference, parameter by parameter, against the real one.
@@ -434,6 +440,12 @@ def _resolve_stub(block: Block, name: str) -> Any:
     does not import; everywhere else a name that does not resolve is the
     hallucination this check exists for.
     """
+    section_module = _SECTION_NAMESPACES.get(_section_of(block))
+    if section_module is not None:
+        module = importlib.import_module(section_module)
+        if not hasattr(module, name):
+            pytest.fail(f"{block} documents {name}, which {section_module} does not have")
+        return getattr(module, name)
     for module_name in _SIGNATURE_NAMESPACES:
         module = importlib.import_module(module_name)
         if hasattr(module, name):
@@ -449,6 +461,23 @@ def _resolve_stub(block: Block, name: str) -> Any:
         f"{block} documents {name}, which is not in {', '.join(_SIGNATURE_NAMESPACES)}",
         pytrace=False,
     )
+
+
+def _section_of(block: Block) -> str:
+    """The `## ` heading the block is under, or `""` above the first one."""
+    above = text_of(DOCS / block.page).splitlines()[: block.line]
+    return next((line for line in reversed(above) if line.startswith("## ")), "")
+
+
+def test_a_stub_is_looked_up_in_the_module_its_section_documents() -> None:
+    """`app` under `seahaven.http` is that module's, and under `seahaven.openenv` is not."""
+    stubs = {
+        _section_of(block): _resolve_stub(block, "app")
+        for block in FRAGMENTS
+        if block.page == _STUB_PAGE and "def app(" in block.source
+    }
+    assert stubs["## `seahaven.http`"] is seahaven_http.app
+    assert stubs["## `seahaven.openenv` (the `serve` extra)"] is not seahaven_http.app
 
 
 def _check_annotated_member(

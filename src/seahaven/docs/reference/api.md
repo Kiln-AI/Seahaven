@@ -2,8 +2,8 @@
 
 The public API is the names exported from `seahaven`, the `seahaven.helpers`, `seahaven.sandbox` and
 `seahaven.fixtures` modules, the type aliases in `seahaven.world`, `seahaven.openenv` (in the
-`serve` extra), and the pytest plugin's two fixtures. A name that is not below is internal and may
-change without notice.
+`serve` extra), `seahaven.http`, and the pytest plugin's two fixtures. A name that is not below is
+internal and may change without notice.
 
 | Section | What it covers |
 |---|---|
@@ -20,6 +20,7 @@ change without notice.
 | [`seahaven.helpers`](#seahavenhelpers) | `run_sql` and `describe_schema` |
 | [`seahaven.sandbox`](#seahavensandbox) | Agent SQL containment |
 | [`seahaven.openenv`](#seahavenopenenv-the-serve-extra) | The server and the client |
+| [`seahaven.http`](#seahavenhttp) | A world's HTTP handler, and the server for it |
 | [The pytest plugin](#the-pytest-plugin) | Two fixtures, one marker, one option |
 | [The concurrency gate](#the-concurrency-gate) | `set_concurrency` and friends |
 | [Middleware and hook types](#middleware-and-hook-types) | `Handler`, `Middleware` and `StartupHook` |
@@ -614,6 +615,72 @@ OpenEnv's own `{error_type, message}` model and its `seahaven_error` is the worl
 process.
 
 See [../serving_and_openenv.md](../serving_and_openenv.md) and [../state.md](../state.md).
+
+## `seahaven.http`
+
+A world's HTTP handler, and the server that serves it. The types need no extra. `app`, `serve` and
+`main` need the `serve` extra. Without it, `app` and `serve` raise `ImportError(MISSING_EXTRA)`, and
+`main` writes that message to stderr and exits 1. See [../http_apis.md](../http_apis.md).
+
+```py
+class HttpRequest:
+    def __init__(self, method, path, query="", headers=(), body=b"") -> None: ...
+    def header(self, name): ...  # the first value of the header, or None; any case of name
+    def json(self): ...  # the body parsed as JSON
+
+
+class HttpResponse:
+    def __init__(self, status=200, headers=(), body=b"") -> None: ...
+    @classmethod
+    def json(cls, data, *, status=200, headers=()): ...  # adds content-type unless headers set one
+
+    body_bytes: bytes  # the body as sent: a str body UTF-8 encoded
+
+
+type HttpHandler = Callable[[Ctx[Any], HttpRequest], HttpResponse]
+
+
+def app(world, handler, *, reset_options=None, max_instances=DEFAULT_MAX_INSTANCES) -> ASGIApp: ...
+def serve(
+    world,
+    handler,
+    *,
+    host=DEFAULT_HOST,
+    port=DEFAULT_PORT,
+    reset_options=None,
+    max_instances=DEFAULT_MAX_INSTANCES,
+) -> None: ...
+def main(world, handler, argv=None) -> None: ...  # the command line of serve_http.py
+
+
+DEFAULT_HOST: str  # "127.0.0.1"
+DEFAULT_PORT: int  # 8000
+DEFAULT_MAX_INSTANCES: int  # 100; 0 means no limit
+MISSING_EXTRA: str
+```
+
+Both types are frozen dataclasses. `HttpRequest` stores the method in upper case and header names in
+lower case. `HttpResponse` refuses, with a `TypeError` or `ValueError` when it is made, what the
+HTTP server cannot send: a status outside 200 to 599, a header name that is not an HTTP token, a
+header value with a control character other than tab, with a space or tab at either end, or that is
+not latin-1, a body that is not `bytes` or `str`, and a body on a `204` or `304`. The server sets
+`content-length` from the body itself, and drops a `content-length` or `transfer-encoding` header
+the handler sets.
+
+`reset_options` are the reset options each instance is created with, the keys
+`seahaven mcp --reset-options` takes. `app` checks them when it is called, and raises `WorldBug` for
+an unknown key, `control_tools`, or a fixture the world does not have. `serve` prints the base URL
+and runs `app` under uvicorn with one worker.
+
+The statuses the server answers itself, each with the body `{"seahaven_error": "<message>"}`:
+
+| Status | When |
+|---|---|
+| `400` | the instance ID is not 1 to 64 letters, digits, `-` and `_`; a `PUT` body is not a JSON object, names a key `--reset-options` does not take or `control_tools`, or has options `world.instance(...)` refuses |
+| `404` | the path is not under `/worlds/`; a `DELETE` names an ID that has no instance |
+| `405` | a method other than `PUT` or `DELETE` on `/worlds/{id}`, with an `allow` header |
+| `500` | the handler raised or did not return an `HttpResponse`; an instance could not be created, replaced or destroyed. The traceback goes to the `seahaven.http` logger |
+| `503` | creating an instance would pass `max_instances` |
 
 ## The pytest plugin
 

@@ -16,6 +16,8 @@ WebSocket endpoint `/ws`. A harness has no third transport and no Seahaven-speci
 learn. A person working against a world by hand has a third command,
 [`seahaven mcp`](#serving-one-world-to-an-mcp-client), which puts one world in front of one
 [MCP](https://modelcontextprotocol.io) client such as an editor or a chat client.
+A world that copies a product's HTTP API can also serve that API as a test server, which
+[http_apis.md](http_apis.md) describes.
 
 | Section | What it covers |
 |---|---|

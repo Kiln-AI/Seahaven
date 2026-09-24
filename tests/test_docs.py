@@ -31,6 +31,7 @@ PAGES = (
     "testing.md",
     "state.md",
     "serving_and_openenv.md",
+    "http_apis.md",
     "extensions.md",
     "projecttracker.md",
     "reference/api.md",
