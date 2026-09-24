@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # REST APIs
@@ -43,3 +43,22 @@ A `@seahaven.tool` can call the API handler, and that is often all a tool wrappe
 
 - It should be implemented fairly isolated: a nearly completely separate, opt-in feature, plus CLI
   hooks.
+
+## Revised scope (from discussion)
+
+Tool first; HTTP is a side benefit. For this version Seahaven ships a server helper only:
+
+- Define the handler contract: `(ctx, request) -> response`, with Seahaven's own plain request and
+  response types rather than FastAPI objects, so a world never imports a server stack to declare
+  its API and a tool can call the handler directly.
+- Write the server helper. It runs each request through `inst.bulk()`, so it needs no change to
+  core. Instances default to the `wall` clock mode.
+- `PUT /worlds/{id}` with reset options creates or replaces an instance. `--max-instances`
+  defaults to 100. No idle TTL.
+- Write a doc page for authors.
+- No `world.http_api` registration and no `seahaven` subcommand. A world following the convention
+  writes a few-line `serve_http.py` and runs `uv run serve_http.py`. The helper parses the
+  command line itself, sharing `seahaven mcp`'s reset-option code.
+- No tool middleware on HTTP requests. Worlds bring their own router; no routing helpers.
+- Not in this version: info and state endpoints, rollback on an error status (a later opt-in),
+  added worlds' APIs.
