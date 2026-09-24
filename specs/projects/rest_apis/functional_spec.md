@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Functional Spec: REST APIs
@@ -44,7 +44,7 @@ opt-in: a world that never imports `seahaven.http` is unchanged.
 - Authentication.
 - Serving the APIs of worlds added through composition.
 - Streaming responses, server-sent events and WebSockets.
-- HTTP requests counting as tool calls (§7.3).
+- HTTP requests counting as tool calls (§7.4).
 
 ## 3. The handler contract
 
@@ -299,13 +299,18 @@ Under the server, `ctx` is the context `bulk()` yields: `ctx.db`, `ctx.clock`, `
 `ctx.state` and `ctx.instance` work as in a tool. `ctx.call` is `None`, because a request is not a
 tool call. A handler shared with tools must not depend on `ctx.call`.
 
-### 7.3 A request is not a tool call
+### 7.3 The `tick` clock
+
+Each request advances a `tick` clock by one step before the handler runs, as a tool call does. A
+test server run with `--clock-mode tick` therefore gives each request its own, replayable
+timestamp. (Priority: low. The server's default is `wall`, §5.6.)
+
+### 7.4 A request is not a tool call
 
 Consequences an author needs to know, stated in the docs page:
 
 - A request takes no call ordinal and makes no call-log entry. Its change-log records have `i` set
   to `None`.
-- A `tick` clock does not advance on a request. (The default for the server is `wall`, §5.6.)
 - The process-wide concurrency gate does not apply. The server's thread pool bounds how many
   requests run at once.
 
@@ -322,20 +327,21 @@ Consequences an author needs to know, stated in the docs page:
 
 - A new docs page, `http_apis.md`: what the handler is and why a world would write one; writing a
   handler; calling it from a tool; the `serve_http.py` script and its options; the routes; how a
-  request differs from a tool call (§7.3). It is linked from `index.md` and
+  request differs from a tool call (§7.4). It is linked from `index.md` and
   `serving_and_openenv.md`, and added to the page list in `tests/test_docs.py`. The helper's names
   are added to `reference/api.md`.
-- The reference world, ProjectTracker, gains a small handler with two or three routes, and a
-  `serve_http.py`. Its existing tools are not changed. The docs page's examples use it, so they
-  run in the test suite.
+- The reference world, ProjectTracker, is not changed: it is not shaped like an HTTP API. The docs
+  page's examples use a small world defined inline on the page, in the way `index.md` does, so
+  they run in the test suite. The server script is shown as a `py` fragment.
 
 ## 10. Testing
 
 - Unit tests for the types (§3.1).
-- Tests that drive `seahaven.http.app` over real HTTP requests against ProjectTracker: automatic
-  creation, `PUT` create and replace with laid-over options and `null`, `DELETE`, the limit, every
-  refusal in §5.2 and §8, commit on any status and rollback on raise, the seed and clock defaults,
-  two concurrent first requests creating one instance.
+- Tests that drive `seahaven.http.app` over real HTTP requests against a small test world with a
+  handler: automatic creation, `PUT` create and replace with laid-over options and `null`,
+  `DELETE`, the limit, every refusal in §5.2 and §8, commit on any status and rollback on raise,
+  the seed and clock defaults, two concurrent first requests creating one instance, a `tick`
+  clock advancing once per request.
 - A test that calls the handler from a tool through `world.instance(...)`.
-- A test that runs `serve_http.py` as a process and makes one request to it.
+- A test that runs a server script as a process and makes one request to it.
 - Tests for `main`'s option parsing, sharing `seahaven mcp`'s cases where the behaviour is shared.
