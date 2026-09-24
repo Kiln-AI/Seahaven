@@ -1,15 +1,25 @@
 # HTTP APIs
 
-Many worlds copy a product whose real interface is an HTTP API. Such a world can write that API
-directly, as one **handler** function that takes a request and returns a response. The handler
-models the product closely, with its status codes, headers and error bodies, and the world's tools
-become short wrappers that call it.
+Many worlds mock a REST API that has an MCP or tool wrapper around it. When this is the case:
 
-A world with a handler can also serve it over HTTP with `seahaven.http`. The world is then a local
-test server for code that calls the real product, like a payment provider's sandbox. Each client
-picks an instance ID, and each ID gets its own instance.
+- It is often helpful to implement the REST API inside the Seahaven world. REST documentation, such
+  as an OpenAPI description, is often much more descriptive than the MCP equivalent, and easier to
+  mock correctly. This leads to fewer bugs in your world. You still need tools that call the mock
+  REST API, but these tools can be quite small.
+- You may want to reuse the world as a mock for testing features that call the REST API. The design
+  principles behind Seahaven, such as many isolated and realistic instances, help in software
+  testing as well. The `seahaven.http` module lets you serve a Seahaven world as a REST API.
 
-The tools are the world's main interface, and serving the handler is optional.
+`seahaven.http` is a convention for implementing worlds that are really REST API wrappers. It
+includes:
+
+- A convention for the HTTP handler, the type [`HttpHandler`](#writing-a-handler), which is
+  `Callable[[Ctx[Any], HttpRequest], HttpResponse]`.
+- A [web server](#serving-the-handler) that you run against a Seahaven world that implements an
+  `HttpHandler`. The server creates, destroys and calls world instances.
+
+**Important:** `seahaven.http` is a completely optional module. You do not need it to use
+Seahaven. Use it only if it helps, and if the world you model is based on a REST API.
 
 | Section | What it covers |
 |---|---|
@@ -18,12 +28,14 @@ The tools are the world's main interface, and serving the handler is optional.
 | [Serving the handler](#serving-the-handler) | `serve_http.py`, its options, and the base URL |
 | [The routes](#the-routes) | Reaching the handler, and `PUT` and `DELETE` on an instance |
 | [How a request differs from a tool call](#how-a-request-differs-from-a-tool-call) | Transactions, the call log, the clock, seeds and limits |
+| [Server responses](#server-responses) | The statuses the server answers itself |
 
 ## Writing a handler
 
-A handler is a synchronous function `(ctx, request) -> response`. It reads and writes the database
-through `ctx`, as a tool does, and returns an `HttpResponse`. The world does its own routing inside
-the function. The example below uses `match`, and a world can use a router of its choice instead.
+A handler is a synchronous `HttpHandler` function, `(ctx, request) -> response`. The handler
+reads and writes the database through `ctx`, as a tool does, and returns an `HttpResponse`. The
+world does its own routing inside the function. The example below uses `match`, and a world can use
+a router of its choice instead.
 
 ```python
 import json
@@ -125,8 +137,9 @@ and `request.json()` parses the body.
 `HttpResponse(status=200, headers=(), body=b"")` is one response. Headers are `(name, value)` pairs
 and a name can repeat, as `set-cookie` does. A `str` body is sent UTF-8 encoded, and
 `response.body_bytes` is the body as sent. `HttpResponse.json(data, status=..., headers=...)` makes
-a JSON body and adds `content-type: application/json`. A response that HTTP cannot carry, such as a
-header value with a line break in it, raises when it is made, in the handler that made it.
+a JSON body and adds `content-type: application/json` unless `headers` sets one. A response that
+HTTP cannot carry, such as a header value with a line break in it, raises when it is made, in the
+handler that made it.
 
 ## Calling the handler from a tool
 
@@ -196,10 +209,11 @@ inside `"startup"` in `--reset-options`. Two defaults differ from `seahaven mcp`
 a random seed of its own, and the clock runs in `wall` mode, so the world reads the time as the real
 product does.
 
-To serve from Python rather than from a script, call `seahaven.http.serve(world, handle, ...)`. For
-an ASGI server of your own, `seahaven.http.app(world, handle, ...)` builds the application
-([reference/api.md](reference/api.md#seahavenhttp)). Run one worker, because the instances are
-state in one process.
+To serve from Python rather than from a script, call `seahaven.http.serve(world, handle, ...)`.
+`serve` takes the keywords `host`, `port`, `max_instances` and `reset_options`, a dict with the keys
+`--reset-options` takes. For an ASGI server of your own, `seahaven.http.app(world, handle, ...)`
+builds the application, and takes `max_instances` and `reset_options`. Run one worker, because the
+instances are state in one process.
 
 ## The routes
 
@@ -235,8 +249,7 @@ curl -X DELETE http://127.0.0.1:9000/worlds/test1
 
 A response that the server makes itself, rather than the handler, is JSON with the shape
 `{"seahaven_error": "<message>"}`, and the message says what to fix. A client tells the server's
-errors from the world's by that key. [reference/api.md](reference/api.md#seahavenhttp) lists the
-statuses.
+errors from the world's by that key. [Server responses](#server-responses) lists the statuses.
 
 ## How a request differs from a tool call
 
@@ -264,3 +277,18 @@ statuses.
   Requests to one instance run one at a time, and requests to different instances run in parallel.
 - **The path is decoded.** `request.path` is percent-decoded, so an encoded slash (`%2F`) in a path
   segment arrives as `/`.
+
+## Server responses
+
+The server answers these statuses itself, each with the body `{"seahaven_error": "<message>"}`:
+
+| Status | When |
+|---|---|
+| `400` | the instance ID is not 1 to 64 letters, digits, `-` and `_`; a `PUT` body is not a JSON object, names a key `--reset-options` does not take or `control_tools`, or has options `world.instance(...)` refuses |
+| `404` | the path is not under `/worlds/`; a `DELETE` names an ID that has no instance |
+| `405` | a method other than `PUT` or `DELETE` on `/worlds/{id}`, with an `allow` header |
+| `500` | the handler raised or did not return an `HttpResponse`; an instance could not be created, replaced or destroyed. The traceback goes to the `seahaven.http` logger |
+| `503` | creating an instance would pass the instance limit |
+
+The server sets `content-length` from the response body, and drops a `content-length` or
+`transfer-encoding` header that the handler sets.
