@@ -425,32 +425,22 @@ def test_with_call_keeps_the_contexts_worlds_unless_it_is_handed_another(ctx: Ct
     assert bound.db is ctx.db and bound.state is ctx.state
 
 
-def test_an_unexpected_exception_is_logged_with_its_traceback_and_re_raised(
-    ctx: Ctx, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    "raised", [ValueError("a bug in world code"), ToolError("not_found", "no such note")]
+)
+def test_invoke_logs_nothing_and_re_raises(
+    ctx: Ctx, caplog: pytest.LogCaptureFixture, raised: Exception
 ) -> None:
+    """A middleware above may still turn the failure into an answer; `Instance` logs the rest."""
+
     def broken(ctx: Ctx) -> dict[str, str]:
         """Broken."""
-        raise ValueError("a bug in world code")
+        raise raised
 
-    with caplog.at_level(logging.ERROR, logger="seahaven.call"), pytest.raises(ValueError):
+    with caplog.at_level(logging.DEBUG), pytest.raises(type(raised)) as caught:
         run(ctx, call_to(broken))
 
-    record = caplog.records[0]
-    assert "broken" in record.getMessage()
-    assert ctx.instance.id in record.getMessage()
-    assert record.exc_info is not None
-
-
-def test_an_error_the_agent_is_meant_to_read_is_not_logged(
-    ctx: Ctx, caplog: pytest.LogCaptureFixture
-) -> None:
-    def refuses(ctx: Ctx) -> dict[str, str]:
-        """Refuse."""
-        raise ToolError("not_found", "no such note")
-
-    with caplog.at_level(logging.ERROR, logger="seahaven.call"), pytest.raises(ToolError):
-        run(ctx, call_to(refuses))
-
+    assert caught.value is raised
     assert caplog.records == []
 
 

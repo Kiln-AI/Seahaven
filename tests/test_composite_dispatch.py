@@ -649,6 +649,64 @@ def test_the_log_line_carries_the_node_and_marks_a_nested_call_internal(
     assert "call nope on instance" in lines[2] and "node=" not in lines[2]
 
 
+def crashing_host(tmp_path: Path) -> World:
+    """A host whose tool calls a child tool that raises something other than a `ToolError`."""
+    host = rooted("host", tmp_path)
+    child = composable_world("child")
+    host.add_world(child, name="child", tool_allow_list=[])
+
+    @child.tool
+    def child_crash(ctx: Ctx) -> None:
+        """A bug in the child world's code."""
+        raise ValueError("a bug in the child")
+
+    @host.tool
+    def relay_crash(ctx: Ctx) -> None:
+        """Call the child tool and let whatever it raises through."""
+        ctx.worlds.child.call("child_crash")
+
+    return host
+
+
+def test_a_child_failure_the_hosts_middleware_answers_is_not_logged_as_an_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A handle is not the boundary: the host's chain around it may still answer."""
+    host = crashing_host(tmp_path)
+
+    @host.middleware
+    def forgiving(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        try:
+            return next_(ctx, call)
+        except ValueError as error:
+            return {"handled": str(error)}
+
+    with caplog.at_level(logging.DEBUG), host.instance(None) as live:
+        assert live.call("relay_crash") == {"handled": "a bug in the child"}
+
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+
+def test_a_child_failure_that_escapes_the_host_is_logged_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    host = crashing_host(tmp_path)
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        host.instance(None) as live,
+        pytest.raises(ValueError) as raised,
+    ):
+        live.call("relay_crash")
+
+    (record,) = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    # Against the agent's call, not the nested one the handle made.
+    assert record.getMessage().startswith("call relay_crash on instance")
+    assert record.getMessage().endswith("failed (node=main)")
+    assert record.exc_info is not None
+    assert record.exc_info[1] is raised.value
+
+
 # ---------------------------------------------------------- the committed tree
 
 

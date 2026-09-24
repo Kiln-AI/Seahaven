@@ -424,10 +424,12 @@ def error_handler(ctx: seahaven.Ctx, call: seahaven.Call, next_: Handler) -> Any
     except seahaven.WorldBug:
         raise  # the author's, not the agent's. Loudly, and unchanged
     except Exception as error:
+        # A bug in world code. It stops here, so it is logged here.
+        _log.error("%s: unexpected error under %s", ctx.instance.id, call.name, exc_info=error)
         raise Internal() from error
 ```
 
-Edit it to match the product. Two rules are worth keeping.
+Edit it to match the product. Three rules are worth keeping.
 
 **Re-raise a `WorldBug` unchanged.** Turning it into a product error hides a bug from you and tells
 the agent a lie.
@@ -437,6 +439,12 @@ the agent a lie.
 are SQL errors and "database error" would tell an agent nothing about the syntax it got wrong.
 Everywhere else a `DbError` means this world's own SQL was wrong, and the agent can do nothing with
 that.
+
+**Log a bug you turn into a product error.** Seahaven logs a traceback at ERROR only when an
+exception other than a `ToolError` escapes the middleware chain of an agent's call. A middleware
+that turns an exception into a result or a `ToolError` stops that line, so log the bug in that
+middleware, as the handler above does. Seahaven logs a `ToolError` raised from another exception
+with its traceback at DEBUG.
 
 A tool that lets SQLite refuse something it could have refused itself — a missing parent row, a
 duplicate unique key — turns a sentence the agent could have acted on into an internal error. Look

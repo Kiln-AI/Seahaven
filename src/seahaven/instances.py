@@ -670,7 +670,12 @@ class Instance:
             i = self._next_ordinal()
             # The chain is read from the node here rather than held, so a
             # middleware registered after this instance was made applies to it.
-            with self._recording(i), self._logging_call(target.name, arguments), in_call():
+            with (
+                self._recording(i),
+                self._logging_call(target.name, arguments),
+                self._logging_escape(target.name, target.node.path),
+                in_call(),
+            ):
                 return target.node.agent_chain(ctx, call)
 
     def _next_ordinal(self) -> int:
@@ -775,6 +780,52 @@ class Instance:
             self._calls.append(
                 CallRecord(tool=name, arguments=given, error=error, tool_error=tool_error)
             )
+
+    @contextmanager
+    def _logging_escape(self, name: str, node: str) -> Iterator[None]:
+        """Put the traceback of an exception that escapes the agent's chain on record.
+
+        Logged here, where nothing is left to handle it, and not where it was
+        raised: a world's middleware may turn an exception into a result or a
+        `ToolError`, and an exception the world handled is not a failure. A call
+        through a handle is not this boundary, because the host's chain around
+        it may still handle what it raised, and a call made while another is
+        running on this thread leaves the record to the outer one, so that one
+        exception is logged once.
+
+        A `ToolError` is what the world chose to tell the agent. One converted
+        from another exception is logged at DEBUG, so that a bug a world turned
+        into `INTERNAL` without logging it can still be found.
+        """
+        if calling():
+            yield
+            return
+        try:
+            yield
+        except ToolError as error:
+            converted = _converted_from(error) if _log.isEnabledFor(logging.DEBUG) else None
+            if converted is not None:
+                _log.debug(
+                    "call %s on instance %s of world %s: %s converted from %s%s",
+                    name,
+                    self.id,
+                    self.world.name,
+                    error.code,
+                    type(converted).__name__,
+                    _where(node, internal=False),
+                    exc_info=error,
+                )
+            raise
+        except Exception:
+            _log.error(
+                "call %s on instance %s of world %s failed%s",
+                name,
+                self.id,
+                self.world.name,
+                _where(node, internal=False),
+                exc_info=True,
+            )
+            raise
 
     def _current_composition(self) -> Composition:
         """The world's tree, refusing one that has grown or lost a node since creation.
@@ -933,8 +984,10 @@ class Instance:
     ) -> None:
         """The line for a call that raised, in the vocabulary an eval groups on.
 
-        A `ToolError` has a code; anything else has only its class name to give,
-        and `invoke` has already put the traceback on record.
+        A `ToolError` has a code; anything else has only its class name to give.
+        The traceback of an agent's call that failed is logged by
+        `_logging_escape`, and a call through a handle leaves it to the agent's
+        call around it.
         """
         outcome = error.code if isinstance(error, ToolError) else type(error).__name__
         self._log_call(name, started, outcome, node, internal=internal)
@@ -1565,6 +1618,20 @@ def in_call() -> Iterator[None]:
 def calling() -> bool:
     """Is this thread inside a tool call? What `World.instance` refuses on."""
     return getattr(_in_call, "active", False)
+
+
+def _converted_from(error: ToolError) -> BaseException | None:
+    """The first exception down `error`'s chain that is not a `ToolError`, if there is one.
+
+    The chain a traceback prints: the cause when there is one, else the context
+    unless `raise ... from None` suppressed it.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while isinstance(current, ToolError) and id(current) not in seen:
+        seen.add(id(current))
+        current = current.__cause__ if current.__suppress_context__ else current.__context__
+    return None if isinstance(current, ToolError) else current
 
 
 def _where(node: str | None, internal: bool) -> str:

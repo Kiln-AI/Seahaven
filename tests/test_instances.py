@@ -530,8 +530,11 @@ def test_every_call_logs_one_line_with_the_outcome(
     with pytest.raises(UnknownTool):
         instance.call("nope")
 
+    # The INFO lines: the crash's traceback is an ERROR record of its own.
     lines = [
-        record.getMessage() for record in caplog.records if record.name == "seahaven.instances"
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "seahaven.instances" and record.levelno == logging.INFO
     ]
     assert len(lines) == 4
     assert all(
@@ -541,6 +544,190 @@ def test_every_call_logs_one_line_with_the_outcome(
     assert ": boom in" in lines[1]
     assert ": ValueError in" in lines[2]
     assert ": unknown_tool in" in lines[3]
+
+
+def errors_logged(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+def debug_tracebacks(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and record.name == "seahaven.instances"
+    ]
+
+
+def test_an_exception_that_escapes_the_chain_is_logged_once_with_its_traceback(
+    instance: Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG), pytest.raises(ValueError) as raised:
+        instance.call("crash")
+
+    (record,) = errors_logged(caplog)
+    assert record.name == "seahaven.instances"
+    assert record.levelno == logging.ERROR
+    assert record.getMessage() == (
+        f"call crash on instance {instance.id} of world {instance.world.name} failed (node=main)"
+    )
+    assert record.exc_info is not None
+    assert record.exc_info[1] is raised.value
+
+
+def test_an_exception_a_middleware_answers_is_not_logged(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    @world.middleware
+    def forgiving(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        try:
+            return next_(ctx, call)
+        except ValueError as error:
+            return {"handled": str(error)}
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as live,
+    ):
+        assert live.call("crash") == {"handled": "a bug in world code"}
+
+    assert errors_logged(caplog) == []
+    assert debug_tracebacks(caplog) == []
+
+
+def test_an_exception_a_middleware_turns_into_a_tool_error_is_logged_at_debug(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Not a failure, since the world chose what the agent reads; still findable with DEBUG on."""
+
+    @world.middleware
+    def restating(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        try:
+            return next_(ctx, call)
+        except ValueError as error:
+            raise Boom("something went wrong") from error
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as live,
+        pytest.raises(Boom) as raised,
+    ):
+        live.call("crash")
+
+    assert errors_logged(caplog) == []
+    (record,) = debug_tracebacks(caplog)
+    assert "call crash on instance" in record.getMessage()
+    assert "boom converted from ValueError (node=main)" in record.getMessage()
+    assert record.exc_info is not None
+    assert record.exc_info[1] is raised.value
+    assert isinstance(raised.value.__cause__, ValueError)
+
+
+def test_a_tool_error_with_nothing_behind_it_is_not_logged(
+    instance: Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG), pytest.raises(Boom):
+        instance.call("write_then_fail", sql="INSERT INTO notes VALUES ('n1', 'b', 0)")
+
+    assert errors_logged(caplog) == []
+    assert debug_tracebacks(caplog) == []
+
+
+def _from_cause() -> None:
+    try:
+        raise KeyError("n1")
+    except KeyError as error:
+        raise Boom("no such note") from error
+
+
+def _from_context() -> None:
+    try:
+        raise KeyError("n1")
+    except KeyError:
+        raise Boom("no such note")  # noqa: B904 -- the implicit context is the case
+
+
+def _from_none() -> None:
+    try:
+        raise KeyError("n1")
+    except KeyError:
+        raise Boom("no such note") from None
+
+
+def _through_a_tool_error() -> None:
+    try:
+        _from_cause()
+    except Boom as error:
+        raise Boom("restated") from error
+
+
+def _from_a_tool_error() -> None:
+    try:
+        raise Boom("first")
+    except Boom as error:
+        raise Boom("second") from error
+
+
+@pytest.mark.parametrize(
+    ("raise_it", "converted"),
+    [
+        (_from_cause, KeyError),
+        (_from_context, KeyError),
+        (_through_a_tool_error, KeyError),
+        (_from_none, None),
+        (_from_a_tool_error, None),
+    ],
+)
+def test_a_tool_error_is_converted_from_the_first_other_exception_its_traceback_shows(
+    raise_it: Callable[[], None], converted: type[BaseException] | None
+) -> None:
+    with pytest.raises(Boom) as raised:
+        raise_it()
+
+    found = instances._converted_from(raised.value)
+
+    assert (None if found is None else type(found)) is converted
+
+
+def test_a_tool_error_chained_to_itself_is_converted_from_nothing() -> None:
+    first, second = Boom("first"), Boom("second")
+    first.__cause__, second.__cause__ = second, first
+
+    assert instances._converted_from(first) is None
+
+
+def test_a_call_made_inside_another_leaves_the_log_to_the_outer_one(
+    tmp_path: Path, world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One exception, one ERROR line, whichever boundary it crosses first."""
+    outer_world = build_world(tmp_path / "outer", name="outer")
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as inner,
+        outer_world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as outer,
+    ):
+
+        @outer_world.tool
+        def passing(ctx: Ctx) -> None:
+            """Let the inner call's failure through."""
+            inner.call("crash")
+
+        @outer_world.tool
+        def catching(ctx: Ctx) -> dict[str, bool]:
+            """Answer in place of the inner call's failure."""
+            try:
+                inner.call("crash")
+            except ValueError:
+                return {"caught": True}
+            raise AssertionError("the inner call should have raised")
+
+        assert outer.call("catching") == {"caught": True}
+        assert errors_logged(caplog) == []
+
+        with pytest.raises(ValueError):
+            outer.call("passing")
+        (record,) = errors_logged(caplog)
+        assert record.getMessage().startswith(f"call passing on instance {outer.id} ")
 
 
 def test_nothing_works_on_a_destroyed_instance(world: World) -> None:

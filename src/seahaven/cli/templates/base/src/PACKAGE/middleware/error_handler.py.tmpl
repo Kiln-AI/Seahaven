@@ -48,6 +48,8 @@ def error_handler(ctx: seahaven.Ctx, call: seahaven.Call, next_: Handler) -> Any
         # The author's, not the agent's. Loudly, and unchanged.
         raise
     except Exception as error:
-        # A bug in world code. The framework has already logged it with its
-        # traceback; the agent gets this product's wording for "we broke".
+        # A bug in world code. Seahaven logs only what escapes the chain, and this
+        # does not, so the traceback is logged here; the agent gets this
+        # product's wording for "we broke".
+        _log.error("%s: unexpected error under %s", ctx.instance.id, call.name, exc_info=error)
         raise Internal() from error
