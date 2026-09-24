@@ -1,21 +1,24 @@
 ---
-status: draft
+status: complete
 ---
 
 # Architecture: REST APIs
 
 ## 1. Shape of the change
 
-A helper, isolated in one package. Every line of code is in `src/seahaven/http/`, and nothing
+A helper, isolated in one package. Every line of new code is in `src/seahaven/http/`, and nothing
 outside that package imports it: not `seahaven/__init__.py`, not the CLI, not a world. The package
-depends on existing modules; the dependency never runs the other way.
+depends on existing modules; the dependency never runs the other way. The one edit outside it is a
+small refactor of `seahaven/cli/mcp.py` that exposes two functions for the package to import
+(§6.1). `seahaven.cli.mcp` never imports `seahaven.http`.
 
 | Where | What changes |
 |---|---|
 | `src/seahaven/http/` | New. The whole feature |
 | `src/seahaven/docs/` | New page `http_apis.md`; links from `index.md` and `serving_and_openenv.md`; a section in `reference/api.md` |
+| `src/seahaven/cli/mcp.py` | Two functions split out of existing code, so `seahaven.http` can call them (§6.1). Behaviour and messages unchanged |
 | `tests/` | New test modules and one test world module (§8); `tests/test_docs.py` page list |
-| Everything else | Unchanged. No edit to `pyproject.toml`, `uv.lock`, `seahaven/cli/`, `seahaven/instances.py` or CI |
+| Everything else | Unchanged. No edit to `pyproject.toml`, `uv.lock`, `seahaven/instances.py` or CI |
 
 No new dependency. The server imports `starlette` and `uvicorn`, which both extras already
 install (`openenv` brings them under `serve`, the MCP SDK under `mcp`). `seahaven.openenv.serve`
@@ -30,7 +33,7 @@ src/seahaven/http/
   messages.py   HttpRequest, HttpResponse, HttpHandler; stdlib only
   runtime.py    Registry (instances by id), dispatch(), seahaven_error(); no starlette
   server.py     the ASGI app, and serve(); imports starlette and uvicorn
-  command.py    main(): argparse, reusing seahaven.cli.mcp's reset-option resolution
+  command.py    main(): argparse, using seahaven.cli.mcp's reset-option arguments and resolution
 ```
 
 `messages.py` and `runtime.py` import nothing outside the standard library and `seahaven`, so the
@@ -139,7 +142,7 @@ Used by `app()` on the server's options (raising `WorldBug`) and by the server o
   own startup keywords go inside `"startup"`;
 - when `source` is the server's options and `fixture` is a non-`None` string, it is one of
   `world.fixtures()` ids. Otherwise the message names the ids there are. A `PUT` body's fixture
-  is left to `world.instance(...)`, whose refusal is a `WorldBug` and becomes `400` (§6.3).
+  is left to `world.instance(...)`, whose refusal is a `WorldBug` and becomes `400` (§5.4).
 
 `source` is the spelling used in messages: `"reset_options"` or `"the PUT body"`.
 
@@ -409,7 +412,41 @@ place.
 
 ## 6. `command.py`: `main`
 
+### 6.1 The edit to `seahaven/cli/mcp.py`
+
+Two functions are split out of code that is already there. `seahaven mcp` calls them itself, so its
+behaviour, help text and every message stay exactly as they are, and `tests/test_cli_mcp.py`
+passes unchanged.
+
 ```py
+def add_reset_option_arguments(parser: argparse.ArgumentParser) -> None:
+    """--fixture, --seed, --now, --clock-mode and --reset-options: the five add_argument calls
+    add_parser makes today, moved here verbatim, with their comments."""
+
+def resolve_reset_options(
+    args: argparse.Namespace,
+    environ: Mapping[str, str],
+    *,
+    withheld_reason: str = WITHHELD_REASON,
+) -> dict[str, Any]:
+    """The body of resolve_options today, without _with_a_seed: the keyword arguments exactly as
+    the user gave them, with no seed added."""
+```
+
+- `add_parser` calls `add_reset_option_arguments(parser)` where the five calls were.
+- `resolve_options(args, environ)` becomes
+  `_with_a_seed(resolve_reset_options(args, environ))`.
+- `WITHHELD_REASON` is a new constant holding today's text after the colon of the
+  `control_tools` refusal: `seahaven mcp publishes the world's own tools and nothing else, and
+  nothing reaching an MCP client may run SQL against the world`. `_check_keys` and `_object` take
+  `withheld_reason` and build the same message from it.
+- Both new functions go in `__all__`.
+
+### 6.2 `main`
+
+```py
+WITHHELD_REASON = "this server serves the world's HTTP handler and nothing else"
+
 def main(world, handler, argv=None) -> None:
     parser = argparse.ArgumentParser(
         prog=Path(sys.argv[0]).name,
@@ -417,11 +454,10 @@ def main(world, handler, argv=None) -> None:
     )
     --host (default None -> DEFAULT_HOST), --port (int, default None -> DEFAULT_PORT),
     --max-instances (int, default None -> DEFAULT_MAX_INSTANCES; negative -> refusal)
-    --fixture, --seed, --now, --clock-mode, --reset-options   # same dests, metavars and help as
-                                                                # seahaven mcp's, written out here
+    add_reset_option_arguments(parser)
     args = parser.parse_args(argv)
     try:
-        options = _reset_options(args)
+        options = resolve_reset_options(args, os.environ, withheld_reason=WITHHELD_REASON)
         from seahaven.http import serve  # the wrapper, so a missing extra is MISSING_EXTRA
         serve(world, handler, host=..., port=..., reset_options=options, max_instances=...)
     except (CliError, SeahavenError, ImportError) as error:
@@ -429,27 +465,12 @@ def main(world, handler, argv=None) -> None:
         raise SystemExit(1) from None
 ```
 
-**Reusing `seahaven mcp`'s option logic without changing it.** `seahaven.cli.mcp.resolve_options`
-reads exactly the attributes `fixture`, `seed`, `now`, `clock_mode` and `reset_options` from the
-namespace, which the five arguments above set up. It already applies the environment variables,
-the mixing refusal, JSON parsing, the key checks and the integer check on `--seed`. Two
-differences are handled around it, not inside it:
+`resolve_reset_options` applies the environment variables, the mixing refusal, JSON parsing, the
+key checks and the integer check on `--seed`. It adds no seed, so an instance created without one
+gets its own from the registry (§4.3).
 
-1. **Seed.** When nobody gave a seed, `resolve_options` picks one for the whole run and reports it
-   as `Options.random_seed`. `_reset_options` removes the `"seed"` key when `random_seed is not
-   None`, which restores "nobody gave a seed", and the registry then picks one per instance.
-2. **`control_tools`.** `resolve_options` refuses it with a message that names `seahaven mcp`.
-   `_reset_options` first looks for `control_tools` in the general source: the `--reset-options`
-   value, else a non-blank `SEAHAVEN_RESET_OPTIONS`. If that value parses as a JSON object holding
-   the key, it raises its own `CliError`:
-   `'--reset-options does not take "control_tools": this server serves the world's HTTP handler
-   and nothing else'`. The spelling is the variable's name when that was the source. Anything
-   that does not parse is left for `resolve_options` to refuse in its own words.
-
-The only names used from `seahaven.cli.mcp` are `resolve_options`, `RESET_OPTION_KEYS`,
-`SEED_CEILING`, `CONVENIENCE` and `GENERAL_VARIABLE`. The five `add_argument` calls are
-repeated, not shared, because `seahaven mcp` builds them inside `add_parser` and this package
-changes nothing outside itself. A test pins that the two parsers agree (§8.5).
+The names used from `seahaven.cli.mcp` are `add_reset_option_arguments`, `resolve_reset_options`,
+`RESET_OPTION_KEYS` and `SEED_CEILING`.
 
 ## 7. Error handling summary
 
@@ -560,11 +581,12 @@ per row of the functional spec's route table and §5.2 and §8:
 - the defaults reach `serve` (`127.0.0.1`, `8000`, `100`, `{}`);
 - each flag and each environment variable reaches `reset_options`;
 - no seed given: no `"seed"` key; `--seed 7`: `7`;
-- mixing a convenience flag with `--reset-options` exits 1 with `seahaven mcp`'s message;
-- `control_tools` by flag and by variable exits 1 with this package's message;
-- `--max-instances -1` and an unknown fixture exit 1 with one line;
-- the reset-option arguments of `main`'s parser and of `seahaven mcp`'s have the same option
-  strings, dests and metavars (built from `seahaven.cli.build_parser()`).
+- mixing a convenience flag with `--reset-options` exits 1 with the shared message;
+- `control_tools` by flag and by variable exits 1 with this package's reason in the message;
+- `--max-instances -1` and an unknown fixture exit 1 with one line.
+
+`tests/test_cli_mcp.py` is not edited, and passing unchanged is the proof that the §6.1 refactor
+kept `seahaven mcp`'s behaviour.
 
 One process test: run `python tests/http_world.py --port 0`, read uvicorn's `Uvicorn running on
 http://127.0.0.1:<port>` line from its stderr to learn the port, check the `Serving notes_api at
