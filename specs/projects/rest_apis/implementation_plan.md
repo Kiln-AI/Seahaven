@@ -6,7 +6,7 @@ status: complete
 
 ## Phases
 
-- [ ] Phase 1: `messages.py` and `runtime.py` (types, `Registry`, `dispatch`), the test world
+- [x] Phase 1: `messages.py` and `runtime.py` (types, `Registry`, `dispatch`), the test world
       `tests/http_world.py`, and their tests, including the tool path through
       `world.instance(...)` (architecture §3, §4, §8.1–8.3, §8.6)
 - [ ] Phase 2: `server.py` and the `__init__.py` wrappers (`app`, `serve`), with the real-HTTP
