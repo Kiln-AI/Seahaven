@@ -2,7 +2,7 @@
 
 A world writes its API as one function, `handler(ctx, request) -> response`, over
 the types below, and its tools call that function. The types need no extra;
-`app` and `serve` need the `serve` extra, and import it only when called.
+`app`, `serve` and `main` need the `serve` extra, and import it only when called.
 """
 
 from collections.abc import Iterator, Mapping
@@ -25,6 +25,7 @@ __all__ = [
     "HttpRequest",
     "HttpResponse",
     "app",
+    "main",
     "serve",
 ]
 
@@ -78,6 +79,18 @@ def serve(
         reset_options=reset_options,
         max_instances=max_instances,
     )
+
+
+def main(world: World, handler: HttpHandler, argv: list[str] | None = None) -> None:
+    """The command line of a world's `serve_http.py`: parse `argv` and call `serve`.
+
+    `argv` defaults to `sys.argv[1:]`. It takes `--host`, `--port`,
+    `--max-instances` and the reset-option flags and variables `seahaven mcp`
+    takes. A refused option is one line on stderr and exit 1.
+    """
+    from seahaven.http.command import main as run
+
+    run(world, handler, argv)
 
 
 @contextmanager

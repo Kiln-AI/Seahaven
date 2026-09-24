@@ -4,6 +4,8 @@ What `seahaven.http` is tested against. A module rather than a package under
 `tests/worlds/`, because the tests need a `World` object and a handler, not
 discovery. Every route is here for a test: `/explode` and `/wrong` fail on
 purpose, after a write, so that the rollback is observable.
+
+Run as a script, it is a world's `serve_http.py`: `python tests/http_world.py --port 0`.
 """
 
 import json
@@ -12,6 +14,7 @@ from typing import Any, cast
 from urllib.parse import parse_qs
 
 import seahaven
+import seahaven.http
 from seahaven.http import HttpRequest, HttpResponse
 
 SCHEMA = """
@@ -139,3 +142,7 @@ def _result(response: HttpResponse) -> dict[str, Any]:
     if not 200 <= response.status < 300:
         raise NoteError(response)
     return json.loads(response.body_bytes)
+
+
+if __name__ == "__main__":
+    seahaven.http.main(build(), handle)
