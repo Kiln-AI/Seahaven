@@ -140,10 +140,10 @@ def test_nothing_an_agent_can_provoke_reaches_the_authors_log(
 
     The sweep above cannot see this. `INTERNAL` is one of the four declared codes,
     so a call that answered `INTERNAL` would pass it -- and `INTERNAL` in this
-    world means "a bug in world code", which `error_handler` and `seahaven.call`
-    both write to the log with a traceback. An agent that can make the world
-    accuse itself has found a defect whatever code reaches it, and the only thing
-    that shows it is the log being empty.
+    world means "a bug in world code", which `error_handler` writes to the log
+    with a traceback. An agent that can make the world accuse itself has found a
+    defect whatever code reaches it, and the only thing that shows it is the log
+    being empty.
     """
     for tool, arguments in refusals(instance, scaffold):
         caplog.clear()
