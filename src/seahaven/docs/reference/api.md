@@ -2,8 +2,9 @@
 
 The public API is the names exported from `seahaven`, the `seahaven.helpers`, `seahaven.sandbox` and
 `seahaven.fixtures` modules, the type aliases in `seahaven.world`, `seahaven.openenv` (in the
-`serve` extra), and the pytest plugin's two fixtures. A name that is not below is internal and may
-change without notice.
+`serve` extra), and the pytest plugin's two fixtures. The optional `seahaven.http` module is
+public too, and [../http_apis.md](../http_apis.md) documents it. A name that is on neither page is
+internal and may change without notice.
 
 | Section | What it covers |
 |---|---|
@@ -20,6 +21,7 @@ change without notice.
 | [`seahaven.helpers`](#seahavenhelpers) | `run_sql` and `describe_schema` |
 | [`seahaven.sandbox`](#seahavensandbox) | Agent SQL containment |
 | [`seahaven.openenv`](#seahavenopenenv-the-serve-extra) | The server and the client |
+| [`seahaven.http`](#seahavenhttp) | What the optional module is, and when you might need it |
 | [The pytest plugin](#the-pytest-plugin) | Two fixtures, one marker, one option |
 | [The concurrency gate](#the-concurrency-gate) | `set_concurrency` and friends |
 | [Middleware and hook types](#middleware-and-hook-types) | `Handler`, `Middleware` and `StartupHook` |
@@ -614,6 +616,14 @@ OpenEnv's own `{error_type, message}` model and its `seahaven_error` is the worl
 process.
 
 See [../serving_and_openenv.md](../serving_and_openenv.md) and [../state.md](../state.md).
+
+## `seahaven.http`
+
+`seahaven.http` is an optional module for a world that mocks a REST API. A world writes the REST
+API as one handler function, and its tools call the handler. The module also has a web server that
+serves the handler, so that the world can be a mock of the REST API when you test code that calls
+the real one. You might need it when the product you model is based on a REST API. You do not need
+it to use Seahaven. See [../http_apis.md](../http_apis.md) for more.
 
 ## The pytest plugin
 

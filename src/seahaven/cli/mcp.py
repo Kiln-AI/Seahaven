@@ -42,9 +42,12 @@ __all__ = [
     "MISSING_EXTRA",
     "RESET_OPTION_KEYS",
     "WITHHELD",
+    "WITHHELD_REASON",
     "Options",
     "add_parser",
+    "add_reset_option_arguments",
     "resolve_options",
+    "resolve_reset_options",
     "run",
 ]
 
@@ -72,6 +75,12 @@ GENERAL_VARIABLE = "SEAHAVEN_RESET_OPTIONS"
 # harness drives the server it started; an MCP client is the thing being kept
 # away from arbitrary SQL, and a general door is not the place to hand it over.
 WITHHELD = "control_tools"
+# Why it is withheld, as the refusal says it. `seahaven.http` shares these
+# options and withholds the same keyword for a reason of its own.
+WITHHELD_REASON = (
+    "seahaven mcp publishes the world's own tools and nothing else, and nothing reaching an "
+    "MCP client may run SQL against the world"
+)
 
 # The keys a `--reset-options` object may name. Read off the signature of
 # `world.instance()` rather than written out, so a keyword argument the
@@ -122,6 +131,22 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         description="Serve this world to one MCP client over stdio: one world, one instance.",
     )
     add_world_option(parser)
+    add_reset_option_arguments(parser)
+    parser.set_defaults(handler=run)
+
+
+def add_reset_option_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    seed_default: str = "a random seed, written to stderr",
+    clock_mode_default: str = "the world's",
+) -> None:
+    """`--fixture`, `--seed`, `--now`, `--clock-mode` and `--reset-options`.
+
+    `seahaven.http.main` takes the same options. The two defaults are the ends of
+    the `--seed` and `--clock-mode` help, because a command that fills either key
+    in on its own says so there.
+    """
     parser.add_argument(
         "--fixture",
         metavar="NAME",
@@ -136,8 +161,7 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         metavar="N",
         default=None,
         help=(
-            f"the caller seed, an integer (${CONVENIENCE['seed']}); "
-            "the default is a random seed, written to stderr"
+            f"the caller seed, an integer (${CONVENIENCE['seed']}); the default is {seed_default}"
         ),
     )
     parser.add_argument(
@@ -157,7 +181,7 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         default=None,
         help=(
             "how the instance's clock moves: fixed, tick, running or wall "
-            f"(${CONVENIENCE['clock_mode']}); the default is the world's"
+            f"(${CONVENIENCE['clock_mode']}); the default is {clock_mode_default}"
         ),
     )
     parser.add_argument(
@@ -169,7 +193,6 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
             "not allowed with --fixture, --seed, --now or --clock-mode"
         ),
     )
-    parser.set_defaults(handler=run)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -204,6 +227,20 @@ def resolve_options(args: argparse.Namespace, environ: Mapping[str, str]) -> Opt
     filesystem, no SDK, so the whole of `functional_spec.md` §2.2 to §2.4 is
     covered by tests that start no server.
     """
+    return _with_a_seed(resolve_reset_options(args, environ))
+
+
+def resolve_reset_options(
+    args: argparse.Namespace,
+    environ: Mapping[str, str],
+    *,
+    withheld_reason: str = WITHHELD_REASON,
+) -> dict[str, Any]:
+    """The keyword arguments exactly as the user gave them, with no seed added.
+
+    `args` is a namespace `add_reset_option_arguments` parsed. `withheld_reason`
+    ends the refusal of `control_tools`, which names the command refusing it.
+    """
     convenience = {
         name: given
         for name, variable in CONVENIENCE.items()
@@ -213,11 +250,10 @@ def resolve_options(args: argparse.Namespace, environ: Mapping[str, str]) -> Opt
     if general is not None and convenience:
         raise CliError(_mixing_refusal(convenience, general))
     if general is not None:
-        return _with_a_seed(_object(general))
-    reset_options: dict[str, Any] = {
+        return _object(general, withheld_reason)
+    return {
         name: _seed(given) if name == "seed" else given.value for name, given in convenience.items()
     }
-    return _with_a_seed(reset_options)
 
 
 def _flag(name: str) -> str:
@@ -282,7 +318,7 @@ def _english(items: list[str]) -> str:
     return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
-def _object(given: _Given) -> dict[str, Any]:
+def _object(given: _Given, withheld_reason: str) -> dict[str, Any]:
     """A `--reset-options` document, which has to be a JSON object `world.instance()` takes."""
     try:
         document = json.loads(given.value)
@@ -293,11 +329,11 @@ def _object(given: _Given) -> dict[str, Any]:
             f"{given.spelling} takes a JSON object, not {type(document).__name__}: "
             f"{_EXAMPLE} names the keyword arguments world.instance() is called with"
         )
-    _check_keys(given, document)
+    _check_keys(given, document, withheld_reason)
     return document
 
 
-def _check_keys(given: _Given, document: dict[str, Any]) -> None:
+def _check_keys(given: _Given, document: dict[str, Any], withheld_reason: str) -> None:
     """Refuse the withheld keyword, and a key `world.instance()` does not take.
 
     The check is on the command line and not at instance creation, where
@@ -310,11 +346,7 @@ def _check_keys(given: _Given, document: dict[str, Any]) -> None:
     they were given a namespace of their own.
     """
     if WITHHELD in document:
-        raise CliError(
-            f'{given.spelling} does not take "{WITHHELD}": seahaven mcp publishes the world\'s '
-            "own tools and nothing else, and nothing reaching an MCP client may run SQL "
-            "against the world"
-        )
+        raise CliError(f'{given.spelling} does not take "{WITHHELD}": {withheld_reason}')
     unknown = sorted(set(document) - RESET_OPTION_KEYS)
     if not unknown:
         return
