@@ -1,0 +1,20 @@
+## Connecting to the published world
+
+Once this world is pushed to a Hugging Face Space, connect to it with OpenEnv's generic client. Your
+side needs the `openenv` package (`pip install openenv`) and nothing from this repository:
+
+```py
+from openenv import AutoEnv
+
+with AutoEnv.from_hub("<owner>/$name", skip_install=True) as env:
+    env.reset(seed=7)
+    tools = env.step({"type": "list_tools"}).observation["tools"]
+    created = env.step(
+        {"type": "call_tool", "tool_name": "create_item", "arguments": {"name": "First"}}
+    ).observation
+    print(created["result"], env.state())
+```
+
+Always pass `skip_install=True`. Without it, `from_hub` tries to install this repository as a
+Python package, and that fails. For a server you run yourself, add `base_url="http://host:8000"`.
+

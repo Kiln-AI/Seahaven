@@ -29,7 +29,7 @@ learn. A person working against a world by hand has a third command,
 | [The wire protocol](#the-wire-protocol) | Every frame and model, for a client in any language |
 | [The concurrency gate](#the-concurrency-gate) | What bounds tool calls, and a known defect in it |
 | [Running it in production](#running-it-in-production) | Reaping, disconnects, and scaling out |
-| [Publishing to a hub](#publishing-to-a-hub) | `seahaven new --hub`, and what does not work yet |
+| [Publishing to a hub](#publishing-to-a-hub) | `seahaven new --hub`, connecting with `AutoEnv.from_hub`, and the image |
 | [Evaluating with Kiln](#evaluating-with-kiln) | Where the scenario and the grader belong |
 | [Serving one world to an MCP client](#serving-one-world-to-an-mcp-client) | `seahaven mcp`, and who it is for |
 | [Known problems in OpenEnv](#known-problems-in-openenv) | Routes Seahaven refuses, and why |
@@ -558,19 +558,61 @@ Seahaven does not ship keeps OpenEnv's 20 seconds.
 
 ## Publishing to a hub
 
-A world can be published as an OpenEnv environment — a Docker image or a Hugging Face Space — and
-driven by anyone with an OpenEnv client.
+A world can be published as an OpenEnv environment, on a Hugging Face Space or as a Docker image,
+and driven by anyone with an OpenEnv client.
 
 `seahaven new --hub` adds the five files `openenv push` validates a directory for: `openenv.yaml`, a
-root `Dockerfile`, a root `__init__.py`, `client.py` and `models.py`. It adds nothing else, and a
-world that does not publish to a hub carries none of them. `client.py` is a single re-export,
-because the typed client for every Seahaven world is `SeahavenClient`.
+root `Dockerfile`, a root `__init__.py`, `client.py` and `models.py`. It also starts `README.md`
+with the settings a Space reads, and adds a section that tells a visitor how to connect. A world
+that does not publish to a hub carries none of this.
+[`seahaven new`](reference/cli.md#seahaven-new-name) lists where the scaffold differs from
+OpenEnv's own.
 
-**That `Dockerfile` does not build a working image today.** Its build step is `RUN uv sync --extra
+In those settings, `sdk: docker` makes the Space run the image. `app_port: 8000` sends the Space's
+traffic to the port the server listens on. `base_path: /console` opens the Space's page on the
+[web console](#the-web-console), which every served world has. `openenv push` adds
+`base_path: /web` only to a README that has no `base_path`, so it leaves this one alone.
+
+### Connecting to a published world
+
+Connect with OpenEnv's `AutoEnv.from_hub` and `skip_install=True`:
+
+```py
+from openenv import AutoEnv
+
+with AutoEnv.from_hub("<owner>/<space>", skip_install=True) as env:
+    env.reset(fixture="small_startup", seed=7)
+    tools = env.step({"type": "list_tools"}).observation["tools"]
+    observation = env.step(
+        {"type": "call_tool", "tool_name": "get_issue", "arguments": {"key": "ENG-12"}}
+    ).observation
+    print(observation["result"], env.state()["now"])
+```
+
+The call returns OpenEnv's `GenericEnvClient`, which sends and receives plain dictionaries in the
+shapes [The wire protocol](#the-wire-protocol) gives. The client side needs only the `openenv`
+package, which runs on Python 3.10 or newer; it does not need Seahaven or CPython 3.14. When the
+Space is running, the client connects to it. When it is not, `from_hub` pulls the Space's image and
+runs it with Docker. For a server you run yourself, add `base_url="http://127.0.0.1:8000"`.
+
+**Always pass `skip_install=True`.** Without it, `from_hub` tries to install the Space's repository
+into your environment as a Python package and then looks in it for a client class. A Seahaven world
+has none that OpenEnv's lookup finds, so the call fails.
+
+A client that has Seahaven installed can use `SeahavenClient` with typed observations instead. Its
+`base_url` for a Space is `https://<owner>-<space>.hf.space`.
+
+### The image
+
+**The `Dockerfile` does not build a working image today.** Its build step is `RUN uv sync --extra
 serve`, and the world's `serve` extra is `seahaven[serve]`, which resolves to the placeholder
 release described at the top of this page. The image builds, and the container cannot start: there
 is no `seahaven.openenv` in it. Until publication, an image has to get the framework from a checkout
 or a private index, which means editing that `RUN` line.
+
+The image serves `<package>.openenv_app:app` on port 8000, and answers its `HEALTHCHECK` on
+`/health`. The `app` key in `openenv.yaml` names the same app, because OpenEnv's Modal and Daytona
+providers start the server from that key rather than from the `Dockerfile`.
 
 **The image is a checkout, and has to stay one.** The generated `Dockerfile` does `COPY . /app` and
 then `uv sync`, so the container holds the world's whole directory with the framework installed into

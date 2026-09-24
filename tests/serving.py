@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import uvicorn
+from fastapi import FastAPI
 
 from seahaven.openenv import app
 from seahaven.world import World
@@ -35,9 +36,14 @@ STOP_TIMEOUT = 30.0
 @contextmanager
 def serving(world: World, **options: Any) -> Iterator[str]:
     """Serve a world on a free port for the block, and answer its base URL."""
-    server = uvicorn.Server(
-        uvicorn.Config(app(world, **options), host="127.0.0.1", port=0, log_level="warning")
-    )
+    with serving_app(app(world, **options)) as url:
+        yield url
+
+
+@contextmanager
+def serving_app(served: FastAPI) -> Iterator[str]:
+    """Serve an app that is already built, such as a scaffold's `openenv_app:app`."""
+    server = uvicorn.Server(uvicorn.Config(served, host="127.0.0.1", port=0, log_level="warning"))
     thread = threading.Thread(target=server.run, name="test-uvicorn", daemon=True)
     thread.start()
     try:

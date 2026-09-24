@@ -57,7 +57,7 @@ the generator script. No fixture is built and nothing is imported.
 | Option | What it does |
 |---|---|
 | `--dir <path>` | the directory to create the world in; the default is here |
-| `--hub` | also write the five files `openenv push` requires: `openenv.yaml`, a root `Dockerfile`, a root `__init__.py`, `client.py` and `models.py` |
+| `--hub` | also write the five files `openenv push` requires: `openenv.yaml`, a root `Dockerfile`, a root `__init__.py`, `client.py` and `models.py`; start `README.md` with a Hugging Face Space's settings, and add a section on connecting to the world |
 
 The package name is the world's name, normalised. `AGENTS.md` is written once and never touched
 again. It is an ordinary file the world owns, and it points an authoring agent at these docs.
@@ -79,6 +79,19 @@ No module named 'seahaven.world'`. `seahaven check` itself cannot start either, 
 placeholder ships no console script. Install the framework from a checkout until publication. The
 same applies to `--hub`: the `Dockerfile` it writes runs `uv sync --extra serve`, which today builds
 an image whose container cannot start.
+
+A `--hub` world differs from the environment `openenv init` makes in three ways:
+
+- `openenv.yaml` has no `validation:` block, so `openenv validate` reports one failure,
+  ``openenv.yaml has no `validation:` block``. The block declares a reward range and a reward
+  oracle, and a Seahaven world has no reward
+  ([why](../serving_and_openenv.md#why-there-are-no-rewards)).
+- There is no `server/app.py`. The root `Dockerfile` and the `app` key in `openenv.yaml` name
+  `<package>.openenv_app:app` instead.
+- The package is named after the world, not `openenv-<name>`, and has no client class that
+  OpenEnv's lookup finds. `AutoEnv.from_hub` connects only with `skip_install=True`
+  ([Connecting to a published world](../serving_and_openenv.md#connecting-to-a-published-world)),
+  and `AutoEnv.from_env("<name>")` and `AutoAction` do not find the world.
 
 ## `seahaven check`
 

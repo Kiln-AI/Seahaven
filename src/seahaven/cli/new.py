@@ -5,12 +5,13 @@ fixture is made, so `new` cannot fail halfway through something: either the
 directory is there and complete, or it was never created.
 
 The templates are ordinary files with a `.tmpl` suffix, substituted with
-`string.Template` -- `$name`, `$package`, `$seahaven_requirement` -- and written
-out without it. The suffix is what keeps a directory full of `$package` out of
-the repository's own ruff, ty and pytest runs: a `.py` holding
-`from $package.world import world` is not Python, and every tool in the tree
-would have an opinion about it. The package directory is spelled `PACKAGE` in
-the template tree for the same reason, and is renamed on the way out.
+`string.Template` -- `$name`, `$package`, `$seahaven_requirement` and the
+README's two `--hub` sections -- and written out without it. The suffix is what
+keeps a directory full of `$package` out of the repository's own ruff, ty and
+pytest runs: a `.py` holding `from $package.world import world` is not Python,
+and every tool in the tree would have an opinion about it. The package directory
+is spelled `PACKAGE` in the template tree for the same reason, and is renamed on
+the way out.
 
 The result passes `seahaven check` with no findings and `pytest` with no fixture
 on disk, which is the point: an author's first run of both succeeds, so the first
@@ -40,10 +41,16 @@ PACKAGE_PLACEHOLDER = "PACKAGE"
 BASE_TEMPLATES = "base"
 HUB_TEMPLATES = "hub"
 
-# What `--hub` adds, and the whole of what it adds: the files `openenv push`
-# validates a pushed directory for (`components/openenv.md` §6). A world that
-# does not publish to a hub carries none of them.
+# The files `--hub` adds: the ones `openenv push` validates a pushed directory
+# for (`components/openenv.md` §6). A world that does not publish to a hub
+# carries none of them.
 HUB_FILES = ("Dockerfile", "__init__.py", "client.py", "models.py", "openenv.yaml")
+
+# What `--hub` writes into `README.md`, which every world has, rather than as
+# files of its own: a Hugging Face Space reads its settings from the README's
+# front matter, and the README is the card the Space shows.
+HUB_README_TEMPLATES = "hub_readme"
+HUB_README_PARTS = {"space_card": "space_card.md", "hub_connecting": "connecting.md"}
 
 # `seahaven~=X.Y`: a world is built against the framework's authoring API, which
 # moves with the minor version, and a world that pinned the patch would need a
@@ -113,6 +120,7 @@ def render(name: str, target: Path, *, hub: bool = False) -> Path:
         "package": package,
         "seahaven_requirement": seahaven_requirement(),
     }
+    substitutions |= _readme_parts(substitutions, hub=hub)
     try:
         for group in (BASE_TEMPLATES, *((HUB_TEMPLATES,) if hub else ())):
             _render_group(group, target, package, substitutions)
@@ -130,6 +138,19 @@ def seahaven_requirement() -> str:
     if release is None:  # pragma: no cover - a version string setuptools cannot produce
         return "seahaven"
     return f"seahaven~={release.group(1)}.{release.group(2)}"
+
+
+def _readme_parts(substitutions: dict[str, str], *, hub: bool) -> dict[str, str]:
+    """The README's hub sections, rendered, or empty strings for a world without `--hub`."""
+    if not hub:
+        return dict.fromkeys(HUB_README_PARTS, "")
+    root = resources.files(__package__) / "templates" / HUB_README_TEMPLATES
+    return {
+        key: Template((root / f"{part}{TEMPLATE_SUFFIX}").read_text(encoding="utf-8")).substitute(
+            substitutions
+        )
+        for key, part in HUB_README_PARTS.items()
+    }
 
 
 def _render_group(group: str, target: Path, package: str, substitutions: dict[str, str]) -> None:
