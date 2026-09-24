@@ -452,7 +452,7 @@ it for behaviour that applies to many tools, so that each tool does not repeat i
 
 A middleware is anything callable as `(ctx, call, next_) -> result`. It calls `next_(ctx, call)` to
 run the rest of the chain, and returns what it wants the caller to get. There is nothing to
-subclass.
+subclass; the shape is checked at registration.
 
 ```py
 @world.middleware
@@ -478,16 +478,22 @@ Common uses:
 
 ### Middleware technical notes
 
-- **Order.** Middleware runs in registration order, outermost first. Register the error handler
-  first, so it sees every error. In a world that adds other worlds, the host's middleware runs
-  first ([composition.md](composition.md#middleware)).
+- **Order.** Middleware runs in registration order, outermost first. The scaffold registers the
+  error handler first, so it stays outermost and sees every error. In a world that adds other
+  worlds, the host's middleware runs first ([composition.md](composition.md#middleware)).
 - **Arguments.** Validation runs after the middleware, so a middleware sees the arguments as sent.
-  Call `call.tool.validate(call.arguments)` for typed ones.
+  Call `call.tool.validate(call.arguments)` for typed ones. The model is built once at
+  registration, so that is cheap.
+- **`call` is always `ctx.call`.** A layer that rewrites arguments passes the new `Call` on, and
+  the chain hands the next layer a `ctx` whose `call` is that one, so the two cannot diverge.
+  `call.with_arguments(**changes)` merges over the existing arguments and returns a copy. A `Call`
+  is frozen.
 - **Transactions.** Middleware runs outside the tool's transaction, so its writes commit even when
   the tool rolls back. Wrap `next_` in `ctx.db.transaction()` to make them commit or roll back
   together.
-- **What it does not wrap.** Middleware does not run for `UnknownTool`, a tool listing, startup
-  hooks or the control tool.
+- **What it wraps.** Middleware runs for every tool call, including the helpers' and an
+  extension's. It does not run for `UnknownTool`, a tool listing, startup hooks or the control
+  tool.
 
 ## Instance startup
 
