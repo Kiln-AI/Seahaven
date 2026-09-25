@@ -595,7 +595,7 @@ def app(
     *,
     include_control_tools=False,
     max_concurrent_envs=500,
-    session_timeout=3600.0,
+    session_timeout=None,
     console=True,
 ) -> FastAPI: ...
 

@@ -122,9 +122,9 @@ def test_serve_passes_the_operators_session_numbers_to_the_app(
     world: World, served: dict[str, Any]
 ) -> None:
     """The app is built from `serve`'s arguments, not from the module defaults."""
-    serve(world, max_concurrent_envs=7, session_timeout=None)
+    serve(world, max_concurrent_envs=7, session_timeout=60.0)
     assert served["options"]["max_concurrent_envs"] == 7
-    assert served["options"]["session_timeout"] is None
+    assert served["options"]["session_timeout"] == 60.0
 
 
 def test_serve_passes_the_module_defaults_when_it_is_told_nothing(
@@ -134,10 +134,10 @@ def test_serve_passes_the_module_defaults_when_it_is_told_nothing(
     assert served["options"] == {
         "include_control_tools": False,
         "max_concurrent_envs": 500,
-        "session_timeout": 3600.0,
+        "session_timeout": None,
         "console": True,
     }
-    assert (DEFAULT_MAX_CONCURRENT_ENVS, DEFAULT_SESSION_TIMEOUT) == (500, 3600.0)
+    assert (DEFAULT_MAX_CONCURRENT_ENVS, DEFAULT_SESSION_TIMEOUT) == (500, None)
 
 
 def test_serve_can_expose_the_control_tools(world: World, served: dict[str, Any]) -> None:

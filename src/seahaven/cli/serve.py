@@ -46,7 +46,7 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         "--session-timeout",
         type=float,
         default=None,
-        help="seconds of idleness before a session is reaped; 0 disables the reaper (default 3600)",
+        help="seconds of idleness before a session is reaped; 0 turns the reaper off (default off)",
     )
     parser.add_argument(
         "--include-control-tools",
@@ -97,7 +97,7 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _session_timeout(given: float | None, default: float) -> float | None:
+def _session_timeout(given: float | None, default: float | None) -> float | None:
     """The reaper's idleness budget: the default, the value, or off."""
     if given is None:
         return default

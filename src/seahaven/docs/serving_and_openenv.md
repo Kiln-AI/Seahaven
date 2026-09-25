@@ -80,7 +80,7 @@ seahaven serve --host 127.0.0.1 --port 9000
 | `--port` | `8000` | the port to bind |
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
-| `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
+| `--session-timeout` | off | seconds of idleness before a session is reaped; `0` turns the reaper off. See [the idle reaper](#running-it-in-production) |
 | `--include-control-tools` | off | make each session's instance one that can call the deprecated control tool; without the flag the name is an unknown tool. [reference/cli.md](reference/cli.md) names it |
 | `--no-console` | off | do not serve the web console at `/console` |
 | `--world module:attr` | the convention | which world to serve |
@@ -125,8 +125,7 @@ A WebSocket connection is one session, and one session holds one instance.
 - **A second `reset`** destroys the current instance before making the new one, so a session never
   holds two. If creation then fails, the session is left exactly as a fresh one — no instance, no
   episode, no steps — and is open for another `reset`.
-- **Closing the connection** destroys the instance. A dropped client costs nothing once it is
-  reaped.
+- **Closing the connection**, or losing it, destroys the instance.
 
 `reset` takes what `world.instance(...)` takes, because it *is* `world.instance(...)`:
 
@@ -536,9 +535,12 @@ affinity, which is the operator's business. One world is not one *package*, thou
 adds other worlds serves their tools as part of its own surface, so a composite world is still one
 environment on the wire ([composition.md](composition.md)).
 
-**The idle reaper matters.** A held session costs its fixture copy on disk and about a megabyte of
-memory, and a client that drops without closing holds one for ever. An hour is long enough that no
-live eval is reaped and short enough that a crashed harness does not accumulate instances.
+**The idle reaper is off by default.** A session holds its fixture copy on disk and about a megabyte
+of memory until its connection ends. A dropped connection ends the session too, so a client that
+crashes leaves no instance behind. `--session-timeout N` turns the reaper on: it destroys the
+instance of a session that has been idle for `N` seconds. The reaper counts only `reset` and `step`
+as activity, so it can reap a client that is still connected, for example one that only reads
+`state`.
 
 **A disconnect is not an error in the log.** A session that ends normally leaves nothing on
 `uvicorn.error`, whatever client ended it: `SeahavenClient`, a stock `GenericEnvClient`, a raw
