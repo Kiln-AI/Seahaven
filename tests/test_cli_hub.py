@@ -13,7 +13,7 @@ from seahaven.cli import CliError
 from seahaven.cli import hub as hub_command
 from seahaven.cli.hub import HUB_FILES, README, add_hub_files
 from seahaven.cli.new import render
-from tests.conftest import run_cli
+from tests.conftest import assert_scaffold_pytest_passes, run_cli
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -217,3 +217,16 @@ def test_a_refusal_through_the_entry_point_is_one_line_and_exit_one(
     assert result.err.count("\n") == 1
     assert "client.py exists" in result.err
     assert (world / "client.py").read_text(encoding="utf-8") == "mine\n"
+
+
+def test_pytest_passes_on_a_world_named_like_its_directory_after_hub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A one-word name makes the directory and the package the same name, `demo`,
+    and the root `__init__.py` the hub files add is then a package `demo` too."""
+    monkeypatch.chdir(tmp_path)
+    assert run_cli(capsys, "new", "demo").code == 0
+    monkeypatch.chdir(tmp_path / "demo")
+    assert run_cli(capsys, "hub").code == 0
+    assert (tmp_path / "demo" / "__init__.py").is_file()
+    assert_scaffold_pytest_passes(tmp_path / "demo")

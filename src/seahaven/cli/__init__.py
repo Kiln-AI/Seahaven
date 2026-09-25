@@ -224,6 +224,8 @@ def _import(module_name: str, attribute: str, *, root: Path) -> Discovery:
     imported = frozenset(sys.modules)
     world = getattr(module, attribute, None)
     if not isinstance(world, World):
+        if _is_the_project_roots_init(module, root):
+            raise CliError(_root_init_imported(module_name, root), code="SH501", path=root)
         raise CliError(_no_world(module_name, attribute, world), code="SH501", path=root)
     package = _package_of(module)
     if package is None:
@@ -262,6 +264,24 @@ def _no_world(module_name: str, attribute: str, found: object) -> str:
     return (
         f"{module_name} {what} {attribute!r}; "
         f"{module_name}/__init__.py must export {attribute} = seahaven.World(...), {_OVERRIDE}"
+    )
+
+
+def _is_the_project_roots_init(module: ModuleType, root: Path) -> bool:
+    """Whether `module` is the `__init__.py` `seahaven hub` writes at the project root."""
+    file = getattr(module, "__file__", None)
+    return file is not None and Path(file).resolve() == root / "__init__.py"
+
+
+def _root_init_imported(module_name: str, root: Path) -> str:
+    # pytest names a module after every package above it: a test module in a
+    # `tests/` that has an `__init__.py`, and a `conftest.py` beside the root's
+    # `__init__.py`, both import that `__init__.py` as `module_name`.
+    return (
+        f"{module_name} was imported from {root / '__init__.py'} and not from "
+        f"{SOURCE_DIRNAME}/{module_name}/; under pytest a tests/__init__.py or a conftest.py "
+        f"beside that file does this: delete tests/__init__.py, move conftest.py into tests/, "
+        f"or rename the directory {root.name} so it is not the package's name"
     )
 
 

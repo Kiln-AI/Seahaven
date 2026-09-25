@@ -19,7 +19,7 @@ import pytest
 from seahaven.cli import CliError, main
 from seahaven.cli.new import render, seahaven_requirement
 from seahaven.fixtures import load
-from tests.conftest import CliResult, run_cli
+from tests.conftest import CliResult, assert_scaffold_pytest_passes, run_cli
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -131,17 +131,7 @@ def test_check_passes_on_a_fresh_scaffold(
 
 
 def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
-    """A subprocess, because a second pytest cannot run inside this one."""
-    finished = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
-        cwd=scaffold,
-        env={**os.environ, "PYTHONPATH": str(scaffold / "src")},
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-    )
-    assert finished.returncode == 0, finished.stdout + finished.stderr
+    assert_scaffold_pytest_passes(scaffold)
 
 
 def test_the_readme_builds_the_first_fixture(scaffold: Path) -> None:

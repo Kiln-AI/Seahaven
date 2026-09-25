@@ -9,6 +9,8 @@ ProjectTracker's own suite.
 """
 
 import copy
+import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -403,9 +405,26 @@ def run_cli(capsys: pytest.CaptureFixture[str], *argv: str) -> CliResult:
 
     In process rather than as a subprocess: `main` is the entry point, its return
     value is the exit code, and a subprocess would test the console script the
-    installer writes instead of anything here. The one test that does use a
-    subprocess is the scaffold's own `pytest` run, which has to be one.
+    installer writes instead of anything here. The tests that do use a subprocess
+    run a scaffold's own `pytest`, which has to be one: `assert_scaffold_pytest_passes`.
     """
     code = main(list(argv))
     captured = capsys.readouterr()
     return CliResult(code=code, out=captured.out, err=captured.err)
+
+
+def assert_scaffold_pytest_passes(root: Path) -> None:
+    """A scaffold's own `pytest`, in a subprocess because a second pytest cannot run in this one.
+
+    `src` goes on `PYTHONPATH` in place of the editable install `uv sync` makes.
+    """
+    finished = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q"],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert finished.returncode == 0, finished.stdout + finished.stderr

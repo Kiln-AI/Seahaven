@@ -84,8 +84,11 @@ uv run pytest --seahaven-world mypackage:world
 
 `--seahaven-world module:attr` is the plugin's namespace-qualified version of the CLI's `--world`,
 for a layout the convention misses. Everything else — `-k`, `-x`, markers of your own — is ordinary
-pytest. The plugin adds two fixtures, one marker and that one option, and does nothing at all to a
-run that does not use them.
+pytest. The plugin adds two fixtures, one marker and that one option. It does not change a run that
+does not use them, with one exception: pytest collects a directory that holds an `__init__.py` and
+`src/<the directory's name>/` as a plain directory, so that in a world `seahaven hub` has been run
+on, the `world` fixture gets the package in `src/`. Such a world must not have a
+`tests/__init__.py` or a `conftest.py` at its root; put a `conftest.py` in `tests/`.
 
 ## What is worth testing in a world
 

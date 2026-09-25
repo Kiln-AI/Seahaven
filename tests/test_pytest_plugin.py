@@ -590,6 +590,91 @@ def test_a_package_with_no_world_fails_with_the_fix_and_no_traceback(
     assert "Traceback" not in result.stdout.str()
 
 
+def write_test_module(pytester: pytest.Pytester, source: str) -> None:
+    """A test module in `tests/`, where a scaffold keeps them, and not at the root.
+
+    At the root, a module beside an `__init__.py` is named after the root's
+    package in any case, which is the scaffold's layout no more than it is a
+    test of how the root is collected.
+    """
+    tests = pytester.mkdir("tests")
+    (tests / "test_it.py").write_text(inspect.cleandoc(source) + "\n", encoding="utf-8")
+
+
+def test_a_root_init_named_like_the_package_does_not_stand_in_for_it(
+    pytester: pytest.Pytester,
+) -> None:
+    """`seahaven hub` adds an `__init__.py` at the root, and a one-word world's
+    directory has its package's name: the `world` fixture must still get `src/`'s."""
+    package = pytester.path.name
+    root = write_world(pytester, package=package)
+    (root / "__init__.py").write_text(
+        "# Present because `openenv push` requires it.\n", encoding="utf-8"
+    )
+    write_test_module(
+        pytester,
+        f"""
+        def test_it(world):
+            assert world.name == "{package}"
+        """,
+    )
+    pytester.runpytest().assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize("module_under_the_root", ["tests/__init__.py", "conftest.py"])
+def test_a_module_named_after_the_root_package_fails_with_the_fix(
+    pytester: pytest.Pytester, module_under_the_root: str
+) -> None:
+    """pytest names `tests/test_it.py` `<package>.tests.test_it` and a root
+    `conftest.py` `<package>.conftest`, so either one imports the root's
+    `__init__.py` as the package whatever the plugin collects."""
+    package = pytester.path.name
+    root = write_world(pytester, package=package)
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    write_test_module(
+        pytester,
+        """
+        def test_it(world):
+            assert world is not None
+        """,
+    )
+    (root / module_under_the_root).write_text("", encoding="utf-8")
+    result = pytester.runpytest()
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(
+        [f"*{package} was imported from {root.resolve() / '__init__.py'} and not from src/*"]
+    )
+    result.stdout.fnmatch_lines(
+        ["*delete tests/__init__.py, move conftest.py into tests/, or rename the directory*"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("root_init", "package_named_like_root", "collector"),
+    [
+        (False, True, "Dir"),
+        (True, False, "Package"),
+        (True, True, "Dir"),
+    ],
+    ids=["no-root-init", "root-init-beside-another-package", "hub-world"],
+)
+def test_only_a_root_init_beside_a_package_of_its_name_changes_how_the_root_is_collected(
+    pytester: pytest.Pytester, root_init: bool, package_named_like_root: bool, collector: str
+) -> None:
+    root = write_world(pytester, package=pytester.path.name if package_named_like_root else "x")
+    if root_init:
+        (root / "__init__.py").write_text("", encoding="utf-8")
+    write_test_module(
+        pytester,
+        """
+        def test_it():
+            assert True
+        """,
+    )
+    result = pytester.runpytest("--collect-only")
+    result.stdout.fnmatch_lines([f"<{collector} {root.name}>"])
+
+
 def test_the_marker_is_registered(pytester: pytest.Pytester) -> None:
     """`--strict-markers` is what a world's CI runs; an unregistered marker fails it."""
     write_world(pytester)
