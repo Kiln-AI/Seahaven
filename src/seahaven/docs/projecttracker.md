@@ -157,9 +157,10 @@ team `ENG` ever had, whichever of its projects it is in. The counter is bumped b
 Anything that writes issues without that statement, such as a bulk load in a fixture generator, has
 to leave the counter where the tools would have.
 
-**A closed issue has no assignee.** Moving an issue to `done` or `canceled` drops its assignee and
-records the drop, and assigning a closed issue is a `CONFLICT`. So `status IN ('done','canceled')
-AND assignee_id IS NOT NULL` is a state this world cannot reach, and a grader may rely on it.
+**Closing an issue drops its assignee.** Moving an issue to `done` or `canceled` drops its assignee
+and records the drop, and `assign_issue` on a closed issue is a `CONFLICT`. `update_issue` checks
+only the `status` it is given, so a call that sets `assignee_id` without `status` can assign a
+closed issue. Do not grade on a closed issue never having an assignee.
 
 **An archived issue keeps its fields and leaves the lists.** `archive_issue` stamps `archived_at`
 and takes the issue out of `list_issues`. `get_issue`, `search_issues` and `run_sql` still see it,

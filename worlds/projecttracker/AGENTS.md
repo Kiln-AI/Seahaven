@@ -48,10 +48,10 @@ applies here too.
   so it orders by `(created_at, id)` and says so: oldest first, id order among comments that share
   an instant. Do not write an eval that grades on the order of comments an agent added; grade on the
   rows.
-- **The closed-issue rule.** A `done` or `canceled` issue has no assignee: transitioning to one
-  drops the assignee and records the drop, and assigning a closed issue is a `CONFLICT`. An eval may
-  rely on `status IN ('done','canceled') AND assignee_id IS NOT NULL` being a state this world
-  cannot reach.
+- **The closed-issue rule.** Transitioning an issue to `done` or `canceled` drops its assignee and
+  records the drop, and `assign_issue` on a closed issue is a `CONFLICT`. `update_issue` checks only
+  the `status` it is given: a call that sets `assignee_id` and leaves `status` out will assign a
+  closed issue. Do not write an eval that relies on a closed issue never having an assignee.
 - **Archiving** stamps `issues.archived_at` and takes the issue out of `list_issues`. It stays in
   the database and inside `get_issue` and `search_issues`, and no field of it changes again: all
   four tools that write to an issue — `update_issue`, `assign_issue`, `transition_issue` and

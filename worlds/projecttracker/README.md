@@ -71,8 +71,9 @@ Tests: `uv run pytest worlds/projecttracker` from the repository root, or `uv ru
   (`2026-06-01T09:00:00.000Z`), written from `ctx.clock.iso()` and never from the wall clock.
 - **Issue keys** are `TEAMKEY-n`, minted from a counter on the team: `ENG-41` is the forty-first
   issue team `ENG` ever had, in whichever of its projects.
-- **A closed issue has no assignee.** Moving an issue to `done` or `canceled` drops its assignee,
-  and assigning a closed issue is refused.
+- **Closing an issue drops its assignee.** Moving an issue to `done` or `canceled` drops its
+  assignee, and `assign_issue` refuses a closed issue. `update_issue` with an `assignee_id` and no
+  `status` does not check the current status, so it can assign a closed issue.
 - **An archived issue keeps its fields and leaves `list_issues`** — no tool will change one again,
   though `get_issue` and `search_issues` still find it. It can still be commented on: archiving
   freezes the issue, not the conversation about it.

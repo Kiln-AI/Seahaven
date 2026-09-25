@@ -9,11 +9,12 @@ a number is never handed back when an issue is archived. `ENG-41` is the
 forty-first issue team `ENG` ever had, whichever project it is in and whatever
 became of the forty before it.
 
-**A closed issue has no assignee.** Moving an issue to `done` or `canceled` drops
-its assignee, and assigning one is refused. The product's reasoning is that an
-assignee means "this person is doing this", which a finished issue has nobody
-doing; the eval-facing consequence is that `assignee_id IS NOT NULL` and
-`status = 'done'` is a state this world cannot be in, and a grader may rely on it.
+**Closing an issue drops its assignee.** Moving an issue to `done` or `canceled`
+drops its assignee, and `assign_issue` refuses a closed issue. The product's
+reasoning is that an assignee means "this person is doing this", which a finished
+issue has nobody doing. `update_issue` checks only the `status` it is given, so a
+call that sets `assignee_id` without `status` can assign a closed issue: a grader
+must not rely on a closed issue never having an assignee.
 
 **An archived issue keeps its fields.** `archive_issue` stamps `archived_at` and
 takes the issue out of `list_issues`. It is still there -- `get_issue` answers
