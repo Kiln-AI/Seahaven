@@ -70,7 +70,8 @@ seahaven new notes --dir ~/projects --hub
 The command refuses an existing directory rather than merging into one. It also refuses a name that
 does not make a Python package name, and a name `World(name=...)` would not accept — the name
 reaches the scaffolded `world.py` verbatim, so a world it cannot import is refused before the
-directory is written.
+directory is written. A name whose package has the same name as a standard library module or
+`seahaven` is refused too, because Python imports that module instead of the world.
 
 The command finishes by printing what to do next. While Seahaven is unpublished, the `uv sync` in
 that list is a trap: the scaffold's `seahaven~=0.0` resolves to a placeholder release that contains
