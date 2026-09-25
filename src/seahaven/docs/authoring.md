@@ -206,25 +206,41 @@ JSON schema is what the tool list publishes. The model is **strict**:
 - every violation is reported at once, as a `seahaven.ArgumentError` carrying `violations`, so an
   agent can fix all of them in one turn.
 
-Argument types are the JSON types, `Literal`, and nested pydantic models. Two kinds are refused at
-registration, because strict validation could never satisfy them from a wire format: `datetime`,
-`date` and `time`, and any `Enum` subclass, anywhere inside the annotation. Use `str` with a pattern
-for a timestamp, and `Literal` for a closed set:
+An argument may be almost any type pydantic gives a JSON schema: the JSON types, `Literal`, an
+`Enum`, `datetime`, `UUID`, `Decimal`, `tuple`, `set`, a dataclass, a `TypedDict` or a nested
+pydantic model. [What registration refuses](#what-registration-refuses) lists the exceptions. An
+agent sends the JSON form that the schema publishes, such as a string for a `datetime` and an array
+for a `tuple`, and the tool receives the Python object. The strict rules above apply at every depth,
+except inside a type with a pydantic config of its own, described below.
+
+A call is validated in one of two modes. When every argument is plain JSON at every depth (`dict`,
+`list`, `str`, `int`, `float`, `bool` and `None`), the call is validated as JSON, which is the form
+the schema publishes. When any argument holds another Python object, the whole call is validated as
+Python, and each argument must then be the annotated type's own object. A `datetime` passed for a
+`str` is refused, and so is a list for a `tuple` beside a `UUID` object.
+
+A union whose members accept the same JSON string is ambiguous, and pydantic picks the member:
+`datetime | str` receives a timestamp as a `datetime`, and `str | datetime` receives it as a `str`.
+
+A nested pydantic model validates under its own config, not the tool's. So does a pydantic
+dataclass, and a type given `@with_config`. Set `strict=True` in it, or `strict=False` to accept lax
+input on purpose. Registration refuses such a type when it sets neither.
 
 ```py
+from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Status = Literal["backlog", "todo", "done"]
-Timestamp = Annotated[
-    str,
-    Field(
-        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
-        description="A UTC timestamp with milliseconds, e.g. 2026-06-01T09:00:00.000Z.",
-    ),
-]
 Limit = Annotated[int, Field(ge=1, le=250, description="How many rows to return, 1 to 250.")]
+
+
+class Window(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    start: datetime
+    end: datetime
 ```
 
 Declare these once in a module of their own and import them everywhere, so that five tools that take
@@ -308,7 +324,9 @@ when it:
 - has no first parameter, or one that is not positional and either annotated `seahaven.Ctx` or left
   unannotated;
 - has an argument with no type annotation, a positional-only argument, `*args` or `**kwargs`;
-- has an argument annotated `datetime`, `date`, `time` or an `Enum` subclass, at any depth;
+- has an argument that holds, at any depth, a nested pydantic model, pydantic dataclass or
+  `@with_config` type that does not set `strict`, or a `Literal` of a value JSON cannot send, such
+  as a plain `Enum` member;
 - has an argument whose annotation exists only under `TYPE_CHECKING`, in which case the message
   names the symbol;
 - has an argument with a mutable default (`[]`, `{}`, `set()`);

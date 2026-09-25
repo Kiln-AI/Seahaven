@@ -373,6 +373,11 @@ class Tool:
 Seahaven's helpers or an extension's. `control` is Seahaven's own flag for its control tool and
 cannot be set through it.
 
+`validate` is strict in one of two modes, chosen for the whole call. Arguments that are plain JSON
+at every depth are validated as JSON, the form the schema publishes. Arguments that hold any other
+Python object are validated as Python, and each must be the annotated type's own object. It returns
+the Python objects.
+
 ## `LogRecord`
 
 ```py

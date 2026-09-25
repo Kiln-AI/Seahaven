@@ -146,6 +146,8 @@ def test_a_tool_is_called_with_exactly_the_validated_arguments(ctx: Ctx) -> None
     """
 
     class Point(BaseModel):
+        model_config = ConfigDict(strict=True)
+
         x: int
         y: int
 
