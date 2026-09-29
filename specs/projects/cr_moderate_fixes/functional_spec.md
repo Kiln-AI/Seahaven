@@ -4,7 +4,7 @@ status: complete
 
 # Functional Spec: CR Moderate Fixes
 
-This project fixes the 18 moderate findings that [triage.md](triage.md) marks "Fix". Each
+This project fixes the 17 moderate findings that [triage.md](triage.md) marks "Fix". Each
 section below states the defect, the behaviour after the fix, and what an author or operator sees.
 IDs are the review's `phase.M#` IDs, as used in the triage.
 
@@ -21,14 +21,15 @@ Guiding rules for every item:
 
 ### 11.M1: faster instance creation
 Creating an instance (a fork from a fixture, or a blank instance) no longer fsyncs when it
-switches the fresh database copy to WAL. Instance databases are throwaway, so they give up
+builds its database file or switches it to WAL. Instance databases are throwaway, so they give up
 durability against an OS crash or power loss. Nothing else changes: fixture files written by
 `freeze` keep their current durability. Expected effect: fork time roughly halves on `agency`.
 
 ### 7.M2: `seahaven serve` listens on localhost by default
 `seahaven serve` and `seahaven.openenv.serve(...)` bind `127.0.0.1` by default, not `0.0.0.0`.
 An operator who wants the server reachable from other hosts passes `--host 0.0.0.0`. The Docker
-image a hub scaffold builds keeps working, because its Dockerfile already passes `--host 0.0.0.0`.
+image a hub scaffold builds keeps working: its Dockerfile runs uvicorn directly with
+`--host 0.0.0.0`, and a test pins that.
 The CLI help and the docs state the new default.
 
 ### 5.M3: `SeahavenClient.step(ListToolsAction())` works
@@ -38,23 +39,17 @@ pydantic `ValidationError` after the server ran the step. After the fix, the cli
 
 ### 6.M1: import errors in world code are reported where they happen
 When importing a world's package raises (a `SyntaxError`, a `NameError`, an `ImportError` from
-the world's own code), `seahaven check` (rule SH501) and the pytest plugin report the exception
-type, its message, and the file and line in the world's code where it was raised. They do not
-tell the author to "export world = ...": that fix text is shown only when the package imports
-cleanly and has no world.
-
-### 3.M1: the SQL clock can no longer get into stored or indexed values
-The clock's SQL functions (`datetime('now')`, `CURRENT_TIMESTAMP` and the rest of the
-overrides) stop claiming to be deterministic. SQLite then applies its own rule: a schema that uses
-the current time in a generated column, a CHECK constraint, or an index expression or partial
-index `WHERE` clause is refused when the schema is applied, with SQLite's error. `DEFAULT`
-clauses and triggers that use the current time keep working. Lint SH103 remains; the docs phase
-restates what it is for.
+the world's own code, or a Seahaven error such as a duplicate tool name), `seahaven check` (rule
+SH501) and the pytest plugin report the exception type, its message, and the file and line in the
+world's code where it was raised, with the fix "fix the error at <file:line>". They do not tell
+the author to "export world = ...": that fix text is shown only when the package imports cleanly
+and has no world. A world module that does not exist at all gets a fix that names `--world`.
 
 ### 4.M2: startup hooks run hosts first, even when a node is shared
 Instance startup hooks run in an order where every world runs before every world it adds. When
 nothing is shared, the order is identical to today's (root first, then each added world in
-`add_world` order, depth first). When a node is added by two hosts, it runs after both. Example:
+`add_world` order, depth first). When a node is added by two hosts, it runs after both. A host's
+hook that seeds a shared node therefore works the same composed as alone. Example:
 `company` adds `payments` and then `shop`, and `shop` adds `payments`; the order becomes
 `company`, `shop`, `payments` (today: `company`, `payments`, `shop`).
 
@@ -67,11 +62,15 @@ on a one-CPU host), two threads are enough.
 
 After the fix:
 
-- A thread that already holds a gate slot never waits for another one. Calls made inside
-  `bulk()`, on the same instance or on any other instance, run without queueing at the gate.
-- `bulk()` takes its gate slot before it takes the instance lock, as every call does.
+- The gate is re-entrant per thread. Once a thread is inside a call or a `bulk()` block, nothing
+  more it does waits at the gate: a call inside `bulk()` (on the same instance or another), a
+  nested call, and a tool that calls another instance all run without queueing.
+- `bulk()` marks the thread before it takes the instance lock, and takes no gate slot. The gate
+  does not apply to `bulk()` today, and it still does not.
 - Nothing changes for a caller that does not nest: same signatures, same results, same limits.
-  A `bulk()` block holds one gate slot for its duration.
+  The HTTP server, whose requests run inside `bulk()`, stays ungated.
+- This also fixes a third hang: with a gate of 1, a tool that calls another instance waited for a
+  second slot while it held the only one.
 
 ## 3. Middleware on a shared node (4.M1)
 
@@ -82,14 +81,17 @@ silently lose the middleware of the worlds on that route.
 After the fix, the middleware that runs on an agent-facing tool is the middleware of the worlds on
 the route through which that tool was contributed. When a tool reaches the surface under two
 names through two routes, each name runs its own route's middleware. When nothing is shared,
-behaviour is unchanged. `composition.md` states the rule.
+behaviour is unchanged. Host code that calls through a handle (`ctx.worlds.x.call`) is also
+unchanged: it runs only the owning world's own middleware, because the host's layers already wrap
+the host tool making the call. `composition.md` states the rule, and SH207's entry in
+`reference/lints.md` notes that two names of one tool can run different middleware.
 
 ## 4. Docs
 
 The docs phase fixes every docs-only item and does one sweep:
 
 - **9.M1:** restate what lint SH103 is for. The current reason is false: the SQL clock already
-  writes canonical time text.
+  writes canonical time text. The rule text names every place the lint already searches.
 - **9.M7:** correct `composition.md`'s statement of what the benchmark measures.
 - **9.M8:** correct the `projecttracker.md` block that runs `uv run seahaven check` from where it
   fails.
@@ -110,6 +112,6 @@ The docs phase fixes every docs-only item and does one sweep:
 
 ## Out of scope
 
-- The 28 won't-fix and 9 pre-publish items in [triage.md](triage.md).
+- The 29 won't-fix and 9 pre-publish items in [triage.md](triage.md).
 - The `seahaven new --hub` root `__init__.py` fix (another branch).
 - The review's mild findings.

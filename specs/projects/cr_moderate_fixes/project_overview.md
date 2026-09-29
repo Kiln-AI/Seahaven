@@ -5,8 +5,8 @@ status: complete
 # CR Moderate Fixes
 
 Fix the moderate findings from the full-repo deep code review (September 2026) that the maintainer
-decided to fix. The review's 56 moderate findings were triaged one by one: 28 are won't-fix, 9 are
-pre-publish decisions, 1 was already fixed, and 18 are fixed by this project. The triage, with the
+decided to fix. The review's 56 moderate findings were triaged one by one: 29 are won't-fix, 9 are
+pre-publish decisions, 1 was already fixed, and 17 are fixed by this project. The triage, with the
 reason for every decision, is in [triage.md](triage.md).
 
 Not a ton of phases. A good clustering of related items, with the low-risk ones grouped together:

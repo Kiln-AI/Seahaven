@@ -13,8 +13,8 @@ the "Pre-publish" items are considered before release.
 | Bucket | Count | IDs |
 |---|---:|---|
 | Already fixed | 1 | 1.M2 (in `a1680c0`, the tool-argument validation fix) |
-| Won't fix (permanent) | 28 | See [Won't fix](#wont-fix-permanent) |
-| Fix | 18 | See [Fix](#fix): 14 easy fixes and 4 larger items |
+| Won't fix (permanent) | 29 | See [Won't fix](#wont-fix-permanent) |
+| Fix | 17 | See [Fix](#fix): 13 easy fixes and 4 larger items |
 | Pre-publish: consider before release | 9 | See [Pre-publish](#pre-publish-consider-before-release) |
 
 ---
@@ -78,6 +78,7 @@ Grouped by reason.
 | ID | Issue | Why |
 |---|---|---|
 | 5.M1, 11.M3 | `state` is built on OpenEnv's event loop; the default format re-renders the whole log per read | We own the state code and it is fast enough |
+| 3.M1 | Clock SQL functions are registered deterministic, so `'now'` can get into a generated column, an index or a partial index | Removing the flag also refuses deterministic uses such as an index on `date(created_at)`, and slows scans that call the clock. Lint SH103 already flags `'now'` anywhere in the schema |
 
 ---
 
@@ -113,7 +114,6 @@ Clear what to do, a small change, low risk.
 | 7.M2 | `seahaven serve` binds `0.0.0.0` with no auth | Default to `127.0.0.1`, plus a docs row; the Dockerfile template already passes `--host 0.0.0.0` |
 | 5.M3 | `client.step(ListToolsAction())` crashes with a pydantic error | Parse a reply that carries `tools` as `ListToolsObservation`, plus a test |
 | 6.M1 | An import error in world code shows no file or line, and gives the wrong fix text | Report the exception and its last frame; drop the wrong fix text (CLI and pytest plugin) |
-| 3.M1 | Clock SQL functions are marked DETERMINISTIC, so `'now'` can get into stored or indexed values | Remove the flag and update 2 SH103 tests. SQLite then refuses such schemas at build |
 
 ---
 
