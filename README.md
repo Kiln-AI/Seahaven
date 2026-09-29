@@ -17,19 +17,16 @@ Seahaven worlds can: clone the tools your agent uses in production, run an hundr
 
 ## Features
 
-- **[Stateful](src/seahaven/docs/concepts.md#instance).** Writes change every later read. Each
-  instance is its own SQLite database.
+- **[Stateful](src/seahaven/docs/concepts.md#instance).** Each instance is its own SQLite database. 
 - **[Fixtures](src/seahaven/docs/db_schema_and_fixtures.md).** Freeze known starting states like
   `small_startup`, `agency` or `big_co`, and reuse them across evals. Immutable and hash-verified.
-- **[Any interface](src/seahaven/docs/authoring.md#writing-a-tool).** Tools for REST
+- **[Recreate any Tools](src/seahaven/docs/authoring.md#writing-a-tool).** Mock AI tool calls, REST
   APIs, sandboxed SQL, search, or any custom format.
 - **[Parallel Worlds](src/seahaven/docs/serving_and_openenv.md).** Serve hundreds of instances per process, one instance per connection, thousands of tool calls per second.
 - **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same initial state (fixture),
   same clock/time, same random seed: the same run, every time. Across Python and SQL.
-- **[Change log](src/seahaven/docs/state.md).** Every row the agent changed, call by call, in one
-  versioned document with the provenance to read it. Grade on state, not on transcripts.
-- **[Composable worlds](#composing-worlds).** Add sub-worlds to your world, like a full Stripe
-  or Shopify API. Compose, reuse and share worlds.
+- **[Evaluate World State](src/seahaven/docs/state.md).** Every row the agent changed is logged. Grade on state, not on transcripts.
+- **[Composable worlds](#composing-worlds).** Compose, reuse and share worlds. Example MyCoWorld can include StripeAPIWorld and ShopifyAPIWorld. 
 - **[OpenEnv](src/seahaven/docs/serving_and_openenv.md).** `seahaven serve` is an OpenEnv
   environment. Drive it with any OpenEnv client, in any language, or publish it to Hugging Face.
 - **[MCP](src/seahaven/docs/serving_and_openenv.md#serving-one-world-to-an-mcp-client).** `seahaven
