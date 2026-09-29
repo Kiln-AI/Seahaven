@@ -1,20 +1,19 @@
-# Seahaven
+<p align="center">
+  <img width="220" height="185" alt="seahaven logo" src="https://github.com/user-attachments/assets/79e3b5cd-3522-48ae-b5a6-ba356da4ee00" />
+</p>
+<h3 align="center">
+  A framework for building synthetic worlds for AI agents.
+</h3>
 
-**A framework for building synthetic worlds for AI agents.** Fake, stateful replicas of the systems your agent works against, for RL and evals.
+<p align="center">
+  <a href="src/seahaven/docs/index.md"><strong>Docs</strong></a> •
+  <a href="https://pypi.org/project/seahaven/"><strong>PyPI</strong></a> •
+  <a href="https://kiln.tech"><strong>Kiln AI</strong></a> 
+</p>
 
-[Docs](src/seahaven/docs/index.md) · [PyPI](https://pypi.org/project/seahaven/) · [Kiln AI](https://kiln.tech)
+Seahaven worlds can: clone the tools your agent uses in production, run an hundreds of isolated instances for agent RL/evals, and describe all state changes.
 
-> **Seahaven** *(noun)*
->
-> 1. A Python framework for building synthetic worlds for AI agents.
-> 2. The town in *The Truman Show*. An entire world built so that one inhabitant believes it is
->    real.
-
-RL and evals need thousands of rollouts, in parallel, each from a known state, each inspectable
-afterwards. No real system or staging copy can do that.
-
-Seahaven worlds can: clone the tools your agent uses in production, fork hundreds of private
-copies in milliseconds, run an agent in each, see exactly what it changed, then throw them away.
+> Named after the town in *The Truman Show*. An entire world built so that one inhabitant believes it is real.
 
 ## Features
 
