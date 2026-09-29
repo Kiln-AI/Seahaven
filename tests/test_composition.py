@@ -355,6 +355,29 @@ def test_by_fn_carries_every_entry_a_function_reaches() -> None:
     assert [entry.node.path for entry in entries] == ["ours", "theirs"]
 
 
+def shared_under_a_middle() -> World:
+    """`leaf` twice: through `middle` as `m_`, and straight from the host as `l_`."""
+    host, middle = make_world("host", "own"), make_world("middle")
+    leaf = make_world("leaf", "leaf_write", "leaf_read")
+    middle.add_world(leaf, name="leaf")
+    host.add_world(middle, name="middle", tool_prefix="m_")
+    host.add_world(leaf, name="leaf", tool_prefix="l_")
+    return host
+
+
+def test_each_entry_carries_the_chain_of_the_route_that_contributed_it() -> None:
+    tools = shared_under_a_middle().composition().tools
+    assert tools["m_leaf_write"].node is tools["l_leaf_write"].node
+    assert tools["m_leaf_write"].chain is not tools["l_leaf_write"].chain
+
+
+def test_entries_of_one_route_share_one_chain() -> None:
+    host = shared_under_a_middle()
+    tools = host.composition().tools
+    assert tools["m_leaf_write"].chain is tools["m_leaf_read"].chain
+    assert tools["own"].chain is host.chain
+
+
 # ------------------------------------------------------------- bound startup
 
 

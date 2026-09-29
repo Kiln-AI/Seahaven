@@ -58,7 +58,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Concatenate, Self, overload
 
-from seahaven.call import Call, arguments_of, name_of, serialise
+from seahaven.call import Call, Handler, arguments_of, name_of, serialise
 from seahaven.changes import (
     CallRecord,
     LogRecord,
@@ -276,11 +276,12 @@ class NodeRuntime:
 
 @dataclass(frozen=True)
 class _Target:
-    """What a call resolved to: the name as it was asked for, and who owns it."""
+    """What a call resolved to: the name as it was asked for, who owns it, and its chain."""
 
     name: str
     tool: Tool
     node: Node
+    chain: Handler
 
 
 class Instance:
@@ -647,11 +648,11 @@ class Instance:
             # A function names the entry, and the entry names the node: the two
             # ways in meet here, and everything below this line is one path.
             entry = composition.entry_for(tool)
-            return _Target(entry.name, entry.tool, entry.node)
+            return _Target(entry.name, entry.tool, entry.node, entry.chain)
         name = tool
         entry = composition.tools.get(name)
         if entry is not None:
-            return _Target(name, entry.tool, entry.node)
+            return _Target(name, entry.tool, entry.node, entry.chain)
         # Control tools are never contributed -- they are the framework's, not a
         # world's surface -- so the composite list cannot hold them and the root's
         # own registry is where they are. Every other name the root registers is
@@ -664,7 +665,8 @@ class Instance:
             # words: whether the name exists at all is not something a caller
             # gets to learn by calling it.
             raise UnknownTool(name)
-        return _Target(name, registered, composition.root)
+        # `control.dispatch` answers a control tool before any chain would run.
+        return _Target(name, registered, composition.root, composition.root.own_chain)
 
     def _dispatch(self, target: _Target, arguments: Mapping[str, Any]) -> Any:
         tool = target.tool
@@ -683,15 +685,16 @@ class Instance:
             # and a middleware short-circuit included: the harness's Nth call is
             # this instance's Nth (functional_spec.md §7).
             i = self._next_ordinal()
-            # The chain is read from the node here rather than held, so a
-            # middleware registered after this instance was made applies to it.
+            # The chain comes from this call's resolution, which reseals after a
+            # registration, so a middleware registered after this instance was
+            # made applies to it.
             with (
                 self._recording(i),
                 self._logging_call(target.name, arguments),
                 self._logging_escape(target.name, target.node.path),
                 in_call(),
             ):
-                return target.node.agent_chain(ctx, call)
+                return target.chain(ctx, call)
 
     def _next_ordinal(self) -> int:
         """The ordinal of the call about to run, counting from 0. The lock is held.

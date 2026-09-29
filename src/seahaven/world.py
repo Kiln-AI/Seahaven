@@ -256,10 +256,10 @@ class World:
 
         The root node's chain, which for a world that adds nothing is this world's
         middlewares and `invoke` -- the chain it has always been. A contributed
-        tool has its own, on the node that owns it, because the route to it runs
-        through more worlds than this one.
+        tool has its own, on its entry in the tool list, because the route to it
+        runs through more worlds than this one.
         """
-        return self.composition().root.agent_chain
+        return self.composition().root.own_chain
 
     @property
     def added_worlds(self) -> Sequence[AddedWorld]:

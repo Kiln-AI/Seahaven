@@ -375,12 +375,14 @@ for what no tool covers. Outside a `db.transaction()` block, statements there au
 
 ## Middleware
 
-An agent call to a contributed tool descends every world's middleware along the canonical route from
-the root to the owning node, outermost first: the host's, then any world in between, then the owning
-world's, and then the tool. The host can wrap every tool it serves, with an access-control layer
-gating the whole surface or a trace, and the added world's own error handler still shapes its errors
-as its product would. The scaffolded handler passes `ToolError` through, so a host's outermost
-handler does not re-wrap an added world's product errors.
+An agent call to a contributed tool descends the middleware of every world on the route that
+contributed that tool, from the root to the owning world, outermost first: the host's, then any
+world in between, then the owning world's, and then the tool. When a shared node's tool reaches the
+surface under two names by two routes, each name runs its own route's middleware. The host can wrap
+every tool it serves, with an access-control layer gating the whole surface or a trace, and the
+added world's own error handler still shapes its errors as its product would. The scaffolded handler
+passes `ToolError` through, so a host's outermost handler does not re-wrap an added world's product
+errors.
 
 **Each layer runs with its own world's context.** A host middleware sees the host's `db`, `state`,
 `ids` and `worlds`. The owning world's middleware and the tool see the owning node's. Without that

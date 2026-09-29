@@ -196,7 +196,8 @@ and move on.
 **Why.** Two routes to one shared store each carry their own prefix and lists, which is two
 declarations rather than a collision. The result is an agent that sees `stripe_create_charge` and
 `billing_create_charge`, both writing to one account, with nothing in either listing saying so.
-Sometimes that is the client's real surface, which is why it is a warning.
+Each name also runs the middleware of its own route. Sometimes that is the client's real surface,
+which is why it is a warning.
 
 **Fix.** `give every route but one tool_allow_list=[] or a tool_block_list naming it, or accept that
 the agent sees one account twice`.

@@ -17,7 +17,7 @@ phase names.
 - [x] **Phase 2: The `bulk()` deadlock (2.M1).** A per-thread re-entrant gate; `bulk()` marks the
   thread and takes no slot. Its own commit. See
   [components/phase_2_bulk_gate.md](components/phase_2_bulk_gate.md).
-- [ ] **Phase 3: Middleware per contributing route (4.M1).** A chain per contributed entry, built
+- [x] **Phase 3: Middleware per contributing route (4.M1).** A chain per contributed entry, built
   from the route that contributed it. Its own commit. See
   [components/phase_3_route_middleware.md](components/phase_3_route_middleware.md).
 - [ ] **Phase 4: Docs.** 9.M1 (SH103's rationale), 9.M7, 9.M8, 8.M4 (projecttracker audit-trail
