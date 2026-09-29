@@ -2,7 +2,7 @@
   <img width="200" height="168" alt="seahaven logo" src="https://github.com/user-attachments/assets/79e3b5cd-3522-48ae-b5a6-ba356da4ee00" />
 </p>
 <h3 align="center">
-  Synthetic world framework for AI agent evals and RL.
+  Synthetic world framework for agent evals and RL.
 </h3>
 
 <p align="center">

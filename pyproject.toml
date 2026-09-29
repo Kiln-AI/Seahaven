@@ -9,7 +9,7 @@ build-backend = "uv_build"
 [project]
 name = "seahaven"
 version = "0.0.1"
-description = "Synthetic world framework for AI agent evals and RL."
+description = "Synthetic world framework for agent evals and RL."
 readme = "README.md"
 requires-python = ">=3.14"
 authors = [{ name = "Steve Cosman" }]
