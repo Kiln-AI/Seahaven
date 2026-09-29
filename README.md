@@ -22,11 +22,11 @@ on what the agent changed. Production systems can't do that. Seahaven is a Pytho
 building synthetic worlds that can: working copies of your agent's tools, realistic enough that the
 agent can't tell the difference.
 
-> Named after the town in *The Truman Show*: an entire world built so that one inhabitant believes
-> it is real.
-
 Seahaven handles the hard parts (parallel instances, reproducibility, serving, and change logs), so
 you only write what's specific to your world: its tables and its tools.
+
+> Named after the town in *The Truman Show*: an entire world built so that one inhabitant believes
+> it is real.
 
 ## Features
 
@@ -43,7 +43,7 @@ you only write what's specific to your world: its tables and its tools.
 
 - **[Fixtures](src/seahaven/docs/db_schema_and_fixtures.md):** Freeze known starting states like
   `small_startup`, `agency` or `big_co`, and reuse them across runs.
-- **[Host Parallel Instances](src/seahaven/docs/serving_and_openenv.md):** Serve hundreds of world
+- **[Concurrent Instances](src/seahaven/docs/serving_and_openenv.md):** Serve hundreds of world
   instances per process, at thousands of requests per second.
 - **[Evaluate World State](src/seahaven/docs/state.md):** Grade on state, not on transcripts.
   Every row the agent changed is logged.
