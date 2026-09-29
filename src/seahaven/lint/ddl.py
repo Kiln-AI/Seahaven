@@ -173,7 +173,7 @@ def _wall_clock_findings(
 
     `sqlite_master` rather than the files, so a wall clock reaches the finding
     wherever it is spelled: a column default, a trigger body, a view, a generated
-    column or a partial index.
+    column, a `CHECK` constraint, an index expression or a partial index.
     """
     findings: list[Finding] = []
     for name, table, sql in _schema_objects(conn):

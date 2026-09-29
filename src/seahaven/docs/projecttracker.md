@@ -55,13 +55,14 @@ worlds/projecttracker/
 ```
 
 `__init__.py` is four lines and no cleverness: build the world, then import the modules whose import
-registers things. That is the whole reason those imports exist, and `seahaven check` (`SH301`) fails
-if a module under `tools/` or `middleware/` is missing from them.
+registers things. The imports are there only to register, and `seahaven check` (`SH301`) fails if a
+module under `tools/` or `middleware/` is missing from them.
 
 ## The schema
 
 Nine tables and one FTS5 index. Users belong to teams, teams own projects, projects hold issues,
-issues carry labels and comments, and every write to an issue appends to an audit trail.
+issues carry labels and comments, and an audit trail records who created each issue, changed its
+status or assignee, or commented on it.
 
 | Table | Notes |
 |---|---|
@@ -170,11 +171,12 @@ and the world's own notes avoid it.
 
 **The viewer.** `world.instance(fixture, startup={"user_id": ...})`, and the same `startup` on
 `reset` over a server, names who the session is driving the tracker as. `startup.py` puts it in
-`ctx.state["viewer_id"]`, falling back to the workspace's first admin. Every write takes an optional
-`actor_id` which wins, so one run can have two people writing without two instances. A write with
-neither, in a workspace with no admin such as a blank instance or `empty`, is `INVALID_INPUT`. A
-`user_id` naming nobody is a `WorldBug` rather than a product error, because it comes from the
-eval's `reset` and not from the agent.
+`ctx.state["viewer_id"]`, falling back to the workspace's first admin. The five issue writes the
+audit trail records (`create_issue`, `update_issue`, `assign_issue`, `transition_issue` and
+`add_comment`) take an optional `actor_id`, which wins, so one run can have two people writing
+without two instances. One of them with neither, in a workspace with no admin such as a blank
+instance or `empty`, is `INVALID_INPUT`. A `user_id` naming nobody is a `WorldBug` rather than a
+product error, because it comes from the eval's `reset` and not from the agent.
 
 **Order within one run.** Rows one run writes can share a `created_at`: every row under the `fixed`
 clock, the rows of one call under `tick`, and rows written in the same millisecond under the
@@ -195,8 +197,6 @@ All three are frozen at `2026-06-01T09:00:00.000Z`, and all three are built by
 | `small_startup` | one engineering team, three people, two projects, forty issues over two months, sixty comments, six labels |
 | `agency` | three teams, twelve people, nine projects including a finished one, six hundred issues over six months, fifteen hundred comments, thirty labels, and an audit trail with reassignments and transitions in it |
 
-`agency` is also the fixture the framework's benchmark runs against.
-
 To rebuild one, delete its directory and re-run the generator. Never edit one in place.
 
 ## Its tests
@@ -206,9 +206,11 @@ real `instance.call`, the fixtures' invariants, the declared errors by code, the
 exceptions, pagination's cursor rules, and determinism from the same seed. Nothing builds an
 instance in a `conftest.py`, and nothing calls a tool function directly.
 
+Run the tests and `seahaven check` from the root of the Seahaven repository:
+
 ```sh
 uv run pytest worlds/projecttracker
-uv run seahaven check
+uv run seahaven check --world projecttracker:world
 ```
 
 ## What to copy, and what not to

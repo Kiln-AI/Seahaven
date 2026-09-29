@@ -88,12 +88,6 @@ seahaven serve --host 0.0.0.0 --port 9000
 `--max_concurrent_envs` is spelled with underscores because that is OpenEnv's own option name, and a
 second spelling here would be one more thing to translate.
 
-If the command fails on a release candidate of CPython 3.14, that is expected and there are two
-separate breakages under it. On 3.14.0rc2 Seahaven does not import at all, because pydantic cannot
-evaluate its forward references there. The extra would also meet a second one on its own: 3.14.0rc2
-has no `collections.abc.ByteString`, and `beartype` asks for that name unguarded. Both are gone on
-3.14.0 final, where the extra installs and works unpatched.
-
 One process serves one world, and `serve` always runs a single worker. A session's instance,
 connections and working directory are in-process state, so a second worker would answer a session's
 second frame with an environment that has never seen its first.
@@ -500,26 +494,16 @@ host's core count.
 **The gate is unfair whenever it binds, and the default is not exempt.** It is a
 `threading.BoundedSemaphore`, and a semaphore is not a queue. A thread that releases a slot and
 immediately asks for another usually wins the race against the waiter that was just woken, because
-the waiter needs the GIL to make progress and the barging thread already has it. In the framework's
-own benchmark, with five threads calling and the gate at 1, 2 or 4, one three-second window served
-its worst-served session **once** while another session in that same window was served thousands of
-times: 12,874 at a gate of 1, and 5,351 and 4,011 at 2 and 4. At a gate size above the number of
-threads offered, so that the gate never binds, every session got an even share. Every gate size that
-binds behaves this way, and a server with 500 sessions and a gate of 16 is the ordinary case rather
-than an edge one.
+the waiter needs the GIL to make progress and the barging thread already has it. Under load, one
+session can be served once while another is served thousands of times. Every gate size that binds
+behaves this way.
 
 Nothing is dropped, so the promise that calls queue is kept to the letter. But a call that queues
 for seconds behind a thread barging in front of it is not the service that promise implies, and a
-run whose session is the unlucky one will time out. The fix is a gate that hands slots out in
-arrival order, not a different number.
+run whose session is the unlucky one will time out.
 
-What to do meanwhile, for a workload that is saturated and cares about the slowest session:
-`--concurrency 0` was the one setting measured that served every session evenly, and at 32 sessions
-it matched or beat the default on throughput while cutting the worst observed wait by an order of
-magnitude. It pays for that in median and 95th-percentile latency. The measurements, with the
-caveats they need — one machine, one afternoon, a closed loop with no think time — are in
-`bench/results/latest.md` in the Seahaven repository. They are not a service-level objective, they
-are not a capacity model, and no number from them should be quoted as a property of the framework.
+If a saturated workload cares about its slowest session, run with `--concurrency 0`. Without the
+gate every session gets an even share, and median and 95th-percentile latency go up.
 
 **The gate is not a serving feature.** It is process-wide and on by default in *any* process that
 calls a tool, including an in-process eval harness driving instances on threads. `serve` only gives
@@ -546,9 +530,7 @@ as activity, so it can reap a client that is still connected, for example one th
 
 **A disconnect is not an error in the log.** A session that ends normally leaves nothing on
 `uvicorn.error`, whatever client ended it: `SeahavenClient`, a stock `GenericEnvClient`, a raw
-socket, or a harness that simply dies. Seahaven carried a client-side close handshake and an ASGI
-middleware to get that under openenv 0.4.2, and carries neither now, because openenv 0.5 logs no
-error for a normal close.
+socket, or a harness that simply dies.
 
 **A dropped connection is a lost episode, so `SeahavenClient` waits longer before calling one
 dead.** A session is one connection holding one instance, and there is no resume: any disconnect
@@ -593,13 +575,10 @@ is empty. The one-line description is unaffected, since that is `World(descripti
 with the world rather than with the directory. Put the world's `README.md` beside the directory you
 named, or leave `fixtures_dir` alone and ship `fixtures/` where it was.
 
-Seahaven's own reference world is not published anywhere. That step is gated on a maintainer's
-sign-off and has not happened.
-
 ## Evaluating with Kiln
 
-[Kiln](https://kiln.tech) connects to a Seahaven world as an OpenEnv client, which is the whole
-integration: point it at a served world and it drives the sessions.
+[Kiln](https://kiln.tech) connects to a Seahaven world as an OpenEnv client. Point Kiln at a served
+world and it drives the sessions.
 
 Kiln is where the goal that Seahaven deliberately does not hold gets written down. Define a scenario
 against a world and a fixture, run it as an [eval](https://kiln.tech/features/evals) and grade the

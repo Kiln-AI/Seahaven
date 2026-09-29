@@ -611,9 +611,11 @@ class Instance:
         validation and transaction boundaries for tens of thousands of rows. What
         is yielded is the root node's context, with no call attached and a live
         `ctx.worlds`, so an added world's store is reached through
-        `ctx.worlds.<name>.db`; nothing is disabled and nothing is wrapped. Every
-        node's transaction is committed on the way out, and all of them are rolled
-        back together if the block raised. Startup hooks do not run again.
+        `ctx.worlds.<name>.db`; nothing is disabled and nothing is wrapped. If the
+        block raises, every node's transaction is rolled back. Otherwise they
+        commit one at a time, the root last, and a commit that fails leaves the
+        nodes that committed before it with their rows. Startup hooks do not run
+        again.
         """
         return self._bulk()
 
@@ -943,9 +945,10 @@ class Instance:
             self._recording(None),
             ExitStack() as stack,
         ):
-            # Every node's transaction open before the block runs and committed in
-            # sequence on the way out, so a bulk write that reaches two stores
-            # through `ctx.worlds` either lands in both or in neither.
+            # One transaction per node, because each node is its own file and SQLite
+            # cannot commit two files atomically. The stack commits them in reverse,
+            # the root last: a block that raises rolls every node back, but a commit
+            # that fails leaves the nodes before it committed.
             for runtime in self._runtime.values():
                 stack.enter_context(runtime.db.transaction())
             yield frame.ctx(self._root_key, None)

@@ -13,13 +13,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import apsw
 import emporium
 import pytest
 
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx
 from seahaven.db import open_instance
-from seahaven.errors import WorldBug
+from seahaven.errors import DbError, WorldBug
 from seahaven.ids import BUILD_STREAM, CONTROL_STREAM, INSPECTION_STREAM, INSTANCE_STREAM, Ids
 from seahaven.instances import node_seed
 from seahaven.world import World
@@ -522,6 +523,30 @@ def test_a_bulk_block_that_raises_rolls_every_node_back(tmp_path: Path) -> None:
             ctx.worlds.child.db.execute("INSERT INTO child_rows VALUES ('a', 'child')")
             raise RuntimeError("changed my mind")
         assert (live.call("host_read"), live.call("child_read")) == ([], [])
+
+
+def test_a_bulk_commit_that_fails_keeps_the_nodes_committed_before_it(tmp_path: Path) -> None:
+    """SQLite cannot commit two files atomically: the child commits, then the root refuses."""
+    host = composable_world(
+        "host",
+        extra_schema="CREATE TABLE host_refs ("
+        " id TEXT PRIMARY KEY,"
+        " row_id TEXT NOT NULL REFERENCES host_rows(id) DEFERRABLE INITIALLY DEFERRED"
+        ") STRICT;",
+        fixtures_dir=tmp_path / "fixtures",
+        work_dir=tmp_path / "work",
+    )
+    host.add_world(composable_world("child"), name="child")
+    with host.instance(None) as live:
+        with pytest.raises(DbError) as raised, live.bulk() as ctx:
+            ctx.worlds.child.db.execute("INSERT INTO child_rows VALUES ('a', 'child')")
+            ctx.db.execute("INSERT INTO host_refs VALUES ('r', 'nobody')")
+        assert raised.value.sqlite_code == apsw.SQLITE_CONSTRAINT_FOREIGNKEY
+        assert live.inspect().rows("SELECT id FROM host_refs") == []
+        assert live.call("child_read") == ["child"]
+        assert [(record.world, record.table) for record in live.change_log()] == [
+            ("child", "child_rows")
+        ]
 
 
 # ---------------------------------------------------------- the committed tree

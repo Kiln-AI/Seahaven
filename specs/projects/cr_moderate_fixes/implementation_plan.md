@@ -20,6 +20,6 @@ phase names.
 - [x] **Phase 3: Middleware per contributing route (4.M1).** A chain per contributed entry, built
   from the route that contributed it. Its own commit. See
   [components/phase_3_route_middleware.md](components/phase_3_route_middleware.md).
-- [ ] **Phase 4: Docs.** 9.M1 (SH103's rationale), 9.M7, 9.M8, 8.M4 (projecttracker audit-trail
+- [x] **Phase 4: Docs.** 9.M1 (SH103's rationale), 9.M7, 9.M8, 8.M4 (projecttracker audit-trail
   claims), 2.M2/4.M3 (composite `bulk()` is not all-or-nothing when a commit fails), and 9.M6 (the
   history and spec-citation sweep). See [components/phase_4_docs.md](components/phase_4_docs.md).

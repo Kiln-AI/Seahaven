@@ -4,8 +4,8 @@ A Seahaven world: a fictional issue tracker for a fictional company, and the ref
 framework is developed against. Nothing here mimics a real product's names, schema or error text.
 
 Users belong to teams, teams own projects, projects hold issues, issues carry labels and comments,
-and every write to an issue appends to an audit trail. Keys are product-shaped (`ENG-41`), lists are
-cursor-paginated, and search is SQLite's FTS5.
+and an audit trail records who created each issue, changed its status or assignee, or commented on
+it. Keys are product-shaped (`ENG-41`), lists are cursor-paginated, and search is SQLite's FTS5.
 
 ## What it has
 

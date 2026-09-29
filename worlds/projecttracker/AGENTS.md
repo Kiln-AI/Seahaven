@@ -34,10 +34,13 @@ applies here too.
   tools would have.
 - **The viewer.** `world.instance(fixture, startup={"user_id": ...})`, and the same `startup=` on
   `reset` over OpenEnv, names who the session is driving the tracker as; `startup.py` puts it in
-  `ctx.state["viewer_id"]` and falls back to the workspace's first admin. Every write takes an
-  optional `actor_id`, which wins, and a write with neither is
+  `ctx.state["viewer_id"]` and falls back to the workspace's first admin. The five issue writes the
+  trail records (`create_issue`, `update_issue`, `assign_issue`, `transition_issue` and
+  `add_comment`) take an optional `actor_id`, which wins, and one of them with neither is
   `InvalidInput("actor_id", "no actor")` — which is what a blank instance and `empty` do, having
   no admin to fall back to.
+- **The audit trail** does not record `title`, `description`, `priority` or `due_at` changes,
+  labels, or archiving; grade those on the row.
 - **Order within one episode.** Rows a single episode writes can share a `created_at`: every row on
   a `fixed` clock, the rows of one call on `tick`, and rows written in the same millisecond on the
   default `running` clock. The timestamp is not a complete order. Two places feel it. Reading
