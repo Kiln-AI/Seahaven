@@ -562,8 +562,8 @@ That is also why the document costs no database work to produce, however long th
 
 Recording is not free at the other end: a session is opened on each node for each call, and what it
 recorded is rendered when the call commits. The Seahaven repository carries a probe that measures
-what that costs, under `bench/`. Run the probe with
-`uv run python -m bench recording --calls 1000 --repeats 9`.
+what that costs, under `tools/bench/`. Run the probe with
+`uv run python -m tools.bench recording --calls 1000 --repeats 9`.
 
 The figures below are approximate. They come from a shared virtual machine, and the probe prints
 the machine it ran on. Read the figures as the size of the cost, not as the cost.

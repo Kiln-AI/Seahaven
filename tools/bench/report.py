@@ -1,4 +1,4 @@
-"""The markdown `python -m bench` writes, and the order it insists on.
+"""The markdown `python -m tools.bench` writes, and the order it insists on.
 
 The caveats come before the first number, because a table read without them is a
 table read wrongly. Then the machine, then the method, then the results, then how
@@ -7,7 +7,7 @@ knowing the noise floor and can refuse to believe a difference smaller than it.
 
 Everything this module writes is derived from the run. The reading of the
 results -- what was confirmed, what changed, what an operator should do -- is
-written by hand under the `READING` heading, and `bench.__main__` refuses to
+written by hand under the `READING` heading, and `tools.bench.__main__` refuses to
 overwrite a report that has one unless it is told to.
 """
 
@@ -15,14 +15,14 @@ import textwrap
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from bench.baseline import BaselinePoint, Share
-from bench.composite import SETTLE, WRITE, Composite, TreeCost
-from bench.environment import Environment
-from bench.harness import Summary, significant
-from bench.recording import Recording
-from bench.runner import Cache
-from bench.sweep import Cell, Isolation, Point, Sweep
-from bench.workloads import WORKLOADS
+from tools.bench.baseline import BaselinePoint, Share
+from tools.bench.composite import SETTLE, WRITE, Composite, TreeCost
+from tools.bench.environment import Environment
+from tools.bench.harness import Summary, significant
+from tools.bench.recording import Recording
+from tools.bench.runner import Cache
+from tools.bench.sweep import Cell, Isolation, Point, Sweep
+from tools.bench.workloads import WORKLOADS
 
 __all__ = ["READING", "Results", "render"]
 
@@ -651,8 +651,8 @@ def _per_call(measured: Composite) -> str:
     method = _wrapped(
         f"One thread, warm, {_times(measured.repeats)} over: a pass is {measured.calls_per_pass} "
         "calls on a fresh instance that has already served one identical pass off the clock, which "
-        "is `bench/runner.py`'s warm-up rule and is applied to both trees alike. A repeat is a "
-        "whole pass over every row of the table, so drift during the run is spread across the "
+        "is `tools/bench/runner.py`'s warm-up rule and is applied to both trees alike. A repeat is "
+        "a whole pass over every row of the table, so drift during the run is spread across the "
         "rows rather than handed to whichever ran last -- which matters here, where the "
         "difference being looked for is smaller than the machine's noise. The read is an account "
         "holding exactly one charge, so every call of the pass returns one row. `settle_order` is "
@@ -777,7 +777,7 @@ def _recording(results: Results) -> list[str]:
         + (
             "the same calls section 7 times"
             if results.composite is not None
-            else "`bench.composite`'s own legs"
+            else "`tools.bench.composite`'s own legs"
         )
         + ", on the same four-node tree, and are read against the one-node rows above them."
     )

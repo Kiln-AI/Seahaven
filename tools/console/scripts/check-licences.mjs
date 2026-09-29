@@ -5,7 +5,7 @@
  * vendored into the Python package and shipped in the wheel. So an npm
  * dependency here reaches the same people a PyPI dependency does, under the
  * same rule: no copyleft, because Seahaven is vendored into other people's
- * products. `scripts/check_licences.py` is that rule for the Python side; this
+ * products. `tools/check_licences.py` is that rule for the Python side; this
  * is the same rule for the side that ends up inside a single HTML file.
  *
  * Production dependencies only. A build tool is not bundled -- what a bundler

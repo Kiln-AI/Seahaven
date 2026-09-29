@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # The two pages that tell a person which checks to run before committing. Both
 # claim to be what CI runs, so both carry the split type check as CI spells it.
-COMMAND_LISTS = (REPO_ROOT / "AGENTS.md", REPO_ROOT / "CONTRIBUTING.md")
+COMMAND_LISTS = (REPO_ROOT / "AGENTS.md", REPO_ROOT / ".github" / "CONTRIBUTING.md")
 
 # The directories `[tool.ty.src] include` names in `pyproject.toml`, which is
 # what either job's `ty check` walks. Read rather than copied: a root added

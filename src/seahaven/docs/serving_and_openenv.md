@@ -517,8 +517,9 @@ What to do meanwhile, for a workload that is saturated and cares about the slowe
 it matched or beat the default on throughput while cutting the worst observed wait by an order of
 magnitude. It pays for that in median and 95th-percentile latency. The measurements, with the
 caveats they need — one machine, one afternoon, a closed loop with no think time — are in
-`bench/results/latest.md` in the Seahaven repository. They are not a service-level objective, they
-are not a capacity model, and no number from them should be quoted as a property of the framework.
+`tools/bench/results/latest.md` in the Seahaven repository. They are not a service-level objective,
+they are not a capacity model, and no number from them should be quoted as a property of the
+framework.
 
 **The gate is not a serving feature.** It is process-wide and on by default in *any* process that
 calls a tool, including an in-process eval harness driving instances on threads. `serve` only gives

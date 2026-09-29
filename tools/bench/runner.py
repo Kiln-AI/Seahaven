@@ -9,9 +9,9 @@ the same question and their tables can sit in one document.
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
-from bench.harness import Run, closed_loop, cold_cache_supported, evict
-from bench.workloads import Session, Workload
 from seahaven import World
+from tools.bench.harness import Run, closed_loop, cold_cache_supported, evict
+from tools.bench.workloads import Session, Workload
 
 __all__ = ["CACHES", "Cache", "calls_per_worker", "measure", "sessions", "whole_cycles"]
 
@@ -37,7 +37,7 @@ def calls_per_worker(workload: Workload, calls: int) -> int:
 def whole_cycles(calls: int, cycle: int) -> int:
     """`calls`, rounded down to whole cycles of `cycle`, at least one cycle.
 
-    Taken by cycle rather than by workload because `bench.recording` drives legs
+    Taken by cycle rather than by workload because `tools.bench.recording` drives legs
     that are not `Workload`s and has to round a pass the same way, or its table
     and the sweep's would not be counting the same units of work.
     """

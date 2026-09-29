@@ -62,7 +62,7 @@ DOCS = Path(docs_path())
 # ones. These are absent when these tests run against an installed wheel rather
 # than a checkout, which is not a failure.
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REPO_PAGES = (REPO_ROOT / "README.md", REPO_ROOT / "CONTRIBUTING.md")
+REPO_PAGES = (REPO_ROOT / "README.md", REPO_ROOT / ".github" / "CONTRIBUTING.md")
 
 # The fence, with its language, and everything up to the closing fence of the
 # same length. Indented fences are not used on these pages and are not matched:
