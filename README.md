@@ -8,7 +8,7 @@
 <p align="center">
   <a href="#quickstart"><strong>Quick Start</strong></a> •
   <a href="src/seahaven/docs/index.md"><strong>Docs</strong></a> •
-  <a href="#examples"><strong>Examples</strong></a>
+  <a href="#example-worlds"><strong>Examples</strong></a>
 </p>
 
 <p align="center">
@@ -32,39 +32,39 @@ change logs), so you only write what's specific to your world: its tables and it
 
 ### Realistic Worlds
 
-- **[Recreate Any Environment](src/seahaven/docs/authoring.md#writing-a-tool).** Mock AI tool
+- **[Recreate Any Environment](src/seahaven/docs/authoring.md#writing-a-tool):** Mock AI tool
   calls, REST APIs, sandboxed SQL, search, or any custom format.
-- **[Stateful](src/seahaven/docs/concepts.md#instance).** Each instance is its own independent
+- **[Stateful](src/seahaven/docs/concepts.md#instance):** Each instance is its own independent
   SQLite database.
-- **[Composable Worlds](#composing-worlds).** Compose, reuse and share worlds. Example: MyCoWorld
+- **[Composable](#composing-worlds):** Compose, reuse and share worlds. Example: MyCoWorld
   can include [StripeAPIWorld](https://github.com/Kiln-AI/stripe_world) and ShopifyAPIWorld.
 
 ### Built for Evals and RL
 
-- **[Fixtures](src/seahaven/docs/db_schema_and_fixtures.md).** Freeze known starting states like
+- **[Fixtures](src/seahaven/docs/db_schema_and_fixtures.md):** Freeze known starting states like
   `small_startup`, `agency` or `big_co`, and reuse them across runs.
-- **[Host Parallel Instances](src/seahaven/docs/serving_and_openenv.md).** Serve hundreds of world
-  instances per process at thousands of tool calls per second.
-- **[Evaluate World State](src/seahaven/docs/state.md).** Every row the agent changed is logged.
-  Grade on state, not on transcripts.
-- **[Reproducible](src/seahaven/docs/concepts.md#reproducibility).** Same initial state (fixture),
+- **[Host Parallel Instances](src/seahaven/docs/serving_and_openenv.md):** Serve hundreds of world
+  instances per process, at thousands of requests per second.
+- **[Evaluate World State](src/seahaven/docs/state.md):** Grade on state, not on transcripts.
+  Every row the agent changed is logged.
+- **[Reproducible](src/seahaven/docs/concepts.md#reproducibility):** Same initial state (fixture),
   same clock/time, same random seed: the same run, every time.
 
 ### Connect Anything
 
-- **[OpenEnv](#serve-with-openenv).** `seahaven serve` is an OpenEnv environment. Drive it with any
+- **[OpenEnv](#serve-with-openenv):** `seahaven serve` is an OpenEnv environment. Drive it with any
   OpenEnv client, in any language, or publish it to Hugging Face.
-- **[Web Console](src/seahaven/docs/serving_and_openenv.md#the-web-console).** `seahaven serve`
+- **[Web Console](src/seahaven/docs/serving_and_openenv.md#the-web-console):** `seahaven serve`
   includes a web UI: open instances, call tools, and inspect state in your browser.
-- **[MCP](#use-with-mcp-clients).** `seahaven mcp` serves one world to an MCP client, so you can
+- **[MCP](#use-with-mcp-clients):** `seahaven mcp` serves one world to an MCP client, so you can
   work against it by hand from an editor or chat app.
 
-### Fast to Build
+### Easy to Build
 
-- **[Just Python](src/seahaven/docs/authoring.md#writing-a-tool).** Tools are just functions.
-  Tests use pytest. Your agent already knows how to write and test Seahaven worlds.
-- **[Built for Coding Agents](#build-worlds-with-your-coding-agent).** Docs optimized for agents
+- **[Built for Coding Agents](#build-worlds-with-your-coding-agent):** Docs optimized for agents
   authoring worlds. `seahaven check` tells an agent the exact fix for every mistake.
+- **[Just Python](src/seahaven/docs/authoring.md#writing-a-tool):** Tools are just functions.
+  Tests use pytest. Your agent already knows how to write and test Seahaven worlds.
 
 ## Seahaven vs. Real Systems and Mocks
 
@@ -89,7 +89,7 @@ uvx seahaven new crm
 cd crm && uv sync
 ```
 
-**Write tools.** A world is a schema and a set of tools. Here is a small CRM:
+**Write your world.** A world is a schema and a set of tools. Here is a small CRM:
 
 ```python
 import seahaven
@@ -126,8 +126,6 @@ def list_stale_leads(ctx: seahaven.Ctx) -> list[dict[str, object]]:
     )
 ```
 
-Each tool's signature is the JSON schema the agent sees, and its docstring is the description.
-
 **Freeze a starting state.** A fixture is a frozen database that every run starts from:
 
 ```py
@@ -163,15 +161,15 @@ with SeahavenClient(base_url="http://127.0.0.1:8000") as env:
     final_state = env.state()  # the document the eval grades
 ```
 
-## Examples
+## Example Worlds
 
 - **[ProjectTracker](worlds/projecttracker/)**: the reference world, a fictional issue tracker
   shaped like Linear or Jira. Nine tables, 25 tools, full-text search, and fixtures from an empty
   workspace to a twelve-person agency with six months of history. Start here to learn the patterns
   ([walkthrough](src/seahaven/docs/projecttracker.md)).
-- **[Stripe World](https://github.com/Kiln-AI/stripe_world)**: Stripe's Billing and Payments core,
-  with 24 tables and 155 API operations behind the same tools as Stripe's own MCP server. It also
-  serves Stripe's REST API, so the Stripe SDKs work against it unchanged.
+- **[Stripe World](https://github.com/Kiln-AI/stripe_world)**: a mock of Stripe's Billing and
+  Payments core, with 24 tables and 155 API operations behind the same tools as Stripe's own MCP
+  server. It also serves Stripe's REST API, so the Stripe SDKs work against it unchanged.
 
 ## Composing Worlds
 
@@ -228,10 +226,6 @@ uv run --extra mcp seahaven mcp --fixture big_co
 Seahaven is designed to be built by coding agents. `seahaven new` writes an `AGENTS.md` that points
 your agent at the docs for the version you have installed, not stale ones from the web.
 `seahaven check` catches the mistakes that are easy to make and hard to notice, and names the fix.
-Try:
-
-> Build a Seahaven world for our support desk: tickets, customers and macros, with the same tools
-> as our production MCP server.
 
 ## Contributing
 
