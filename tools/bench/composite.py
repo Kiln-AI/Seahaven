@@ -61,7 +61,7 @@ __all__ = [
 # installs these packages -- they are fixtures of the framework's own suite -- so
 # their source directories go on the path the way `tests/conftest.py` puts them
 # there, because a host reaches a world it adds by importing it.
-WORLDS = Path(__file__).resolve().parent.parent / "tests" / "worlds"
+WORLDS = Path(__file__).resolve().parents[2] / "tests" / "worlds"
 TREE_PACKAGES = ("payments", "shop", "emporium")
 
 # What a line of the per-call table is called. Named here rather than written

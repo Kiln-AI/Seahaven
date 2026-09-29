@@ -118,7 +118,7 @@ def _git(*arguments: str) -> str | None:
     try:
         done = subprocess.run(
             ["git", *arguments],
-            cwd=Path(__file__).resolve().parent.parent,
+            cwd=Path(__file__).resolve().parents[2],
             capture_output=True,
             text=True,
             timeout=10,

@@ -14,11 +14,11 @@ From the repository root:
 
 ```sh
 uv run python -m tools.bench all --out tools/bench/results/latest.md  # everything, ~10 min
-uv run python -m tools.bench baseline               # one thread, ~1 min
-uv run python -m tools.bench sweep --progress       # the gate sweep, ~9 min
-uv run python -m tools.bench isolation              # the slow-call probe, ~1 min
-uv run python -m tools.bench composite              # what a node costs, ~10 s
-uv run python -m tools.bench recording              # what the change log costs, ~1 min
+uv run python -m tools.bench baseline                                 # one thread, ~1 min
+uv run python -m tools.bench sweep --progress                         # the gate sweep, ~9 min
+uv run python -m tools.bench isolation                                # the slow-call probe, ~1 min
+uv run python -m tools.bench composite                                # what a node costs, ~10 s
+uv run python -m tools.bench recording                                # what recording costs, ~1 min
 ```
 
 With no `--out` the report goes to stdout. `--progress` prints a line per point on stderr, which

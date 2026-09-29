@@ -30,6 +30,8 @@ from tools.bench.baseline import BaselinePoint, Share, share
 from tools.bench.composite import (
     READ,
     SETTLE,
+    TREE_PACKAGES,
+    WORLDS,
     WRITE,
     Leg,
     composite,
@@ -491,6 +493,13 @@ def test_the_ladder_is_the_committed_composite_tree() -> None:
         "shop",
     ]
     assert trees() is ladder, "node identity is object identity: one ladder per process"
+
+
+def test_the_composite_ladder_is_found_without_the_suites_sys_path() -> None:
+    """`tests/conftest.py` already puts these on `sys.path`, which hides a wrong `WORLDS`."""
+    assert Path(__file__).resolve().parent / "worlds" == WORLDS
+    for package in TREE_PACKAGES:
+        assert (WORLDS / package / "src" / package).is_dir(), package
 
 
 def test_standing_up_counts_the_stores_a_node_really_costs() -> None:
