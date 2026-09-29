@@ -11,7 +11,7 @@
   <a href="https://kiln.tech"><strong>Kiln AI</strong></a> 
 </p>
 
-Seahaven worlds can: clone the tools your agent uses in production, run an hundreds of isolated instances for agent RL/evals, and describe all state changes.
+Seahaven worlds can: clone the tools your agent uses in production, run hundreds of parallel isolated instances for agent RL/evals, and describe every state change for grading.
 
 > Named after the town in *The Truman Show*. An entire world built so that one inhabitant believes it is real.
 
