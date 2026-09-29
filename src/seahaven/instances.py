@@ -26,12 +26,15 @@ thread it likes. The lock is an `RLock` because a control tool is called with it
 already held and then asks the instance for something -- its control handle --
 that takes it again on the same thread.
 
-*The gate before the lock.* The concurrency gate bounds how many tool calls run
-at once across the process. It is taken before the instance lock, so a call
-queued behind it holds nothing and can never delay a `destroy` or a `freeze`. A
-call host code makes into an added world does not take it at all: the outermost
-call is already holding it, and one instance runs one call at a time however many
-nodes that call touches.
+*The gate before the lock, and never under it.* The concurrency gate bounds how
+many tool calls run at once across the process. A call takes it before the
+instance lock, so a call queued behind it holds nothing and can never delay a
+`destroy` or a `freeze`. The gate is re-entrant per thread: once a thread is
+inside a call or a `bulk()` block, nothing more it does takes the gate. That
+covers a nested call through a handle, an `inst.call(...)` inside `bulk()`, and a
+call on another instance from inside either, because by then the thread may hold
+an instance lock that a queued caller is waiting for. `bulk()`, instance creation
+and the control tool take no slot.
 
 *The manager's lock is never held while an instance lock is.* The registry is
 touched only in short moments that take nothing else.
@@ -210,24 +213,36 @@ def concurrency() -> int:
     return current.size if current is not None else 0
 
 
+# Whether this thread is inside a `gate()` block, whether or not that block took
+# a slot. Per thread, not a ContextVar: Starlette's `run_in_threadpool` and
+# `asyncio.to_thread` copy context variables into the worker thread, and that
+# worker holds none of the locks the flag stands for.
+_gated = threading.local()
+
+
 @contextmanager
 def gate(*, bypass: bool = False) -> Iterator[None]:
     """Hold one of the gate's slots for the block, queueing for it if need be.
 
     Nothing is ever rejected: the gate bounds how many calls execute at once, not
-    how many are admitted.
+    how many are admitted. Re-entrant per thread: a block opened inside another
+    takes nothing, because by then the thread may hold an instance lock.
     """
-    # Read once: a `set_concurrency` between the acquire and the release must not
-    # let this call release a slot on a semaphore it never took.
-    semaphore = _gate
-    if bypass or semaphore is None:
+    if getattr(_gated, "active", False):
         yield
         return
-    semaphore.acquire()
+    # Read once: a `set_concurrency` between the acquire and the release must not
+    # let this call release a slot on a semaphore it never took.
+    semaphore = None if bypass else _gate
+    if semaphore is not None:
+        semaphore.acquire()
+    _gated.active = True
     try:
         yield
     finally:
-        semaphore.release()
+        _gated.active = False
+        if semaphore is not None:
+            semaphore.release()
 
 
 @dataclass
@@ -917,7 +932,14 @@ class Instance:
         # `_recording(None)`: authoring writes happen after creation and count,
         # but there is no call in flight for them to belong to. It is outside the
         # transactions, so it reads each changeset after they have all settled.
-        with self._held() as frame, self._recording(None), ExitStack() as stack:
+        # `gate(bypass=True)` marks the thread and takes no slot: HTTP requests run
+        # in here, and the gate does not apply to them (`docs/http_apis.md`).
+        with (
+            gate(bypass=True),
+            self._held() as frame,
+            self._recording(None),
+            ExitStack() as stack,
+        ):
             # Every node's transaction open before the block runs and committed in
             # sequence on the way out, so a bulk write that reaches two stores
             # through `ctx.worlds` either lands in both or in neither.

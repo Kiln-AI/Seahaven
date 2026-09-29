@@ -491,6 +491,8 @@ observation too, and raises only on a framework or protocol failure.
 The gate bounds how many tool calls run at once. It never bounds admission: calls queue, and nothing
 is rejected. A call takes the gate before the instance lock, so a queued call cannot block a
 `destroy` or a `freeze`. Instance creation, tool listing and the control tool bypass it entirely.
+`inst.bulk()` bypasses it too, and so does any call made inside a call or a `bulk()` block on the
+same thread.
 
 Its default follows the process's CPU affinity, so it respects a container's limit rather than the
 host's core count.

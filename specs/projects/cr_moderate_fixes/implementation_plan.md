@@ -14,7 +14,7 @@ phase names.
   file and line), 4.M2 (hosts-first startup-hook order), 10.M1, 10.M3 and 10.M4 (tests, including
   the link check over every docs page). See
   [components/phase_1_batch.md](components/phase_1_batch.md).
-- [ ] **Phase 2: The `bulk()` deadlock (2.M1).** A per-thread re-entrant gate; `bulk()` marks the
+- [x] **Phase 2: The `bulk()` deadlock (2.M1).** A per-thread re-entrant gate; `bulk()` marks the
   thread and takes no slot. Its own commit. See
   [components/phase_2_bulk_gate.md](components/phase_2_bulk_gate.md).
 - [ ] **Phase 3: Middleware per contributing route (4.M1).** A chain per contributed entry, built
