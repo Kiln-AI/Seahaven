@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="220" height="185" alt="seahaven logo" src="https://github.com/user-attachments/assets/79e3b5cd-3522-48ae-b5a6-ba356da4ee00" />
+  <img width="200" height="168" alt="seahaven logo" src="https://github.com/user-attachments/assets/79e3b5cd-3522-48ae-b5a6-ba356da4ee00" />
 </p>
 <h3 align="center">
   A framework for building synthetic worlds for AI agents.
