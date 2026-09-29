@@ -399,11 +399,12 @@ behalf.
 ## Startup hooks
 
 Hooks run for every world in the tree, depth-first from the root: each node's own hooks, then its
-added worlds in `add_world` order, each with its own node's context. Each node's hooks run **once**,
-however many routes reach it. Every node's transaction is open before the first hook runs, which is
-what lets a root hook write into a child's store — through `ctx.worlds.<name>.db` and
-`ctx.worlds.<name>.state` — before that child's own hooks run. A hook that raises rolls all of them
-back, and no instance is left behind.
+added worlds in `add_world` order, each with its own node's context. A world that more than one
+world adds runs after every world that adds it. Each node's hooks run **once**, however many routes
+reach it. Every node's transaction is open before the first hook runs, which is what lets a host's
+hook write into a child's store — through `ctx.worlds.<name>.db` and `ctx.worlds.<name>.state` —
+before that child's own hooks run. A hook that raises rolls all of them back, and no instance is
+left behind.
 
 The startup keywords a caller passes — `world.instance(startup={...})`, or the same `startup` on
 `reset()` — are **broadcast**: every hook in the tree that names a keyword receives it, and an

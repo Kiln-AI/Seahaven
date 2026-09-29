@@ -71,12 +71,12 @@ the extra. A world used in process — in pytest, in a script, in a notebook —
 
 ```sh
 seahaven serve
-seahaven serve --host 127.0.0.1 --port 9000
+seahaven serve --host 0.0.0.0 --port 9000
 ```
 
 | Option | Default | What it does |
 |---|---|---|
-| `--host` | `0.0.0.0` | the address to bind. A container serves on the network it was given; pass `--host 127.0.0.1` for loopback |
+| `--host` | `127.0.0.1` | the address to bind. Pass `--host 0.0.0.0` to serve on every interface, as a container does |
 | `--port` | `8000` | the port to bind |
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |

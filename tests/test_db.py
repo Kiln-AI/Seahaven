@@ -3,6 +3,7 @@
 import gc
 import time
 import weakref
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -199,10 +200,68 @@ def test_the_raw_connection_is_the_live_one(notes: Db) -> None:
 
 def test_an_instance_connection_is_hardened(db: Db) -> None:
     assert db.conn.pragma("journal_mode") == "wal"
-    assert db.conn.pragma("synchronous") == 1
+    assert db.conn.pragma("synchronous") == 0
     assert db.conn.pragma("foreign_keys") == 1
     assert db.conn.config(apsw.SQLITE_DBCONFIG_DEFENSIVE, -1) == 1
     assert db.conn.config(apsw.SQLITE_DBCONFIG_TRUSTED_SCHEMA, -1) == 0
+
+
+class _CountingVfs(apsw.VFS):
+    """The default VFS, counting every `xSync` any file it opens makes."""
+
+    def __init__(self) -> None:
+        self.base = apsw.vfs_names()[0]
+        self.syncs = 0
+        super().__init__("counting", self.base, makedefault=True)
+
+    def xOpen(self, name: str | apsw.URIFilename | None, flags: list[int]) -> apsw.VFSFile:
+        return _CountingFile(self, name, flags)
+
+
+class _CountingFile(apsw.VFSFile):
+    def __init__(
+        self, vfs: _CountingVfs, name: str | apsw.URIFilename | None, flags: list[int]
+    ) -> None:
+        self._vfs = vfs
+        super().__init__(vfs.base, name, flags)
+
+    def xSync(self, flags: int) -> None:
+        self._vfs.syncs += 1
+        super().xSync(flags)
+
+
+@pytest.fixture
+def counting_vfs() -> Iterator[_CountingVfs]:
+    vfs = _CountingVfs()
+    try:
+        yield vfs
+    finally:
+        vfs.unregister()
+
+
+@pytest.mark.parametrize("how", ["copied", "blank"])
+def test_opening_an_instance_file_does_not_fsync(
+    how: str, db_path: Path, clock: Clock, seed: bytes, counting_vfs: _CountingVfs
+) -> None:
+    """Neither building, converting to WAL nor writing an instance's file waits on the disk.
+
+    "copied" is a file in the rollback journal a fixture copy arrives in, opened
+    and converted by `open_instance`; "blank" is one `build_blank` writes first.
+    """
+    if how == "copied":
+        plain = apsw.Connection(str(db_path))
+        plain.execute(NOTES)
+        plain.close()
+        counting_vfs.syncs = 0  # the fixture's own write, which is not the instance's
+    else:
+        build_blank(db_path, NOTES, clock=clock, seed=seed).close()
+    db = open_instance(db_path, clock, seed)
+    try:
+        with db.transaction():
+            db.execute("INSERT INTO notes (id, body) VALUES ('n1', 'x')")
+    finally:
+        db.close()
+    assert counting_vfs.syncs == 0
 
 
 def test_world_code_keeps_sqlites_own_limits(db: Db) -> None:

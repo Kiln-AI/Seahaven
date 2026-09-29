@@ -26,7 +26,7 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         description="Run this world's OpenEnv server: one world, many sessions.",
     )
     add_world_option(parser)
-    parser.add_argument("--host", default=None, help="the address to bind (default 0.0.0.0)")
+    parser.add_argument("--host", default=None, help="the address to bind (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=None, help="the port to bind (default 8000)")
     # Underscores, not hyphens: this is OpenEnv's own option name, and a second
     # spelling of it here would be one more thing to translate.

@@ -54,6 +54,7 @@ __all__ = [
     "bump",
     "canonical_tree",
     "epoch",
+    "hosts_first",
     "resolve",
 ]
 
@@ -359,13 +360,37 @@ def canonical_tree(root: Node) -> Iterator[Node]:
 
     The tree, not the graph: an edge whose route is an alias is not descended,
     because the node it reaches is visited under the parent its path names. So a
-    node shared by two hosts is walked once, which is what "each node's startup
-    hooks run once, however many routes reach it" asks for.
+    node shared by two hosts is walked once.
     """
     yield root
     for name, child in root.added.items():
         if child.path == _route(root.path, name):
             yield from canonical_tree(child)
+
+
+def hosts_first(composition: Composition) -> list[Node]:
+    """Every node once, each after every world that adds it: the order startup hooks run in.
+
+    A depth-first walk from the root in `add_world` order that reaches a node
+    only from the last of its distinct hosts to be walked. With nothing shared,
+    every node has one host, and this is `canonical_tree`'s order exactly.
+    """
+    waiting = dict.fromkeys(composition.nodes, 0)
+    for node in composition.nodes:
+        for child in dict.fromkeys(node.added.values()):
+            waiting[child] += 1
+    order: list[Node] = []
+
+    def visit(node: Node) -> None:
+        order.append(node)
+        for child in dict.fromkeys(node.added.values()):
+            waiting[child] -= 1
+            if waiting[child] == 0:
+                visit(child)
+
+    visit(composition.root)
+    assert len(order) == len(composition.nodes), "a node no walk from the root reaches"
+    return order
 
 
 def _route(parent_path: str, name: str) -> str:

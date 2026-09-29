@@ -233,6 +233,19 @@ def test_an_instance_from_a_fixture_is_a_writable_copy_at_the_fixtures_clock(wor
     assert (world.fixtures_dir / fixture / STATE_NAME).stat().st_mode & 0o222 == 0
 
 
+def test_every_node_of_a_fixture_instance_opens_without_durability(tmp_path: Path) -> None:
+    """A fixture's copies are the instance's throwaway files: WAL, and never fsynced."""
+    host = composable_world("host", fixtures_dir=tmp_path / "fixtures", work_dir=tmp_path / "work")
+    host.add_world(composable_world("child"), name="child")
+    with host.instance(None, now=INSTANT_ISO, clock_mode="fixed") as origin:
+        origin.freeze("start", "Empty.")
+
+    with host.instance("start") as live, live.bulk() as ctx:
+        for db in (ctx.db, ctx.worlds.child.db):
+            assert db.conn.pragma("synchronous") == 0
+            assert db.conn.pragma("journal_mode") == "wal"
+
+
 @pytest.mark.parametrize("bad", ["", ".", "..", "sub/start", "/start", ".hidden"])
 def test_a_fixture_id_that_is_not_a_directory_name_is_refused(world: World, bad: str) -> None:
     """The id rule is applied before the filesystem is touched: an id cannot become a path."""

@@ -72,7 +72,7 @@ from seahaven.composition import (
     Node,
     NodeKey,
     NodeReport,
-    canonical_tree,
+    hosts_first,
 )
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, build_blank, open_inspection, open_instance
@@ -1564,14 +1564,15 @@ def _run_startup_hooks(composition: Composition, frame: Frame, keywords: Mapping
     is already open. A hook that raises rolls every one of them back, and creation
     removes the instance entirely.
 
-    Depth-first preorder over the canonical tree, so a node whose hooks seed a
-    child runs before it, and a node reached by two routes runs once.
+    Hosts first (`hosts_first`), so a world whose hooks seed a world it adds
+    runs before it -- every host of a shared node included -- and a node
+    reached by two routes runs once.
     """
     runtimes = frame.instance._runtime
     with ExitStack() as stack:
         for node in composition.nodes:
             stack.enter_context(runtimes[node.key].db.transaction())
-        for node in canonical_tree(composition.root):
+        for node in hosts_first(composition):
             ctx = frame.ctx(node.key, None)
             for hook in node.world.startup_hooks:
                 hook(ctx, **_hook_arguments(hook, node, keywords))

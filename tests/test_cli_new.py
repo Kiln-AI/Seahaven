@@ -256,6 +256,17 @@ def test_the_hub_files_re_export_the_framework(tmp_path: Path) -> None:
     assert "name: hubbed" in (hubbed / "openenv.yaml").read_text(encoding="utf-8")
 
 
+def test_the_hub_container_serves_on_every_interface(tmp_path: Path) -> None:
+    """The server binds loopback by default, so the container has to say otherwise itself."""
+    hubbed = render("hubbed", tmp_path / "hub" / "hubbed", hub=True)
+    command = next(
+        line
+        for line in (hubbed / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if line.startswith("CMD ")
+    )
+    assert '"--host", "0.0.0.0"' in command
+
+
 def test_new_prints_the_next_steps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

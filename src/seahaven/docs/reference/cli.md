@@ -174,7 +174,7 @@ Runs the OpenEnv server for this world: one world, many sessions, one worker pro
 
 | Option | Default | What it does |
 |---|---|---|
-| `--host HOST` | `0.0.0.0` | the address to bind |
+| `--host HOST` | `127.0.0.1` | the address to bind; `0.0.0.0` serves on every interface |
 | `--port PORT` | `8000` | the port to bind |
 | `--max_concurrent_envs N` | `500` | how many sessions may be open at once |
 | `--concurrency N` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
@@ -184,7 +184,7 @@ Runs the OpenEnv server for this world: one world, many sessions, one worker pro
 
 ```sh
 seahaven serve
-seahaven serve --host 127.0.0.1 --port 9000
+seahaven serve --host 0.0.0.0 --port 9000
 seahaven serve --include-control-tools --concurrency 0
 ```
 

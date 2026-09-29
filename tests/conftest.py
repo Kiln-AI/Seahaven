@@ -9,6 +9,7 @@ ProjectTracker's own suite.
 """
 
 import copy
+import shutil
 import sys
 import tempfile
 import threading
@@ -409,3 +410,22 @@ def run_cli(capsys: pytest.CaptureFixture[str], *argv: str) -> CliResult:
     code = main(list(argv))
     captured = capsys.readouterr()
     return CliResult(code=code, out=captured.out, err=captured.err)
+
+
+# Where `broken_tidy` appends its line, relative to the project it copies.
+BROKEN_MODULE = Path("src/tidy/tools/notes.py")
+
+
+def broken_tidy(tmp_path: Path, statement: str) -> tuple[Path, int]:
+    """A copy of `tidy` whose tool module ends in `statement`, and the line it is on.
+
+    Written per test rather than committed: a file with a syntax error in it
+    would fail `ruff` and `ty` over the tree.
+    """
+    root = tmp_path / "tidy"
+    shutil.copytree(WORLDS / "tidy", root, ignore=shutil.ignore_patterns("__pycache__"))
+    module = root / BROKEN_MODULE
+    source = module.read_text(encoding="utf-8")
+    line = source.count("\n") + 2
+    module.write_text(f"{source}\n{statement}\n", encoding="utf-8")
+    return root, line

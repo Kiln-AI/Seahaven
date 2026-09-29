@@ -287,6 +287,49 @@ def test_a_node_two_hosts_reach_runs_its_hooks_once(tmp_path: Path) -> None:
     assert ran == ["host", "middle", "shared"]
 
 
+def test_a_shared_node_runs_after_every_world_that_adds_it(tmp_path: Path) -> None:
+    ran: list[str] = []
+    company = rooted("company", tmp_path)
+    payments, shop = composable_world("payments"), composable_world("shop")
+    shop.add_world(payments, name="payments")
+    company.add_world(payments, name="payments")
+    company.add_world(shop, name="shop", tool_prefix="s_")
+    for world in (company, payments, shop):
+        recording(world, ran)
+
+    with company.instance(None):
+        pass
+
+    assert ran == ["company", "shop", "payments"]
+
+
+def test_a_host_that_seeds_a_shared_node_seeds_it_composed_as_alone(tmp_path: Path) -> None:
+    """A shop's hook seeds its payments account the same whoever else adds that account."""
+    plans: list[str] = []
+    company = rooted("company", tmp_path)
+    shop = rooted("shop", tmp_path / "shop")
+    payments = composable_world("payments")
+
+    @shop.instance_startup
+    def open_account(ctx: Ctx) -> None:
+        ctx.worlds.payments.state["plan"] = "merchant"
+
+    @payments.instance_startup
+    def default_plan(ctx: Ctx) -> None:
+        plans.append(ctx.state.setdefault("plan", "free"))
+
+    shop.add_world(payments, name="payments")
+    company.add_world(payments, name="payments")
+    company.add_world(shop, name="shop", tool_prefix="s_")
+
+    with shop.instance(None):
+        pass
+    with company.instance(None):
+        pass
+
+    assert plans == ["merchant", "merchant"]
+
+
 def regional(world: World, seen: dict[str, str]) -> None:
     @world.instance_startup
     def note(ctx: Ctx, *, region: str = "us") -> None:

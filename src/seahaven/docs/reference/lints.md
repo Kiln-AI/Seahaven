@@ -354,8 +354,9 @@ all find a world this way. A package that does not follow it works in process an
 the attribute it looked for, and `--world module:attr` is the override for a layout the convention
 misses.
 
-An import that fails for another reason is reported here too, with the exception's own last line.
-`check` never answers with a traceback.
+An import that fails for another reason is reported here too. The finding gives the exception's
+type and message at the file and line in the world's code that raised it, and the fix names that
+place. `python -c "import <package>"` prints the whole traceback; `check` never prints one.
 
 ## SH502 — a `Worlds` subclass annotates a name no `add_world` registered
 

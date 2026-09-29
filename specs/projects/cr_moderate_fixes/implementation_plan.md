@@ -9,7 +9,7 @@ phase names.
 
 ## Phases
 
-- [ ] **Phase 1: Low-risk code and test batch.** 11.M1 (no fsync on instance creation), 7.M2
+- [x] **Phase 1: Low-risk code and test batch.** 11.M1 (no fsync on instance creation), 7.M2
   (`serve` binds `127.0.0.1`), 5.M3 (`step(ListToolsAction())`), 6.M1 (import errors name their
   file and line), 4.M2 (hosts-first startup-hook order), 10.M1, 10.M3 and 10.M4 (tests, including
   the link check over every docs page). See

@@ -81,16 +81,16 @@ def test_serve_runs_one_worker_on_an_app_object(world: World, served: dict[str, 
     assert callable(served["app"])
     # The literals, not the constants: comparing a default against itself would
     # pass whatever the default became, and "which interface" is the decision.
-    assert (served["kwargs"]["host"], served["kwargs"]["port"]) == ("0.0.0.0", 8000)
-    assert (DEFAULT_HOST, DEFAULT_PORT) == ("0.0.0.0", 8000)
+    assert (served["kwargs"]["host"], served["kwargs"]["port"]) == ("127.0.0.1", 8000)
+    assert (DEFAULT_HOST, DEFAULT_PORT) == ("127.0.0.1", 8000)
     # An operator watching a training run reads uvicorn's request log; a quieter
     # default would be a decision, and it is not the one that was made.
     assert served["kwargs"]["log_level"] == "info"
 
 
 def test_serve_binds_where_it_is_told(world: World, served: dict[str, Any]) -> None:
-    serve(world, host="127.0.0.1", port=9123)
-    assert (served["kwargs"]["host"], served["kwargs"]["port"]) == ("127.0.0.1", 9123)
+    serve(world, host="0.0.0.0", port=9123)
+    assert (served["kwargs"]["host"], served["kwargs"]["port"]) == ("0.0.0.0", 9123)
 
 
 def test_serve_sizes_the_gate_before_the_server_starts(
@@ -151,9 +151,9 @@ def test_serve_announces_the_console_at_an_address_a_browser_can_open(
 ) -> None:
     """The line an operator reads after `seahaven serve`.
 
-    The default bind is `0.0.0.0`, which is not an address, so the message names
-    loopback. `console_url` owns that translation and is tested against every
-    spelling in `test_server.py`.
+    The default bind is loopback. A bind to `0.0.0.0` is not an address a browser
+    can open, so the message names loopback for it too: `console_url` owns that
+    translation and is tested against every spelling in `test_server.py`.
 
     `capsys` and not `caplog`: the line is a `print`, because until `uvicorn.run`
     configures logging the root logger has no handler and sits at WARNING, and a
@@ -161,6 +161,11 @@ def test_serve_announces_the_console_at_an_address_a_browser_can_open(
     here.
     """
     serve(world)
+    assert (
+        capsys.readouterr().out
+        == "Starting. Web console will be available at http://127.0.0.1:8000/console\n"
+    )
+    serve(world, host="0.0.0.0")
     assert (
         capsys.readouterr().out
         == "Starting. Web console will be available at http://127.0.0.1:8000/console\n"

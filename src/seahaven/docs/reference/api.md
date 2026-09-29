@@ -612,6 +612,8 @@ class SeahavenClient:  # .reset(...), .call(tool, /, **arguments), .list_tools()
 `SeahavenClient.call(...)` answers a `SeahavenObservation`. On a failed call its `error` is
 OpenEnv's own `{error_type, message}` model and its `seahaven_error` is the world's
 `{code, message, details}` triple, read from `metadata["seahaven_error"]`.
+`SeahavenClient.step(ListToolsAction())` answers a `ListToolsObservation`, whose `tools` are OpenEnv
+`Tool` models.
 
 `SeahavenClient.state()` answers a `SeahavenState`: the state document, plus OpenEnv's
 `step_count`. Every envelope field of the document is a typed field on it, with `world` a

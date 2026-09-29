@@ -590,6 +590,27 @@ def test_a_package_with_no_world_fails_with_the_fix_and_no_traceback(
     assert "Traceback" not in result.stdout.str()
 
 
+def test_a_world_that_does_not_import_fails_with_its_file_and_line(
+    pytester: pytest.Pytester,
+) -> None:
+    root = write_world(pytester)
+    module = root / "src" / "tinyworld" / "__init__.py"
+    module.write_text(module.read_text(encoding="utf-8") + "\nundefined_name\n", encoding="utf-8")
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.seahaven(fixture=None)
+        def test_it(instance):
+            assert instance is not None
+        """
+    )
+    result = pytester.runpytest()
+    result.assert_outcomes(errors=1)
+    result.stdout.fnmatch_lines(["*NameError*src/tinyworld/__init__.py:*"])
+    assert "must export" not in result.stdout.str()
+
+
 def test_the_marker_is_registered(pytester: pytest.Pytester) -> None:
     """`--strict-markers` is what a world's CI runs; an unregistered marker fails it."""
     write_world(pytester)

@@ -25,7 +25,11 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
-from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
+from openenv.core.env_server.mcp_types import (
+    CallToolAction,
+    ListToolsAction,
+    ListToolsObservation,
+)
 
 from seahaven.openenv import SeahavenClient, SeahavenObservation, SeahavenState
 from tests.serving import serving
@@ -257,9 +261,19 @@ def test_a_reset_frame_parses_through_the_step_hook_with_only_its_metadata(
 
 
 def test_the_observation_model_refuses_a_frame_it_does_not_know(client: SeahavenClient) -> None:
-    """`SeahavenObservation` forbids extras, which is why `list_tools` does not use it."""
-    with pytest.raises(ValueError, match="tools"):
-        client._parse_result({"observation": {"tools": []}})
+    """`SeahavenObservation` forbids extras: a field nothing sends is an error, not dropped."""
+    with pytest.raises(ValueError, match="bogus"):
+        client._parse_result({"observation": {"bogus": 1}})
+
+
+def test_parse_result_answers_a_tool_list_as_a_list_tools_observation(
+    client: SeahavenClient,
+) -> None:
+    result = client._parse_result(
+        {"observation": {"tools": [{"name": "ping", "description": "d", "input_schema": {}}]}}
+    )
+    assert isinstance(result.observation, ListToolsObservation)
+    assert result.observation.tools[0].name == "ping"
 
 
 # --- the client, on a server -----------------------------------------------
@@ -284,6 +298,16 @@ def test_the_client_drives_a_world_synchronously(world: World) -> None:
         assert (state.world.name, state.world.version) == (world.name, world.version)
         assert (state.fixture, state.now) == (None, INSTANT_ISO)
         assert state.state["db"]["log"][0]["key"] == {"id": "n1"}
+
+
+def test_stepping_a_list_tools_action_answers_the_tool_list(world: World) -> None:
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        env.reset()
+        result = env.step(ListToolsAction())
+        assert isinstance(result.observation, ListToolsObservation)
+        names = [tool.name for tool in result.observation.tools]
+        assert "rows" in names and "controller_run_sql" not in names
+        assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
 
 def test_the_client_drives_a_world_asynchronously(world: World) -> None:

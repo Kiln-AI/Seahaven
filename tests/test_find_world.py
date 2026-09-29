@@ -14,7 +14,7 @@ import pytest
 
 from seahaven.cli import CliError, discover, find_world, package_name
 from seahaven.world import World
-from tests.conftest import WORLDS
+from tests.conftest import BROKEN_MODULE, WORLDS, broken_tidy
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -74,6 +74,48 @@ def test_a_world_option_naming_a_module_that_does_not_import_is_sh501() -> None:
     assert raised.value.code == "SH501"
     assert "not_a_module_anyone_has" in str(raised.value)
     assert "Traceback" not in str(raised.value)
+    assert raised.value.fix is not None and "--world" in raised.value.fix
+
+
+@pytest.mark.parametrize(
+    ("statement", "raised_as"),
+    [
+        ("def broken(:", "SyntaxError"),
+        ("undefined_name", "NameError"),
+        ("import not_installed_anywhere_x", "ModuleNotFoundError"),
+    ],
+    ids=["syntax error", "name error", "missing dependency"],
+)
+def test_an_error_in_world_code_names_its_file_and_line(
+    tmp_path: Path, statement: str, raised_as: str
+) -> None:
+    """The place the import failed, not the export a package with no world is missing.
+
+    A missing dependency is a `ModuleNotFoundError` too, and is placed at the
+    import that needs it rather than read as the world module being missing.
+    """
+    root, line = broken_tidy(tmp_path, statement)
+    with pytest.raises(CliError) as raised:
+        discover(None, root)
+    error = raised.value
+    assert error.code == "SH501"
+    assert (error.path, error.line) == ((root / BROKEN_MODULE).resolve(), line)
+    assert raised_as in error.message
+    assert f"{BROKEN_MODULE}:{line}" in error.message
+    assert error.fix == f"fix the error at {BROKEN_MODULE}:{line}"
+    assert "world = seahaven.World" not in f"{error.message} {error.fix}"
+
+
+def test_a_world_that_refuses_a_tool_at_import_names_the_line(tmp_path: Path) -> None:
+    """A `SeahavenError` out of world code is placed there, not in Seahaven's frames."""
+    root, line = broken_tidy(tmp_path, "world.tool(write_note)")
+    with pytest.raises(CliError) as raised:
+        discover(None, root)
+    error = raised.value
+    assert error.code == "SH501"
+    assert "write_note" in error.message
+    assert (error.path, error.line) == ((root / BROKEN_MODULE).resolve(), line)
+    assert error.fix == f"fix the error at {BROKEN_MODULE}:{line}"
 
 
 def test_a_package_with_no_world_attribute_names_the_fix() -> None:
