@@ -42,7 +42,7 @@ change logs), so you only write what's specific to your world: its tables and it
 ### Built for Evals and RL
 
 - **[Fixtures](src/seahaven/docs/db_schema_and_fixtures.md).** Freeze known starting states like
-  `small_startup`, `agency` or `big_co`, and reuse them across evals.
+  `small_startup`, `agency` or `big_co`, and reuse them across runs.
 - **[Host Parallel Instances](src/seahaven/docs/serving_and_openenv.md).** Serve hundreds of world
   instances per process at thousands of tool calls per second.
 - **[Evaluate World State](src/seahaven/docs/state.md).** Every row the agent changed is logged.
