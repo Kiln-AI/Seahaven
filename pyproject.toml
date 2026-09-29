@@ -86,8 +86,7 @@ line-length = 100
 src = [
     "src",
     "tests",
-    "scripts",
-    "bench",
+    ".",
     "worlds/projecttracker/src",
     "worlds/projecttracker/tests",
     "extensions/seahaven-xmlrpc/src",
@@ -110,7 +109,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "tests/test_mcp_process.py" = ["E402"]
 
 [tool.ty.src]
-include = ["src", "tests", "scripts", "worlds", "extensions", "bench"]
+include = ["src", "tests", "tools", "worlds", "extensions"]
 
 # The composite worlds of `tests/worlds/README.md` are packages that import one
 # another, because that is how a host world reaches a world it adds. Nothing

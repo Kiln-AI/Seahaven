@@ -229,7 +229,7 @@ your agent at the docs for the version you have installed, not stale ones from t
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the checks CI runs.
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for setup and the checks CI runs.
 
 ## License
 

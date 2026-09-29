@@ -130,7 +130,7 @@ def default_concurrency() -> int:
     large host from over-subscribing.
 
     **This is not the throughput optimum, and it was never measured to be.** The
-    sweep in `bench/results/latest.md` found no optimum above 1 on a build with
+    sweep in `tools/bench/results/latest.md` found no optimum above 1 on a build with
     the GIL: most of a call is Python, so a second runnable thread buys contention
     rather than parallelism, and `n = 1` ran 22% to 37% more calls a second than
     this default on every workload, cache state and offered load measured.

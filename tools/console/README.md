@@ -67,7 +67,7 @@ Seahaven serves the built page at `/console`, from a copy in its own package
 (`src/seahaven/openenv/console/index.html`). Rebuild and replace that copy after a change here:
 
 ```sh
-npm run build && cp dist/index.html ../src/seahaven/openenv/console/index.html
+npm run build && cp dist/index.html ../../src/seahaven/openenv/console/index.html
 ```
 
 The build is one file with no external requests, so any other OpenEnv app can serve it the same

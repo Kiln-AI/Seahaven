@@ -1,6 +1,6 @@
 """The benchmark's own tests: that it still runs, and that it reports honestly.
 
-`bench/` is not part of the distribution and is never a gate, so nothing here
+`tools/bench/` is not part of the distribution and is never a gate, so nothing here
 asserts a speed -- a test that failed when the machine was busy would be a test
 nobody trusts, and a threshold in CI is the thing `architecture.md` §10 says the
 benchmark must not become. What these prove is that the instrument works: that a
@@ -21,10 +21,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from bench import report
-from bench.__main__ import QUICK, main
-from bench.baseline import BaselinePoint, Share, share
-from bench.composite import (
+
+import projecttracker
+from seahaven import Instance, World, WorldBug, instances
+from tools.bench import report
+from tools.bench.__main__ import QUICK, main
+from tools.bench.baseline import BaselinePoint, Share, share
+from tools.bench.composite import (
     READ,
     SETTLE,
     WRITE,
@@ -35,8 +38,8 @@ from bench.composite import (
     standing_up,
     trees,
 )
-from bench.environment import capture
-from bench.harness import (
+from tools.bench.environment import capture
+from tools.bench.harness import (
     Caller,
     Run,
     Summary,
@@ -48,7 +51,7 @@ from bench.harness import (
     summarise,
     timed_loop,
 )
-from bench.recording import (
+from tools.bench.recording import (
     LEGS,
     Recording,
     long_lived_sessions,
@@ -58,12 +61,9 @@ from bench.recording import (
     seconds_per_call,
     unread_sessions,
 )
-from bench.runner import calls_per_worker, measure, sessions
-from bench.sweep import Isolation, Point, isolation, sweep
-from bench.workloads import SHARE_STATEMENTS, WORKLOADS, Session, Workload
-
-import projecttracker
-from seahaven import Instance, World, WorldBug, instances
+from tools.bench.runner import calls_per_worker, measure, sessions
+from tools.bench.sweep import Isolation, Point, isolation, sweep
+from tools.bench.workloads import SHARE_STATEMENTS, WORKLOADS, Session, Workload
 
 CALLS = 8
 WORKERS = 2
@@ -221,7 +221,7 @@ def test_the_share_legs_are_three_timings_of_one_pass(world: World) -> None:
 
     That the whole call costs more than its statements, and the statements more
     through `Db` than on the cursor, is the finding -- and it belongs to
-    `bench/results/latest.md`, which measures it over 1,800 calls a leg. It cannot
+    `tools/bench/results/latest.md`, which measures it over 1,800 calls a leg. It cannot
     belong here. At the eight calls this test can afford, each leg is a single
     window of roughly a hundred and fifty microseconds, and one scheduler
     preemption adds several hundred to whichever leg catches it: on a machine
@@ -337,7 +337,7 @@ def test_the_probe_quotes_one_window_and_not_a_pool(world: World) -> None:
     document = report.render(
         report.Results(
             environment=capture(),
-            command="python -m bench isolation --quick",
+            command="python -m tools.bench isolation --quick",
             seconds=1.0,
             cold_skipped=None,
             isolation=probe,
@@ -399,7 +399,7 @@ def _results(
     run = measure(world, WORKLOADS["read"], workers=1, calls=CALLS)
     return report.Results(
         environment=capture(),
-        command="python -m bench all --quick",
+        command="python -m tools.bench all --quick",
         seconds=1.0,
         cold_skipped=cold_skipped,
         baseline=(
@@ -573,7 +573,7 @@ def test_the_composite_section_carries_its_own_provenance_and_both_tables() -> N
     document = report.render(
         report.Results(
             environment=environment,
-            command="python -m bench composite --quick",
+            command="python -m tools.bench composite --quick",
             seconds=1.0,
             cold_skipped=None,
             composite=composite(calls=2, repeats=1, tree_repeats=1),
@@ -585,7 +585,7 @@ def test_the_composite_section_carries_its_own_provenance_and_both_tables() -> N
     # and an unflattened `in` misses content that is right there.
     section = flatten(document[document.index("## 7.") :])
     assert flatten("**Provenance.**") in section
-    assert flatten("python -m bench composite --quick") in section
+    assert flatten("python -m tools.bench composite --quick") in section
     assert flatten(environment.commit) in section
     assert flatten(environment.cpu_model) in section
     assert flatten("### Standing one up") in section
@@ -599,7 +599,7 @@ def test_the_method_section_is_dropped_when_no_projecttracker_run_happened(world
     composite_only = report.render(
         report.Results(
             environment=capture(),
-            command="python -m bench composite --quick",
+            command="python -m tools.bench composite --quick",
             seconds=1.0,
             cold_skipped=None,
             composite=composite(calls=2, repeats=1, tree_repeats=1),
@@ -664,7 +664,7 @@ def test_the_derived_bullets_are_tied_to_the_leg_names() -> None:
     document = report.render(
         report.Results(
             environment=capture(),
-            command="python -m bench composite --quick",
+            command="python -m tools.bench composite --quick",
             seconds=1.0,
             cold_skipped=None,
             composite=composite(calls=2, repeats=2, tree_repeats=1),
@@ -724,7 +724,7 @@ def test_a_recording_only_report_points_at_no_section_it_did_not_write(world: Wo
     only = report.render(
         report.Results(
             environment=capture(),
-            command="python -m bench recording --quick",
+            command="python -m tools.bench recording --quick",
             seconds=1.0,
             cold_skipped=None,
             recording=tuple(
@@ -735,7 +735,7 @@ def test_a_recording_only_report_points_at_no_section_it_did_not_write(world: Wo
     section = flatten(only[only.index("## 8.") :])
 
     assert flatten("**Provenance.**") in section
-    assert flatten("python -m bench recording --quick") in section
+    assert flatten("python -m tools.bench recording --quick") in section
     assert "## Method" not in only, "`## Method` describes columns this run has none of"
     for pointed_at in ("section 1", "section 5", "section 7", "noise floor"):
         assert pointed_at not in only, pointed_at
@@ -863,7 +863,7 @@ def _section_eight(measured: Recording) -> str:
     document = report.render(
         report.Results(
             environment=capture(),
-            command="python -m bench recording --quick",
+            command="python -m tools.bench recording --quick",
             seconds=1.0,
             cold_skipped=None,
             recording=(measured,),

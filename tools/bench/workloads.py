@@ -15,8 +15,8 @@ import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from bench.harness import Caller
 from seahaven import Instance, World
+from tools.bench.harness import Caller
 
 __all__ = [
     "FIXTURE",
@@ -105,7 +105,7 @@ def _write_mix(instance: Instance) -> Caller:
             "create_issue",
             project_id=project,
             title=f"benchmark issue {index}",
-            description="Filed by bench/workloads.py, over and over. " * 3,
+            description="Filed by tools/bench/workloads.py, over and over. " * 3,
         )
         subject["issue"] = str(issue["id"])
         return issue
@@ -174,7 +174,7 @@ class Session:
 
         Preparing reads the ids the workload will drive, which warms the
         instance's page cache; a cold measurement evicts afterwards, which is why
-        `bench.sweep` evicts once every session is prepared and not at creation.
+        `tools.bench.sweep` evicts once every session is prepared and not at creation.
         """
         instance = world.instance(FIXTURE)
         try:

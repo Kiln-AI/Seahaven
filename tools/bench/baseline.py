@@ -29,10 +29,10 @@ that is the sweep's question rather than this one's.
 
 from dataclasses import dataclass
 
-from bench.harness import Run, Summary, closed_loop, summarise
-from bench.runner import Cache, calls_per_worker, measure, sessions
-from bench.workloads import SHARE_STATEMENTS, WORKLOADS, issue_ids
 from seahaven import World
+from tools.bench.harness import Run, Summary, closed_loop, summarise
+from tools.bench.runner import Cache, calls_per_worker, measure, sessions
+from tools.bench.workloads import SHARE_STATEMENTS, WORKLOADS, issue_ids
 
 __all__ = ["BaselinePoint", "Share", "baseline", "share"]
 

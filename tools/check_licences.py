@@ -15,7 +15,7 @@ This is an allowlist, not a denylist of the licences we have thought to refuse:
 an identifier nobody has classified fails, which is the only way an unread
 licence cannot ship by accident.
 
-**Name the extras to audit**: `uv run python scripts/check_licences.py serve`
+**Name the extras to audit**: `uv run python tools/check_licences.py serve`
 reads the base closure plus `serve`, and an extra named this way that is not
 installed cannot have its licences read, so it fails rather than passing quietly.
 CI names them, one job per extra, because `serve` and `mcp` are declared as
@@ -23,7 +23,7 @@ conflicting in `pyproject.toml` and no environment can hold both. Between them
 the jobs cover every extra the project declares, which
 `tests/test_licence_check.py` asserts against the workflow file.
 
-Run bare -- `uv run python scripts/check_licences.py` -- it audits the base
+Run bare -- `uv run python tools/check_licences.py` -- it audits the base
 closure plus every declared extra this environment actually has, and prints what
 it could not read and the command that reads it. That is the developer's run;
 the strict one is the gate.
@@ -300,7 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for extra in unsynced:
         print(
             f"{extra} was not read here, because this environment is not synced for it: "
-            f"`uv sync --extra {extra} && uv run python scripts/check_licences.py {extra}`"
+            f"`uv sync --extra {extra} && uv run python tools/check_licences.py {extra}`"
         )
     return 0
 

@@ -8,12 +8,12 @@ what a second node of a composite world costs -- asked the same way twice so tha
 two runs on one machine can be compared.
 
 Read the output the way the output asks to be read. A benchmark run on a shared
-virtual machine measures that machine on that afternoon; `bench/results/latest.md`
+virtual machine measures that machine on that afternoon; `tools/bench/results/latest.md`
 opens with what its figures can and cannot be used for, and every table in it
 carries the spread of its own repeats so a reader can refuse to believe a
 difference smaller than the noise.
 
-    uv run python -m bench all --out bench/results/latest.md
+    uv run python -m tools.bench all --out tools/bench/results/latest.md
 
-`bench/README.md` has the rest of the commands and what they cost in wall time.
+`tools/bench/README.md` has the rest of the commands and what they cost in wall time.
 """

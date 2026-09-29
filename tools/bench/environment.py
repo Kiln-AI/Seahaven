@@ -21,8 +21,8 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from bench.harness import cold_cache_supported
 from seahaven.instances import default_concurrency
+from tools.bench.harness import cold_cache_supported
 
 __all__ = ["Environment", "capture"]
 

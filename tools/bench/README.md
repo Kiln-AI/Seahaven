@@ -13,12 +13,12 @@ before reading any number in it.
 From the repository root:
 
 ```sh
-uv run python -m bench all --out bench/results/latest.md    # everything, ~10 min
-uv run python -m bench baseline                             # one thread, ~1 min
-uv run python -m bench sweep --progress                     # the gate sweep, ~9 min
-uv run python -m bench isolation                            # the slow-call probe, ~1 min
-uv run python -m bench composite                            # what a node costs, ~10 s
-uv run python -m bench recording                            # what the change log costs, ~1 min
+uv run python -m tools.bench all --out tools/bench/results/latest.md  # everything, ~10 min
+uv run python -m tools.bench baseline               # one thread, ~1 min
+uv run python -m tools.bench sweep --progress       # the gate sweep, ~9 min
+uv run python -m tools.bench isolation              # the slow-call probe, ~1 min
+uv run python -m tools.bench composite              # what a node costs, ~10 s
+uv run python -m tools.bench recording              # what the change log costs, ~1 min
 ```
 
 With no `--out` the report goes to stdout. `--progress` prints a line per point on stderr, which
@@ -27,7 +27,7 @@ and measures nothing: it is for checking that the harness runs.
 
 Useful knobs: `--repeats`, `--calls`, `--baseline-calls`, `--gates 1 2 4 0`, `--workers 4 32`,
 `--seconds`, `--readers`, `--composite-calls`, `--tree-repeats`, `--seed`, `--warm-only`.
-`python -m bench --help` lists them all.
+`python -m tools.bench --help` lists them all.
 
 The recording probe needs a longer run than these defaults before its totals settle: at 200 calls
 over 3 repeats a write probe's total moves by tens of points between runs, and comes out well
@@ -61,7 +61,7 @@ reading again from the new tables rather than keeping the old one.
 **Section 7 of the committed report was measured on its own** and pasted in above `## Reading`,
 because the sections before it are an older run that this repository's environment note says is a
 maintainer's call to replace. That is why the composite section carries a provenance line naming its
-own command, commit and machine: a section that can be regenerated alone (`python -m bench
+own command, commit and machine: a section that can be regenerated alone (`python -m tools.bench
 composite`) can end up beside tables from another run, and it has to say so. A full
 `all --force` run regenerates every section together, and the provenance line then repeats what the
 Environment table already says.

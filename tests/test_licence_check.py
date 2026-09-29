@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts import check_licences
-from scripts.check_licences import (
+
+from tools import check_licences
+from tools.check_licences import (
     Licence,
     audit,
     declared_extras,
@@ -361,6 +362,6 @@ def test_every_declared_extra_is_audited_by_some_ci_job() -> None:
     An extra added to `pyproject.toml` without a job that syncs it and audits it
     would be shipped to users and read by nobody.
     """
-    audited = set(re.findall(r"scripts/check_licences\.py ([a-z0-9-]+)", WORKFLOW.read_text()))
+    audited = set(re.findall(r"tools/check_licences\.py ([a-z0-9-]+)", WORKFLOW.read_text()))
 
     assert audited == set(declared_extras("seahaven"))
