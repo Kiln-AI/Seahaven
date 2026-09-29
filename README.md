@@ -17,16 +17,16 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-brightgreen" alt="MIT License"></a>
 </p>
 
-A Seahaven world is a working copy of your agent's production tools, one it can't tell from the
-real thing. Use it as an RL environment for training or evals: run hundreds of isolated copies in
-parallel, each from a known state, and grade exactly what the agent changed.
+Evals and RL need thousands of agent runs, each isolated, starting from a known state, and graded
+on what the agent changed. Production systems can't do that. Seahaven is a Python framework for
+building synthetic worlds that can: working copies of your agent's tools, realistic enough that the
+agent can't tell the difference.
 
 > Named after the town in *The Truman Show*: an entire world built so that one inhabitant believes
 > it is real.
 
-**Why Seahaven:** evals and RL need thousands of runs, each isolated, reproducible and inspectable
-afterwards. Seahaven handles the hard parts (parallel instances, reproducibility, serving, and
-change logs), so you only write what's specific to your world: its tables and its tools.
+Seahaven handles the hard parts (parallel instances, reproducibility, serving, and change logs), so
+you only write what's specific to your world: its tables and its tools.
 
 ## Features
 
