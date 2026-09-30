@@ -87,9 +87,8 @@ with company.instance(now="2026-06-01T09:00:00.000Z") as inst:
     }
 ```
 
-That example is the whole feature. There is one new registration verb, one new handle on `ctx`, and
-everything else — the tool list, the change log, the inspection connection, the fixture — gains a
-node dimension it did not have before.
+There is one new registration verb, one new handle on `ctx`, and everything else — the tool list,
+the change log, the inspection connection, the fixture — gains a node dimension.
 
 ## Declaring
 
@@ -375,12 +374,14 @@ for what no tool covers. Outside a `db.transaction()` block, statements there au
 
 ## Middleware
 
-An agent call to a contributed tool descends every world's middleware along the canonical route from
-the root to the owning node, outermost first: the host's, then any world in between, then the owning
-world's, and then the tool. The host can wrap every tool it serves, with an access-control layer
-gating the whole surface or a trace, and the added world's own error handler still shapes its errors
-as its product would. The scaffolded handler passes `ToolError` through, so a host's outermost
-handler does not re-wrap an added world's product errors.
+An agent call to a contributed tool descends the middleware of every world on the route that
+contributed that tool, from the root to the owning world, outermost first: the host's, then any
+world in between, then the owning world's, and then the tool. When a shared node's tool reaches the
+surface under two names by two routes, each name runs its own route's middleware. The host can wrap
+every tool it serves, with an access-control layer gating the whole surface or a trace, and the
+added world's own error handler still shapes its errors as its product would. The scaffolded handler
+passes `ToolError` through, so a host's outermost handler does not re-wrap an added world's product
+errors.
 
 **Each layer runs with its own world's context.** A host middleware sees the host's `db`, `state`,
 `ids` and `worlds`. The owning world's middleware and the tool see the owning node's. Without that
@@ -399,11 +400,12 @@ behalf.
 ## Startup hooks
 
 Hooks run for every world in the tree, depth-first from the root: each node's own hooks, then its
-added worlds in `add_world` order, each with its own node's context. Each node's hooks run **once**,
-however many routes reach it. Every node's transaction is open before the first hook runs, which is
-what lets a root hook write into a child's store — through `ctx.worlds.<name>.db` and
-`ctx.worlds.<name>.state` — before that child's own hooks run. A hook that raises rolls all of them
-back, and no instance is left behind.
+added worlds in `add_world` order, each with its own node's context. A world that more than one
+world adds runs after every world that adds it. Each node's hooks run **once**, however many routes
+reach it. Every node's transaction is open before the first hook runs, which is what lets a host's
+hook write into a child's store — through `ctx.worlds.<name>.db` and `ctx.worlds.<name>.state` —
+before that child's own hooks run. A hook that raises rolls all of them back, and no instance is
+left behind.
 
 The startup keywords a caller passes — `world.instance(startup={...})`, or the same `startup` on
 `reset()` — are **broadcast**: every hook in the tree that names a keyword receives it, and an
@@ -467,10 +469,9 @@ keyword names.
 ## One instance, many stores
 
 An instance of a composite is one SQLite file and one connection per node, in one instance
-directory. The root's file is `state.sqlite`, as it has always been, and an added node's is
-`state.<path>.sqlite` with `/` replaced by `__`: `state.payments.sqlite`,
-`state.payments__tax.sqlite`. Every file carries its own world's schema and gets every per-file rule
-Seahaven has.
+directory. The root's file is `state.sqlite`, and an added node's is `state.<path>.sqlite` with `/`
+replaced by `__`: `state.payments.sqlite`, `state.payments__tax.sqlite`. Every file carries its own
+world's schema and gets every per-file rule Seahaven has.
 
 - **One clock** for the whole instance, in the root world's clock mode unless the caller names one.
   Every connection gets the same overrides, so every tool in every added world reads the same
@@ -479,21 +480,25 @@ Seahaven has.
   or removing a node never perturbs another node's ids, and the same fixture and seed reproduce
   every node. SQL's `random()` and `randomblob()` are seeded per node from the same salt, so a
   `DEFAULT (randomblob(8))` in one added world's schema replays and is not the stream any other
-  node, or any `ctx.ids`, draws from. The root's stream is the instance seed untouched, which is why
-  a world that adds nothing mints exactly what it always did.
+  node, or any `ctx.ids`, draws from. The root's stream is the instance seed untouched.
 - **`inst.db`, `inst.state_path` and the `ctx` a tool of the root receives are the root's.** An
   added node's store is reached through `ctx.worlds`, never from the instance.
 - **Isolation between nodes is structural.** A world's `ctx.db` is one file, so a world's own
   `run_sql` helper cannot see a sibling's tables. There is no allowlist to get wrong.
 
 `inst.bulk()` yields the root's context with a live `ctx.worlds`, and opens one transaction per node
-and commits them in sequence, so a fixture generator fills every store in one block.
+and commits them one at a time, the root last, so a fixture generator fills every store in one
+block.
+
+If the block raises, every node rolls back. If a node's commit fails, for example on a deferred
+foreign key, `bulk()` raises and the nodes that committed before it keep their rows. Do not freeze
+an instance after `bulk()` raised; make a new instance and load it again.
 
 ## Fixtures
 
 A composite fixture is one directory holding one frozen SQLite file per node and one `fixture.yaml`
-at `format_version: 2`. It carries the version-1 fields describing the root exactly as before, plus
-a `nodes` list with one entry per added node.
+at `format_version: 2`. It carries the version-1 fields, which describe the root, and a `nodes` list
+with one entry per added node.
 
 ```yaml
 format_version: 2
@@ -518,13 +523,12 @@ nodes:
       - shop/payments
 ```
 
-A world that adds nothing keeps writing `format_version: 1` with no `nodes` key at all, so its
-fixture directory is byte for byte what it was before composition existed, and every fixture already
-on disk keeps loading. There is exactly one `now`, because no store has a clock of its own. A node's
-`file` is a plain file name, held to the same rule as a world's name and a fixture id but with no
-length limit, since Seahaven mints it from the node's path rather than accepting it. A sidecar that
-spells anything else — a separator, a `..`, a drive letter, a character outside the name charset —
-is refused when it is read, because both readers join it onto the fixture directory and follow the
+A world that adds nothing writes `format_version: 1` with no `nodes` key, and Seahaven reads both
+versions. There is exactly one `now`, because no store has a clock of its own. A node's `file` is a
+plain file name, held to the same rule as a world's name and a fixture id but with no length limit,
+since Seahaven mints it from the node's path rather than accepting it. A sidecar that spells
+anything else — a separator, a `..`, a drive letter, a character outside the name charset — is
+refused when it is read, because both readers join it onto the fixture directory and follow the
 result, and the sidecar supplies the hash too.
 
 - **Genesis** yields a blank file per node, each with its own schema, on one clock. Fill them
@@ -586,10 +590,10 @@ with company.instance("acme") as inst:
 
 Nothing agent-facing says a world is composed. Everything eval-facing does.
 
-- **`inst.inspect()`** is the read-only connection it always was, with every added node attached
+- **`inst.inspect()`** is the eval's read-only connection, with every added node attached
   read-only under a schema named by its path, with `/` replaced by `__`: `payments.charges`,
   `payments__tax.rates`. "Was the invoice created and was the charge taken" is one statement.
-  Writes, `ATTACH` and `DETACH` are denied on it, as they always were.
+  Writes, `ATTACH` and `DETACH` are denied on it.
 - **`inst.change_log()`** is one list covering every node, in call order. Each record carries
   `world`, the owning node's path, which is `main` for the root. That is what tells two tables of the
   same name in two stores apart; the records of one call are sorted by that path, then the table,
@@ -716,9 +720,8 @@ Eight codes, all of them for mistakes a composite makes silently.
   `inst.composition()`.
 - **An idle composite instance is one file and one connection per node.** A session is opened per
   node per call and closed with the call, so an idle instance holds none. Cost scales with the
-  tree, and the design target — hundreds of concurrent instances with minute-long lifetimes —
-  holds for a small number of nodes. The benchmark measures one node per instance and reads as a
-  per-node floor.
+  number of nodes: each node adds a file and a connection when an instance is made, and a session
+  on every call.
 - **Sealing costs a walk of the tree,** on the first use after any registration anywhere in the
   process. The invalidation is global, because a world cannot be told what added it. Steady state is
   one integer compare per call. Registration is expected to finish at import, so this is a cost you

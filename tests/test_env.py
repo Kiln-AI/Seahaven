@@ -11,6 +11,7 @@ import inspect
 import json
 import logging
 import re
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ import seahaven
 from seahaven.ctx import Ctx
 from seahaven.errors import SeahavenError, ToolError, WorldBug
 from seahaven.world import World
-from tests.conftest import INSTANT_ISO, build_world
+from tests.conftest import INSTANT, INSTANT_ISO, build_world
 
 # The subpackage and not `openenv`: what this module imports is
 # `seahaven.openenv`, so that is what has to import for the tests below to mean
@@ -55,6 +56,7 @@ from seahaven.openenv.env import (
 pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 
 CONTROL_SQL = "SELECT count(*) AS n FROM notes"
+UID = uuid.UUID(int=5)
 
 
 def wire_error(observation: SeahavenObservation) -> tuple[str, str] | None:
@@ -509,6 +511,26 @@ def test_bad_arguments_are_rendered_as_invalid_arguments(env: SeahavenEnv) -> No
     assert seahaven_error["details"]["tool"] == "rows"
     assert observation.error is not None
     assert observation.error.error_type.value == "invalid_args"
+
+
+def test_an_argument_arrives_as_the_json_spelling_its_schema_publishes(world: World) -> None:
+    """A `tuple`, a `UUID` and a `datetime` are an array and two strings on the wire."""
+
+    @world.tool
+    def book(ctx: Ctx, span: tuple[int, int], id: uuid.UUID, at: datetime) -> dict[str, str]:
+        """Book."""
+        return {"span": repr(span), "id": id.hex, "at": at.isoformat()}
+
+    env = SeahavenEnv(world, include_control_tools=False)
+    env.reset()
+    arguments = json.loads(json.dumps({"span": [1, 2], "id": str(UID), "at": INSTANT_ISO}))
+
+    assert call(env, "book", **arguments).result == {
+        "span": "(1, 2)",
+        "id": UID.hex,
+        "at": INSTANT.isoformat(),
+    }
+    assert wire_error(call(env, "book", **{**arguments, "span": ["1", "2"]})) is not None
 
 
 # --- step: control tools ---------------------------------------------------

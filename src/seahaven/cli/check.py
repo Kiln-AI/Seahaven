@@ -69,7 +69,7 @@ def collect(explicit: str | None, start: Path) -> Report:
     except CliError as error:
         if error.code is None:
             raise
-        return Report(root=error.path or start, findings=[_finding_for(error, start)])
+        return Report(root=error.root or start, findings=[_finding_for(error, start)])
     return Report(
         root=found.root,
         findings=lint.run_all(
@@ -86,9 +86,7 @@ def _finding_for(error: CliError, start: Path) -> Finding:
         code="SH501",
         severity="error",
         path=path,
+        line=error.line,
         message=error.message,
-        # The message already names the export and the override, because it is
-        # also what `find_world` raises outside `check`. Repeating it here would
-        # print one sentence twice on one line.
-        fix="give the package a world, or point at the one it has",
+        fix=error.fix or "",
     )

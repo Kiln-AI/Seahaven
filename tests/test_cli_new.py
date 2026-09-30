@@ -15,6 +15,7 @@ from importlib.metadata import metadata
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 from seahaven.cli import CliError
 from seahaven.cli.new import HUB_FILES, render, seahaven_requirement
@@ -115,6 +116,17 @@ def test_the_scaffold_declares_the_conflict_between_serve_and_mcp(scaffold: Path
     )
 
 
+def test_the_scaffold_installs_pytest_with_uv_sync(scaffold: Path) -> None:
+    """The next steps say `uv run pytest`, and seahaven does not depend on pytest.
+
+    `uv sync` installs the `dev` group by default, so that group is where the
+    scaffold has to ask for it.
+    """
+    declared = tomllib.loads((scaffold / "pyproject.toml").read_text(encoding="utf-8"))
+    dev = declared["dependency-groups"]["dev"]
+    assert [Requirement(entry).name for entry in dev] == ["pytest"]
+
+
 def test_the_scaffold_pins_the_installed_minor_version(scaffold: Path) -> None:
     requirement = seahaven_requirement()
     assert requirement.startswith("seahaven~=")
@@ -130,10 +142,14 @@ def test_check_passes_on_a_fresh_scaffold(
     assert result.code == 0
 
 
-def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
-    """A subprocess, because a second pytest cannot run inside this one."""
-    finished = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
+def python_in(scaffold: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """This interpreter, run in the scaffold with its package on `PYTHONPATH`.
+
+    Standing in for `uv run python`: the scaffold's own environment would install
+    seahaven from an index it has not been published to.
+    """
+    return subprocess.run(
+        [sys.executable, *args],
         cwd=scaffold,
         env={**os.environ, "PYTHONPATH": str(scaffold / "src")},
         capture_output=True,
@@ -141,33 +157,37 @@ def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
         timeout=300,
         check=False,
     )
-    assert finished.returncode == 0, finished.stdout + finished.stderr
 
 
-def test_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
-    """The command under the README's "Making a fixture", run as written.
-
-    `uv run python` is this interpreter with the package on `PYTHONPATH`, as in
-    the pytest test above: the scaffold's own environment would install seahaven
-    from an index it has not been published to.
-    """
+def build_as_the_readme_says(scaffold: Path) -> None:
+    """The command under the README's "Making a fixture", run as written."""
     readme = (scaffold / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Making a fixture\n", 1)[1]
     command = section.split("```sh\n", 1)[1].split("\n```", 1)[0]
     launcher = "uv run python "
     assert command.startswith(launcher)
 
-    finished = subprocess.run(
-        [sys.executable, *shlex.split(command.removeprefix(launcher))],
-        cwd=scaffold,
-        env={**os.environ, "PYTHONPATH": str(scaffold / "src")},
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-
+    finished = python_in(scaffold, *shlex.split(command.removeprefix(launcher)))
     assert finished.returncode == 0, finished.stdout + finished.stderr
+
+
+def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
+    """A subprocess, because a second pytest cannot run inside this one."""
+    finished = python_in(scaffold, "-m", "pytest", "-q")
+    assert finished.returncode == 0, finished.stdout + finished.stderr
+
+
+def test_pytest_passes_after_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
+    """The README's first step is a `build`, and the tests have to survive it."""
+    build_as_the_readme_says(scaffold)
+
+    finished = python_in(scaffold, "-m", "pytest", "-q")
+    assert finished.returncode == 0, finished.stdout + finished.stderr
+
+
+def test_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
+    build_as_the_readme_says(scaffold)
+
     generator = (scaffold / "fixtures_src" / "generate.py").read_text(encoding="utf-8")
     fixture = load(scaffold / "fixtures" / "empty")
     assert fixture.id == "empty"
@@ -191,6 +211,16 @@ def test_a_name_that_is_not_a_package_name_is_refused(tmp_path: Path, name: str)
     with pytest.raises(CliError) as raised:
         render(name, tmp_path / "world")
     assert "not a Python identifier" in str(raised.value)
+    assert not (tmp_path / "world").exists()
+
+
+@pytest.mark.parametrize("name", ["email", "json", "Queue", "seahaven"])
+def test_a_name_that_shadows_an_existing_module_is_refused(tmp_path: Path, name: str) -> None:
+    """Each is a legal package name that loses to a module already on the path."""
+    with pytest.raises(CliError) as raised:
+        render(name, tmp_path / "world")
+    assert f"add a suffix, such as '{name.lower()}_world'" in str(raised.value)
+    assert f"the package {name.lower()!r}" in str(raised.value)
     assert not (tmp_path / "world").exists()
 
 
@@ -224,6 +254,17 @@ def test_the_hub_files_re_export_the_framework(tmp_path: Path) -> None:
     assert "SeahavenState" in models
     assert "hubbed.openenv_app:app" in (hubbed / "Dockerfile").read_text(encoding="utf-8")
     assert "name: hubbed" in (hubbed / "openenv.yaml").read_text(encoding="utf-8")
+
+
+def test_the_hub_container_serves_on_every_interface(tmp_path: Path) -> None:
+    """The server binds loopback by default, so the container has to say otherwise itself."""
+    hubbed = render("hubbed", tmp_path / "hub" / "hubbed", hub=True)
+    command = next(
+        line
+        for line in (hubbed / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if line.startswith("CMD ")
+    )
+    assert '"--host", "0.0.0.0"' in command
 
 
 def test_new_prints_the_next_steps(

@@ -1,7 +1,8 @@
 """`issue_events`: the audit trail, and the one function that appends to it.
 
-Every write to an issue leaves a row here -- created, status changed, assignee
-changed, comment added -- and every one of them goes through `record_event`.
+Creating an issue, changing its status or its assignee, and adding a comment
+each leave a row here, and every one of them goes through `record_event`. Other
+field changes, labels and archiving leave none.
 One function rather than an `INSERT` in each tool, because the trail is what an
 eval grades an agent's work on: a tool that wrote its own row would eventually
 write a payload shaped differently from the rest, and the grader would have to

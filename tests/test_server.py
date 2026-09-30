@@ -48,6 +48,7 @@ pytest.importorskip(
 from fastapi import WebSocket
 from fastapi.routing import APIWebSocketRoute
 from openenv import GenericEnvClient
+from openenv.core.env_server.http_server import HTTPEnvServer
 from openenv.core.env_server.mcp_types import (
     CallToolAction,
     CallToolObservation,
@@ -1362,14 +1363,46 @@ def test_the_announced_console_address_is_one_a_browser_can_open(host: str, expe
 # --- the idle reaper -------------------------------------------------------
 
 
-def test_an_idle_session_is_reaped_and_its_instance_destroyed(world: World, tmp_path: Path) -> None:
-    """`session_timeout` was pinned as a number passed through, never as behaviour.
+@pytest.mark.parametrize(
+    ("options", "reaps"),
+    [({}, False), ({"session_timeout": 60.0}, True)],
+    ids=["default", "opt-in"],
+)
+def test_the_reaper_runs_only_when_the_operator_asks_for_one(
+    world: World, monkeypatch: pytest.MonkeyPatch, options: dict[str, Any], reaps: bool
+) -> None:
+    """No `session_timeout` means no reaper task in the running server.
 
-    It is the only thing standing between a long-lived server and a disk full of
-    abandoned instances, and OpenEnv's cleanup swallows every exception
-    `env.close()` raises -- so an `Instance.destroy()` that started failing would
-    leak a fixture copy and an APSW connection per session with nothing red
-    anywhere. This test asks the filesystem instead.
+    The reaper would destroy the instance of a client that is still connected
+    and only reading `state`, because OpenEnv counts only `reset` and `step` as
+    activity, so it is off unless asked for. What is read is the task OpenEnv
+    starts at lifespan startup, not the number passed to it; the opt-in case
+    proves the probe sees a reaper when there is one.
+    """
+    servers: list[HTTPEnvServer] = []
+    start = HTTPEnvServer._start_reaper
+
+    def recording(server: HTTPEnvServer) -> None:
+        servers.append(server)
+        start(server)
+
+    monkeypatch.setattr(HTTPEnvServer, "_start_reaper", recording)
+    with serving(world, **options) as url, SeahavenClient(base_url=url) as env:
+        env.reset()
+        (server,) = servers
+        assert (server._reaper_task is not None) is reaps
+
+
+def test_an_opted_in_reaper_destroys_a_connected_idle_sessions_instance(
+    world: World, tmp_path: Path
+) -> None:
+    """`--session-timeout N` reaps, and the instance really goes.
+
+    OpenEnv's cleanup swallows every exception `env.close()` raises -- so an
+    `Instance.destroy()` that started failing would leak a fixture copy and an
+    APSW connection per reaped session with nothing red anywhere. This test asks
+    the filesystem instead. The client stays connected throughout: the reaper
+    does not wait for a disconnect, only for `reset` and `step` to stop.
 
     The reaper wakes every `max(timeout / 4, 5.0)` seconds, so the deadline is
     generous and the assertion is only that the directory goes.

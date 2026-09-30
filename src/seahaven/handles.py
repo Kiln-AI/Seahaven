@@ -199,7 +199,7 @@ class WorldHandle:
                     raise WorldBug(_STALE)
                 given = arguments_of(registered, tool, args, arguments)
                 call = Call(name, given, registered, node=owner.path)
-                result = owner.internal_chain(frame.ctx(owner.key, call), call)
+                result = owner.own_chain(frame.ctx(owner.key, call), call)
         except BaseException as error:
             instance._log_failure(name, started, error, owner.path, internal=True)
             raise

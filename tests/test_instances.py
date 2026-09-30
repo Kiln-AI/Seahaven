@@ -233,6 +233,19 @@ def test_an_instance_from_a_fixture_is_a_writable_copy_at_the_fixtures_clock(wor
     assert (world.fixtures_dir / fixture / STATE_NAME).stat().st_mode & 0o222 == 0
 
 
+def test_every_node_of_a_fixture_instance_opens_without_durability(tmp_path: Path) -> None:
+    """A fixture's copies are the instance's throwaway files: WAL, and never fsynced."""
+    host = composable_world("host", fixtures_dir=tmp_path / "fixtures", work_dir=tmp_path / "work")
+    host.add_world(composable_world("child"), name="child")
+    with host.instance(None, now=INSTANT_ISO, clock_mode="fixed") as origin:
+        origin.freeze("start", "Empty.")
+
+    with host.instance("start") as live, live.bulk() as ctx:
+        for db in (ctx.db, ctx.worlds.child.db):
+            assert db.conn.pragma("synchronous") == 0
+            assert db.conn.pragma("journal_mode") == "wal"
+
+
 @pytest.mark.parametrize("bad", ["", ".", "..", "sub/start", "/start", ".hidden"])
 def test_a_fixture_id_that_is_not_a_directory_name_is_refused(world: World, bad: str) -> None:
     """The id rule is applied before the filesystem is touched: an id cannot become a path."""
@@ -1084,6 +1097,228 @@ def test_the_gate_is_released_after_a_call_that_raised(tmp_path: Path) -> None:
                 instance.call("crash")
 
         assert instance.call("now")["python"] == instance.clock.iso()
+
+
+class TimedGate(instances._Gate):
+    """A gate that fails the test rather than hang it when a thread queues too long.
+
+    A thread queued for the gate while it holds an instance lock waits for ever,
+    and so does the `destroy()` at the end of the test's `with world.instance()`.
+    """
+
+    def __init__(self, size: int = 1) -> None:
+        super().__init__(size)
+        self.taken = 0
+        self.contender_has_slot = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        if not super().acquire(timeout=WAIT):
+            raise AssertionError("queued for the gate while holding an instance lock")
+        self.taken += 1
+        if threading.current_thread().name == "contender":
+            self.contender_has_slot.set()
+        return True
+
+
+def timed_gate(monkeypatch: pytest.MonkeyPatch, size: int = 1) -> TimedGate:
+    installed = TimedGate(size)
+    monkeypatch.setattr(instances, "_gate", installed)
+    return installed
+
+
+def on_a_fresh_thread(body: Callable[[], Any], name: str | None = None) -> Caller:
+    """Start `body` on another thread, whose failure is the test's failure."""
+    caller = Caller(body)
+    if name is not None:
+        caller.name = name
+    caller.start()
+    return caller
+
+
+def note_ids(instance: Instance) -> list[str]:
+    return [row["id"] for row in instance.inspect().rows("SELECT id FROM notes ORDER BY id")]
+
+
+def register_holder(world: World) -> tuple[threading.Event, threading.Event]:
+    """A `hold` tool that keeps its gate slot until the test lets go."""
+    inside = threading.Event()
+    release = threading.Event()
+
+    @world.tool
+    def hold(ctx: Ctx) -> dict[str, bool]:
+        """Hold a slot of the gate until the test lets go."""
+        inside.set()
+        assert release.wait(WAIT)
+        return {"done": True}
+
+    return inside, release
+
+
+@pytest.mark.parametrize("target", ["same", "other"])
+def test_a_call_inside_bulk_does_not_queue_behind_a_caller_waiting_for_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    world = build_world(tmp_path)
+    gate = timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None) as y:
+        written = x if target == "same" else y
+
+        def author() -> None:
+            with x.bulk():
+                contender = on_a_fresh_thread(lambda: add(x, "contender"), name="contender")
+                # The contender holds the only slot and waits for the lock this block holds.
+                assert gate.contender_has_slot.wait(WAIT)
+                add(written, "author")
+            contender.finish()
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert "contender" in note_ids(x)
+        assert "author" in note_ids(written)
+
+
+def test_a_tool_calling_another_instance_does_not_wait_for_its_own_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    captured: dict[str, Instance] = {}
+
+    @world.tool
+    def relay(ctx: Ctx) -> dict[str, bool]:
+        """Write to another instance from inside a call."""
+        add(captured["y"], "relayed")
+        return {"done": True}
+
+    timed_gate(monkeypatch)
+    with world.instance(None) as x, world.instance(None) as y:
+        captured["y"] = y
+        result: dict[str, Any] = {}
+        on_a_fresh_thread(lambda: result.update(x.call("relay"))).finish(2 * WAIT)
+
+        assert result == {"done": True}
+        assert note_ids(y) == ["relayed"]
+
+
+def test_nested_bulk_blocks_take_no_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = build_world(tmp_path)
+    gate = timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None) as y:
+
+        def author() -> None:
+            with x.bulk():
+                add(x, "outer")
+                with x.bulk():
+                    add(x, "inner")
+                with y.bulk():
+                    add(y, "other")
+            assert gate.taken == 0
+            add(x, "after")
+            assert gate.taken == 1
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert note_ids(x) == ["after", "inner", "outer"]
+        assert note_ids(y) == ["other"]
+
+
+def test_bulk_that_raised_leaves_the_thread_gated_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    gate = timed_gate(monkeypatch)
+
+    with world.instance(None) as x:
+
+        def author() -> None:
+            with pytest.raises(Boom), x.bulk():
+                add(x, "rolled back")
+                raise Boom("the block failed")
+            assert gate.taken == 0
+            add(x, "after")
+            assert gate.taken == 1
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert note_ids(x) == ["after"]
+
+
+def test_bulk_does_not_wait_for_a_full_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    inside, release = register_holder(world)
+    timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None) as y:
+        holder = on_a_fresh_thread(lambda: x.call("hold"))
+        assert inside.wait(WAIT)
+
+        def author() -> None:
+            with y.bulk() as ctx:
+                ctx.db.execute("INSERT INTO notes VALUES ('bulk', 'a body', 0)")
+
+        started = time.perf_counter()
+        on_a_fresh_thread(author).finish()
+        assert time.perf_counter() - started < WAIT / 5
+
+        release.set()
+        holder.finish()
+        assert note_ids(y) == ["bulk"]
+
+
+def test_a_resize_inside_bulk_does_not_make_its_calls_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    inside, release = register_holder(world)
+    set_concurrency(0)
+
+    with world.instance(None) as x, world.instance(None) as y:
+
+        def author() -> None:
+            with x.bulk():
+                # A gate put in place after the block opened, and full.
+                timed_gate(monkeypatch)
+                holder = on_a_fresh_thread(lambda: y.call("hold"))
+                assert inside.wait(WAIT)
+                add(x, "author")
+            release.set()
+            holder.finish()
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert note_ids(x) == ["author"]
+
+
+def test_a_control_tool_calling_its_instance_passes_a_full_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    inside, release = register_holder(world)
+
+    def stamp(live: Instance, ctx: Ctx) -> dict[str, bool]:
+        """Write through the instance's own tools."""
+        add(live, "stamped")
+        return {"stamped": True}
+
+    world.tool(control_tool(stamp))
+    timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None, control_tools=True) as y:
+        holder = on_a_fresh_thread(lambda: x.call("hold"))
+        assert inside.wait(WAIT)
+
+        result: dict[str, Any] = {}
+        started = time.perf_counter()
+        on_a_fresh_thread(lambda: result.update(y.call("stamp"))).finish(2 * WAIT)
+        assert time.perf_counter() - started < WAIT / 5
+
+        release.set()
+        holder.finish()
+        assert result == {"stamped": True}
+        assert note_ids(y) == ["stamped"]
 
 
 def test_a_negative_concurrency_is_refused() -> None:

@@ -4,8 +4,8 @@ A real tracker's API knows who the token belongs to, and every write it makes is
 attributed to that person without the caller saying so. This world spells that as
 a startup hook: `world.instance("agency", startup={"user_id": ...})` -- or
 `reset(startup={"user_id": ...})` over OpenEnv -- names the person the session is
-driving the tracker as, and every tool that writes falls back to them when the
-call passed no `actor_id`.
+driving the tracker as, and each issue write that takes an `actor_id` falls back
+to them when the call passed none.
 
 `actor_id` on the call is still there, and wins, because an eval that wants two
 people writing in one episode should not need two instances to do it.
@@ -14,9 +14,9 @@ With no `user_id` the hook picks the workspace's first admin, which is what make
 "the viewer is the admin" true of the fixtures that have one
 (`components/projecttracker.md` §4) without an eval having to look a generated id
 up first. A workspace with no admin -- `empty`, or a fresh blank instance -- has no
-viewer, and a write there must name its `actor_id` or be refused. That refusal is
-`InvalidInput("actor_id", "no actor")`, raised in `tools/_rows.py` where the
-fallback is read.
+viewer, and one of those writes there must name its `actor_id` or be refused. That
+refusal is `InvalidInput("actor_id", "no actor")`, raised in `tools/_rows.py` where
+the fallback is read.
 """
 
 import seahaven

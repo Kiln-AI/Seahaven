@@ -263,8 +263,11 @@ def open_instance(path: Path, clock: Clock, seed: bytes) -> Db:
     """Open the writable connection an instance serves its tool calls from."""
     conn = apsw.Connection(str(path))
     _harden(conn)
+    # An instance directory does not survive a crash: the sweep deletes it. So
+    # its files need no durability, and set before the WAL switch, because at
+    # FULL the conversion of a copied fixture fsyncs on every creation.
+    conn.pragma("synchronous", "OFF")
     conn.pragma("journal_mode", "WAL")
-    conn.pragma("synchronous", "NORMAL")
     # One writer per instance by construction, so waiting on a lock can only
     # mean a bug. Fail loudly instead of hanging. Said rather than left to the
     # default: APSW opens a connection with no busy handler at all, so deleting
@@ -382,6 +385,9 @@ def _build(
         try:
             register_random_functions(builder, seed, BUILD_STREAM)
             builder.pragma("foreign_keys", "ON")
+            # The file is a blank instance's own, deleted by the sweep after a
+            # crash like the rest of its directory, so it needs no fsync either.
+            builder.pragma("synchronous", "OFF")
             with builder:
                 # Iterated, not just executed: APSW runs a multi-statement string
                 # lazily, stopping at the first statement that returns a row, so a

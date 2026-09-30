@@ -11,14 +11,22 @@ or an extension's -- builds its tool with them and hands the result to
 `world.tool(...)`.
 """
 
+import dataclasses
 import inspect
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, time
-from enum import Enum
-from typing import Any, Concatenate, get_args, get_origin
+from typing import (
+    Any,
+    Concatenate,
+    Literal,
+    get_args,
+    get_origin,
+    get_type_hints,
+    is_typeddict,
+)
 
 import pydantic
+import pydantic_core
 from pydantic import ConfigDict, create_model
 
 from seahaven.ctx import Ctx
@@ -29,17 +37,17 @@ __all__ = ["Tool"]
 # Strict, so the tool list is the contract: `"5"` is not an int and `1` is not a
 # bool. A world mimicking a product that coerces relaxes one argument with
 # `Annotated[int, Field(strict=False)]`, which works because strictness lives in
-# the config rather than in the call to `model_validate`.
+# the config: a `strict=` passed to `model_validate` or `model_validate_json`
+# would override every field's own setting.
 _ARGUMENT_CONFIG = ConfigDict(extra="forbid", strict=True)
 
 _POSITIONAL = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 _VARIADIC = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
 
-# Types no argument may be annotated with, anywhere in its annotation. Under
-# strict validation each is unsatisfiable from JSON: pydantic would demand a real
-# `datetime` or a real enum member, which no wire format carries. `datetime` is a
-# `date`, and `Enum` covers `StrEnum` and `IntEnum` too.
-_UNREACHABLE_UNDER_STRICT = (date, time, Enum)
+# The scalars JSON carries. A `Literal` value must be one for JSON to send it: a
+# `StrEnum` or `IntEnum` member is, and equal to its own value, so pydantic
+# accepts that value.
+_JSON_SCALARS = (str, int, float, bool, type(None))
 
 # Defaults Python itself warns about: a shared mutable bound to the function.
 # Refused here for a second reason, that the schema publishes `default` and a
@@ -117,23 +125,27 @@ class Tool[**P = ..., R = Any]:
     def validate(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """The arguments as the function's parameters, or `ArgumentError`.
 
+        Strict either way, in one of two modes chosen for the whole call. A call
+        made of plain JSON values at every depth -- which is all the wire can hand
+        over -- is validated in pydantic's JSON mode, which accepts the JSON form
+        of every type the published schema describes: an array for a `tuple`, a
+        string for a `UUID` or a `datetime`. Strict *Python* mode would demand the
+        real `tuple` or `UUID`, which parsed JSON never holds. A call holding any
+        other Python object is validated in strict Python mode, so a `datetime`
+        handed to a `str` parameter is refused rather than rendered to text.
+
         Every violation is reported, not just the first: an agent that has to
         make one round trip per mistake makes several.
         """
+        given = dict(arguments)
+        text = _json_text(given)
         try:
-            model = self.params.model_validate(dict(arguments))
+            if text is None:
+                model = self.params.model_validate(given)
+            else:
+                model = self.params.model_validate_json(text)
         except pydantic.ValidationError as error:
-            raise ArgumentError(
-                tool=self.name,
-                violations=[
-                    {
-                        "path": ".".join(str(part) for part in violation["loc"]),
-                        "message": violation["msg"],
-                        "type": violation["type"],
-                    }
-                    for violation in error.errors(include_url=False)
-                ],
-            ) from error
+            raise _argument_error(self.name, error) from error
         # By field name, not by alias: the wire carries the alias and the
         # function is called with the name Python can spell.
         return {name: getattr(model, name) for name in type(model).model_fields}
@@ -198,6 +210,55 @@ class Tool[**P = ..., R = Any]:
         return {"name": self.name, "description": self.description, "input_schema": self.schema}
 
 
+def _json_text(arguments: dict[str, Any]) -> bytes | None:
+    """The arguments as JSON text, or `None` when they are not plain JSON.
+
+    Plain JSON can still have no UTF-8 text: `json.loads` keeps a lone surrogate
+    such as `"\\ud800"`, which an HTTP body can carry. Strict Python validation
+    takes a `str` as it is, so that call is validated as Python.
+    """
+    if not _is_json(arguments):
+        return None
+    try:
+        return pydantic_core.to_json(arguments)
+    except pydantic_core.PydanticSerializationError:
+        return None
+
+
+def _is_json(value: Any) -> bool:
+    """Whether a value is plain parsed JSON at every depth.
+
+    By exact type: a `StrEnum` member is a `str` and a `NamedTuple` a `tuple`, and
+    each is a Python object its caller chose over the JSON form.
+    """
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if type(item) is list:
+            pending.extend(item)
+        elif type(item) is dict:
+            if not all(type(key) is str for key in item):
+                return False
+            pending.extend(item.values())
+        elif type(item) not in _JSON_SCALARS:
+            return False
+    return True
+
+
+def _argument_error(tool_name: str, error: pydantic.ValidationError) -> ArgumentError:
+    return ArgumentError(
+        tool=tool_name,
+        violations=[
+            {
+                "path": ".".join(str(part) for part in violation["loc"]),
+                "message": violation["msg"],
+                "type": violation["type"],
+            }
+            for violation in error.errors(include_url=False)
+        ],
+    )
+
+
 def _refuse_unsupported_callable(tool_name: str, fn: Callable[..., Any]) -> None:
     if (
         inspect.iscoroutinefunction(fn)
@@ -257,7 +318,7 @@ def _field(tool_name: str, parameter: inspect.Parameter) -> tuple[Any, Any]:
         )
     if parameter.annotation is inspect.Parameter.empty:
         raise WorldBug(f"tool {tool_name!r}: argument {parameter.name!r} needs a type annotation")
-    _refuse_unreachable_annotation(tool_name, parameter)
+    _refuse_unfaithful_annotation(tool_name, parameter)
     if isinstance(parameter.default, _MUTABLE_DEFAULTS):
         raise WorldBug(
             f"tool {tool_name!r}: argument {parameter.name!r} has a mutable default; use `None` "
@@ -267,41 +328,85 @@ def _field(tool_name: str, parameter: inspect.Parameter) -> tuple[Any, Any]:
     return (parameter.annotation, default)
 
 
-def _refuse_unreachable_annotation(tool_name: str, parameter: inspect.Parameter) -> None:
-    for atom in _atoms(parameter.annotation):
-        # A value, not a class: `Literal[Colour.RED]` carries the member itself,
-        # and strict validation would then accept only that member object, which
-        # no wire format carries -- while the schema says `"const": "red"`.
-        if isinstance(atom, _UNREACHABLE_UNDER_STRICT):
-            raise _unreachable(tool_name, parameter, type(atom).__name__)
-        # Most atoms are not classes either: a `Literal`'s strings, a `FieldInfo`
-        # out of `Annotated`, a parameterised generic. `issubclass` refuses those
-        # rather than answering, so they are skipped before it is asked.
+def _refuse_unfaithful_annotation(tool_name: str, parameter: inspect.Parameter) -> None:
+    """Refuse an annotation whose validation would not match the schema it publishes.
+
+    Two shapes do, anywhere in the annotation or in the fields of a type it
+    reaches. A `Literal` of a value JSON cannot spell -- a plain `Enum` member, or
+    `bytes` -- publishes `"const": "red"` and then accepts only the member, which
+    is less than the schema says.
+
+    And a type with a pydantic config of its own, which can accept more: a
+    `BaseModel`, a pydantic dataclass, or anything given `@with_config`. The
+    argument model's strict config reaches a nested stdlib dataclass or
+    `TypedDict`, but such a type validates under its own config, which is lax
+    unless it says otherwise, so `"5"` would be an `int` one level down. It must
+    say `strict=` itself, `True` to follow the tool list or `False` to relax
+    deliberately.
+    """
+    for atom in _reachable(parameter.annotation):
+        if get_origin(atom) is Literal:
+            for value in get_args(atom):
+                if not isinstance(value, _JSON_SCALARS):
+                    raise WorldBug(
+                        f"tool {tool_name!r}: argument {parameter.name!r} is a `Literal` of "
+                        f"{value!r}, which JSON cannot send; use a `Literal` of strings or "
+                        f"numbers, or the `Enum` class itself"
+                    )
         if not isinstance(atom, type):
             continue
-        if issubclass(atom, _UNREACHABLE_UNDER_STRICT):
-            raise _unreachable(tool_name, parameter, atom.__name__)
+        config = _own_config(atom)
+        if config is not None and "strict" not in config:
+            raise WorldBug(
+                f"tool {tool_name!r}: argument {parameter.name!r} uses {atom.__name__}, which "
+                f"has a pydantic config of its own that does not set `strict`; add "
+                f"`strict=True` to it, or `strict=False` to accept lax input on purpose"
+            )
 
 
-def _unreachable(tool_name: str, parameter: inspect.Parameter, annotated: str) -> WorldBug:
-    return WorldBug(
-        f"tool {tool_name!r}: parameter {parameter.name!r} is annotated "
-        f"{annotated}; use `str` with a pattern or `Literal`"
-    )
+def _own_config(atom: type) -> Mapping[str, Any] | None:
+    if issubclass(atom, pydantic.BaseModel):
+        return atom.model_config
+    return getattr(atom, "__pydantic_config__", None)
+
+
+def _reachable(annotation: Any) -> Iterator[Any]:
+    """Every atom of an annotation, and of each model, dataclass and `TypedDict` it reaches."""
+    seen: set[int] = set()
+    # `seen` holds ids, and an id is unique only while its object is alive.
+    walked: list[Any] = []
+    pending = [annotation]
+    while pending:
+        walked.append(pending.pop())
+        for atom in _atoms(walked[-1], seen):
+            yield atom
+            if isinstance(atom, type):
+                pending.extend(_field_annotations(atom))
+
+
+def _field_annotations(atom: type) -> list[Any]:
+    if issubclass(atom, pydantic.BaseModel):
+        return [field.annotation for field in atom.model_fields.values()]
+    if not (dataclasses.is_dataclass(atom) or is_typeddict(atom)):
+        return []
+    try:
+        return list(get_type_hints(atom).values())
+    except Exception:
+        # pydantic resolved these names from the frame the type was defined in,
+        # which `get_type_hints` cannot see; the type is not looked into.
+        return []
 
 
 def _atoms(annotation: Any, seen: set[int] | None = None) -> Iterator[Any]:
     """The annotation and everything inside it.
 
-    `Annotated[datetime, Field(...)]`, `datetime | None` and `list[datetime]` are
-    all as unusable as a bare `datetime`, so the refusal looks through unions,
-    metadata and containers rather than only at the whole annotation. A name for
-    a type is looked through too: `type Stamp = datetime` (PEP 695) and
-    `NewType("Stamp", datetime)` both carry the annotation they stand for, and
-    both publish a schema a strict `datetime` will then refuse.
+    Looks through unions, `Annotated` metadata and containers, so `Point | None`
+    and `list[Point]` reach `Point`. A name for a type is looked through too:
+    `type Where = Point` (PEP 695) and `NewType("Where", Point)` both carry the
+    annotation they stand for.
 
-    `seen` guards the one shape that could otherwise not end: an alias defined in
-    terms of itself.
+    `seen` guards the shapes that could otherwise not end: an alias, or a model
+    walked by `_reachable`, defined in terms of itself.
     """
     seen = set() if seen is None else seen
     if id(annotation) in seen:

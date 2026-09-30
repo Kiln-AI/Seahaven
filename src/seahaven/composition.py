@@ -4,8 +4,9 @@ A world may add other worlds, and what a host declares with `add_world` is a
 *graph* -- the same world reached by two routes is one store, a world added under
 a named scope is another. This module turns that graph into the one thing the
 rest of the framework reads: a `Composition`, the sealed tree of `Node`s with
-their canonical paths, their files, their bound startup keywords, the chains
-their calls descend, and the flat, insertion-ordered tool list an agent sees.
+their canonical paths, their files and their bound startup keywords, and the
+flat, insertion-ordered tool list an agent sees, with the chain each tool on the
+surface descends.
 
 A leaf world is a composition of exactly one node, with path `main`, file
 `state.sqlite` and its own tools in registration order, so nothing downstream
@@ -54,6 +55,7 @@ __all__ = [
     "bump",
     "canonical_tree",
     "epoch",
+    "hosts_first",
     "resolve",
 ]
 
@@ -163,12 +165,11 @@ class Node:
     file_name: str
     schema_name: str
     bound_startup: Mapping[str, Any]
-    # What an agent-initiated call to a tool this node owns descends -- every
-    # node's middlewares along the canonical route, outermost first -- and what a
-    # call from host code through a handle descends, which is this node's own
-    # middlewares and nothing above them. Both end in `invoke` on this node.
-    agent_chain: Handler
-    internal_chain: Handler
+    # This node's own middlewares and nothing above them, then `invoke` on this
+    # node: what a call from host code through a handle descends, and what an
+    # agent call to one of the root's own tools descends. An agent call to any
+    # other tool descends its entry's chain (`Contributed.chain`).
+    own_chain: Handler
 
     def __repr__(self) -> str:
         return f"<Node {self.path} of {self.world.name} scope={self.scope!r}>"
@@ -211,11 +212,19 @@ class NodeReport:
 
 @dataclass(frozen=True, eq=False)
 class Contributed:
-    """One entry of the composite tool list: the name the agent sees, and who owns it."""
+    """One entry of the composite tool list: the name the agent sees, who owns it, and its chain.
+
+    `chain` is what an agent call to this entry descends: the middlewares of every
+    node on the route that contributed it, outermost first, then `invoke` on
+    `node`. It belongs to the entry rather than to the node, because one node
+    reached by two routes contributes an entry through each, and each entry runs
+    the middleware of its own route.
+    """
 
     name: str
     tool: Tool
     node: Node
+    chain: Handler
 
 
 @dataclass(frozen=True, eq=False)
@@ -274,10 +283,10 @@ def resolve(root: World) -> Composition:
     in that table's order, with a message naming the path and the `add_world`
     behind it.
     """
-    order, children, paths, depths, parents = _walk(root)
+    order, children, paths, depths = _walk(root)
     edges, aliases = _edges(children, paths)
     bound, conflicts = _bound_startup(children, paths)
-    nodes = _nodes(order, paths, depths, parents, children, aliases, bound)
+    nodes = _nodes(order, paths, depths, children, aliases, bound)
     surface = _contribute(order[0], nodes, children)
 
     _raise_unknown_list_names(surface.unknown)
@@ -286,7 +295,7 @@ def resolve(root: World) -> Composition:
     _raise_conflicts(conflicts)
     _raise_over_the_attach_limit(nodes)
 
-    tools = {name: candidate.entry for name, candidate in surface.candidates.items()}
+    tools = _entries(nodes[order[0]], surface.candidates)
     return Composition(
         root=nodes[order[0]],
         nodes=tuple(nodes[key] for key in order),
@@ -302,12 +311,8 @@ def resolve(root: World) -> Composition:
 type _Children = Mapping[NodeKey, tuple[tuple[str, AddedWorld, NodeKey], ...]]
 
 
-def _walk(
-    root: World,
-) -> tuple[
-    list[NodeKey], _Children, dict[NodeKey, str], dict[NodeKey, int], dict[NodeKey, NodeKey]
-]:
-    """One breadth-first walk: the nodes in order, their edges, paths, depths and parents.
+def _walk(root: World) -> tuple[list[NodeKey], _Children, dict[NodeKey, str], dict[NodeKey, int]]:
+    """One breadth-first walk: the nodes in order, their edges, paths and depths.
 
     A node is `(world object, scope)`. An edge with `store=None` passes the
     adder's scope through and an edge with `store="eu"` opens that scope for the
@@ -331,9 +336,6 @@ def _walk(
     children: dict[NodeKey, tuple[tuple[str, AddedWorld, NodeKey], ...]] = {}
     paths = {root_key: ROOT_PATH}
     depths = {root_key: 0}
-    # The node each one was first reached from: its parent on the canonical
-    # route, and what the chain of a node is read off.
-    parents: dict[NodeKey, NodeKey] = {}
     pending: deque[NodeKey] = deque([root_key])
     while pending:
         key = pending.popleft()
@@ -347,11 +349,10 @@ def _walk(
             if child not in paths:
                 paths[child] = _route(paths[key], added.name)
                 depths[child] = depths[key] + 1
-                parents[child] = key
                 order.append(child)
                 pending.append(child)
         children[key] = tuple(edges)
-    return order, children, paths, depths, parents
+    return order, children, paths, depths
 
 
 def canonical_tree(root: Node) -> Iterator[Node]:
@@ -359,13 +360,37 @@ def canonical_tree(root: Node) -> Iterator[Node]:
 
     The tree, not the graph: an edge whose route is an alias is not descended,
     because the node it reaches is visited under the parent its path names. So a
-    node shared by two hosts is walked once, which is what "each node's startup
-    hooks run once, however many routes reach it" asks for.
+    node shared by two hosts is walked once.
     """
     yield root
     for name, child in root.added.items():
         if child.path == _route(root.path, name):
             yield from canonical_tree(child)
+
+
+def hosts_first(composition: Composition) -> list[Node]:
+    """Every node once, each after every world that adds it: the order startup hooks run in.
+
+    A depth-first walk from the root in `add_world` order that reaches a node
+    only from the last of its distinct hosts to be walked. With nothing shared,
+    every node has one host, and this is `canonical_tree`'s order exactly.
+    """
+    waiting = dict.fromkeys(composition.nodes, 0)
+    for node in composition.nodes:
+        for child in dict.fromkeys(node.added.values()):
+            waiting[child] += 1
+    order: list[Node] = []
+
+    def visit(node: Node) -> None:
+        order.append(node)
+        for child in dict.fromkeys(node.added.values()):
+            waiting[child] -= 1
+            if waiting[child] == 0:
+                visit(child)
+
+    visit(composition.root)
+    assert len(order) == len(composition.nodes), "a node no walk from the root reaches"
+    return order
 
 
 def _route(parent_path: str, name: str) -> str:
@@ -431,7 +456,6 @@ def _nodes(
     order: Sequence[NodeKey],
     paths: Mapping[NodeKey, str],
     depths: Mapping[NodeKey, int],
-    parents: Mapping[NodeKey, NodeKey],
     children: _Children,
     aliases: Mapping[NodeKey, tuple[str, ...]],
     bound: Mapping[NodeKey, Mapping[str, Any]],
@@ -450,8 +474,7 @@ def _nodes(
             file_name=_file_name(paths[key]),
             schema_name=_schema_name(paths[key]),
             bound_startup=MappingProxyType(dict(bound[key])),
-            agent_chain=build_route_chain(_route_layers(key, parents), key),
-            internal_chain=build_route_chain(_own_layers(key), key),
+            own_chain=build_route_chain(_route_layers((key,)), key),
         )
         for key in order
     }
@@ -508,34 +531,35 @@ def _owner_layer(key: NodeKey, innermost: Handler) -> Handler:
     return call_innermost
 
 
-def _route_layers(
-    key: NodeKey, parents: Mapping[NodeKey, NodeKey]
-) -> list[tuple[NodeKey, Middleware]]:
-    """Every middleware on the canonical route to a node, outermost first.
+def _route_layers(route: Sequence[NodeKey]) -> list[tuple[NodeKey, Middleware]]:
+    """Every middleware of every node on a route, outermost first.
 
     The whole route rather than the host's chain and the owner's: applied
     recursively through the nesting a composite is, that is what "the host's chain
     outermost, then the owning world's" says, and it is the reading under which an
     intermediate composite's error handler still shapes the errors of the tools it
-    contributes.
+    contributes. A route of one node is that node's own middlewares, which is all
+    a call from host code runs: the host's are already wrapped around the host tool
+    making the call.
     """
-    route = [key]
-    while route[-1] in parents:
-        route.append(parents[route[-1]])
-    return [
-        (node_key, middleware)
-        for node_key in reversed(route)
-        for middleware in node_key[0].middlewares
-    ]
+    return [(key, middleware) for key in route for middleware in key[0].middlewares]
 
 
-def _own_layers(key: NodeKey) -> list[tuple[NodeKey, Middleware]]:
-    """A node's own middlewares, for a call host code makes into it.
+def _entries(root: Node, candidates: Mapping[str, _Candidate]) -> dict[str, Contributed]:
+    """The served tool list, each entry with the chain of the route that contributed it.
 
-    Only the owning world's chain runs: the host's is already wrapped around the
-    host tool making the call.
+    One chain per distinct route, and only for what reached the root. Seeded with
+    the root's own chain, so every tool of the root runs `root.own_chain`, which is
+    also `World.chain`.
     """
-    return [(key, middleware) for middleware in key[0].middlewares]
+    chains: dict[tuple[NodeKey, ...], Handler] = {(root.key,): root.own_chain}
+    tools: dict[str, Contributed] = {}
+    for name, candidate in candidates.items():
+        route = candidate.hosts
+        if route not in chains:
+            chains[route] = build_route_chain(_route_layers(route), route[-1])
+        tools[name] = Contributed(name, candidate.tool, candidate.node, chains[route])
+    return tools
 
 
 def _schema_name(path: str) -> str:
@@ -566,8 +590,12 @@ class _UnknownListName:
 class _Candidate:
     """One contributed tool on its way up the tree, and where it was declared.
 
-    The route -- the `/`-joined `add_world` names from the node whose list this
-    is -- and not the owning node's path, is what a diagnostic has to name: two
+    `hosts` is the node keys on the route that contributed it, from the node whose
+    list this is down to the owner (`hosts[-1] == node.key`): what its chain is
+    built from once it reaches the root. `route` spells the same route as the
+    `/`-joined `add_world` names, for diagnostics.
+
+    The route, and not the owning node's path, is what a diagnostic has to name: two
     views of one node share a path, and the author's fix is on one of the two
     `add_world` lines. `prefixes` is every `tool_prefix` applied on that route,
     outermost first, each paired with the route of the `add_world` that carries
@@ -578,7 +606,10 @@ class _Candidate:
     being reported at once, because the pair may yet be filtered out above.
     """
 
-    entry: Contributed
+    name: str
+    tool: Tool
+    node: Node
+    hosts: tuple[NodeKey, ...]
     route: str
     prefixes: tuple[tuple[str, str], ...]
     shadowed: str | None
@@ -638,19 +669,19 @@ def _contribute(root_key: NodeKey, nodes: Mapping[NodeKey, Node], children: _Chi
             candidates: dict[str, _Candidate] = {}
             for tool in node.world.tools.values():
                 if not tool.control:
-                    _fold(candidates, _Candidate(Contributed(tool.name, tool, node), "", (), None))
+                    _fold(candidates, _Candidate(tool.name, tool, node, (key,), "", (), None))
             for _name, added, child in children[key]:
                 # A new candidate per edge, so the route and the prefixes below are
                 # this edge's own even when the child's list came out of the memo.
                 for inner in _filtered(added, contribution(child), unknown):
-                    _fold(candidates, _through(added, inner))
+                    _fold(candidates, _through(key, added, inner))
             memo[key] = candidates
         return memo[key]
 
     return _Surface(candidates=contribution(root_key), unknown=unknown)
 
 
-def _through(added: AddedWorld, inner: _Candidate) -> _Candidate:
+def _through(host: NodeKey, added: AddedWorld, inner: _Candidate) -> _Candidate:
     """One candidate as its host contributes it: renamed, and one route deeper."""
     prefix = added.tool_prefix
 
@@ -659,9 +690,10 @@ def _through(added: AddedWorld, inner: _Candidate) -> _Candidate:
 
     carried = tuple((applied, outward(where)) for applied, where in inner.prefixes)
     return _Candidate(
-        entry=Contributed(
-            name=_prefixed(prefix, inner.entry.name), tool=inner.entry.tool, node=inner.entry.node
-        ),
+        name=_prefixed(prefix, inner.name),
+        tool=inner.tool,
+        node=inner.node,
+        hosts=(host, *inner.hosts),
         route=outward(inner.route),
         prefixes=carried if prefix is None else ((prefix, added.name), *carried),
         shadowed=None if inner.shadowed is None else outward(inner.shadowed),
@@ -670,14 +702,14 @@ def _through(added: AddedWorld, inner: _Candidate) -> _Candidate:
 
 def _fold(candidates: dict[str, _Candidate], candidate: _Candidate) -> None:
     """Add a candidate, or record it as the second declaration of a name already there."""
-    standing = candidates.get(candidate.entry.name)
+    standing = candidates.get(candidate.name)
     if standing is None:
-        candidates[candidate.entry.name] = candidate
+        candidates[candidate.name] = candidate
         return
     if standing.shadowed is None:
         # The first repeat is the one reported, as the first of anything else the
         # seal finds is: a second is one more line about the same mistake.
-        candidates[candidate.entry.name] = replace(standing, shadowed=candidate.declared_at)
+        candidates[candidate.name] = replace(standing, shadowed=candidate.declared_at)
 
 
 def _filtered(

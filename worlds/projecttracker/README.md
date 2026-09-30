@@ -4,8 +4,8 @@ A Seahaven world: a fictional issue tracker for a fictional company, and the ref
 framework is developed against. Nothing here mimics a real product's names, schema or error text.
 
 Users belong to teams, teams own projects, projects hold issues, issues carry labels and comments,
-and every write to an issue appends to an audit trail. Keys are product-shaped (`ENG-41`), lists are
-cursor-paginated, and search is SQLite's FTS5.
+and an audit trail records who created each issue, changed its status or assignee, or commented on
+it. Keys are product-shaped (`ENG-41`), lists are cursor-paginated, and search is SQLite's FTS5.
 
 ## What it has
 
@@ -71,8 +71,9 @@ Tests: `uv run pytest worlds/projecttracker` from the repository root, or `uv ru
   (`2026-06-01T09:00:00.000Z`), written from `ctx.clock.iso()` and never from the wall clock.
 - **Issue keys** are `TEAMKEY-n`, minted from a counter on the team: `ENG-41` is the forty-first
   issue team `ENG` ever had, in whichever of its projects.
-- **A closed issue has no assignee.** Moving an issue to `done` or `canceled` drops its assignee,
-  and assigning a closed issue is refused.
+- **Closing an issue drops its assignee.** Moving an issue to `done` or `canceled` drops its
+  assignee, and `assign_issue` refuses a closed issue. `update_issue` with an `assignee_id` and no
+  `status` does not check the current status, so it can assign a closed issue.
 - **An archived issue keeps its fields and leaves `list_issues`** — no tool will change one again,
   though `get_issue` and `search_issues` still find it. It can still be commented on: archiving
   freezes the issue, not the conversation about it.

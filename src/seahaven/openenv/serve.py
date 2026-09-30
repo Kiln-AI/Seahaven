@@ -26,9 +26,10 @@ from seahaven.world import World
 
 __all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "console_url", "serve"]
 
-# A container serves on the network it was given, not on loopback; an
-# operator who wants loopback says so with `--host 127.0.0.1`.
-DEFAULT_HOST = "0.0.0.0"
+# `/ws` has no authentication, so a server is reachable from the network only
+# when the operator says so with `--host 0.0.0.0`. The scaffolded container
+# passes that itself.
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 LOG_LEVEL = "info"
 

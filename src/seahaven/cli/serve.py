@@ -26,7 +26,7 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         description="Run this world's OpenEnv server: one world, many sessions.",
     )
     add_world_option(parser)
-    parser.add_argument("--host", default=None, help="the address to bind (default 0.0.0.0)")
+    parser.add_argument("--host", default=None, help="the address to bind (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=None, help="the port to bind (default 8000)")
     # Underscores, not hyphens: this is OpenEnv's own option name, and a second
     # spelling of it here would be one more thing to translate.
@@ -46,7 +46,7 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         "--session-timeout",
         type=float,
         default=None,
-        help="seconds of idleness before a session is reaped; 0 disables the reaper (default 3600)",
+        help="seconds of idleness before a session is reaped; 0 turns the reaper off (default off)",
     )
     parser.add_argument(
         "--include-control-tools",
@@ -97,7 +97,7 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _session_timeout(given: float | None, default: float) -> float | None:
+def _session_timeout(given: float | None, default: float | None) -> float | None:
     """The reaper's idleness budget: the default, the value, or off."""
     if given is None:
         return default

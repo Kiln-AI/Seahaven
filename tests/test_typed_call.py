@@ -327,6 +327,33 @@ def test_a_handle_reaches_a_function_of_a_world_in_its_subtree(tmp_path: Path) -
         assert live.call("leaf_read") == ["deep"]
 
 
+def test_a_handle_reaches_a_function_of_a_node_two_routes_beneath_it_reach(
+    tmp_path: Path,
+) -> None:
+    """One store reached twice under one handle is one tool: the reference is not ambiguous."""
+    host, _write, _read = rooted("host", tmp_path)
+    middle, _middle_write, _middle_read = rowed("middle")
+    left, _left_write, _left_read = rowed("left")
+    right, _right_write, _right_read = rowed("right")
+    leaf, leaf_write, leaf_read = rowed("leaf")
+    left.add_world(leaf, name="leaf")
+    right.add_world(leaf, name="leaf", tool_prefix="r_")
+    middle.add_world(left, name="left")
+    middle.add_world(right, name="right")
+    host.add_world(middle, name="middle")
+
+    @host.tool
+    def reach(ctx: Ctx, value: str) -> list[str]:
+        """Reach the shared grandchild's store through the child, by reference."""
+        ctx.worlds.middle.call(leaf_write, value=value)
+        return ctx.worlds.middle.call(leaf_read)
+
+    with host.instance(None) as live:
+        assert live.call("reach", value="once") == ["once"]
+        assert live.call("leaf_read") == ["once"]
+        assert live.call("r_leaf_read") == ["once"]
+
+
 def test_a_handle_refuses_a_function_no_world_beneath_it_owns(tmp_path: Path) -> None:
     host, _write, _read = rooted("host", tmp_path)
     leaf, _leaf_write, _leaf_read = rowed("leaf")

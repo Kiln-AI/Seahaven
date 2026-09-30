@@ -561,22 +561,5 @@ needs from them, and the framework does not guess which.
 That is also why the document costs no database work to produce, however long the episode ran.
 
 Recording is not free at the other end: a session is opened on each node for each call, and what it
-recorded is rendered when the call commits. The Seahaven repository carries a probe that measures
-what that costs, under `tools/bench/`. Run the probe with
-`uv run python -m tools.bench recording --calls 1000 --repeats 9`.
-
-The figures below are approximate. They come from a shared virtual machine, and the probe prints
-the machine it ran on. Read the figures as the size of the cost, not as the cost.
-
-A write-heavy call on ProjectTracker's `agency` fixture costs about 47% more than the single
-long-lived session per node that Seahaven kept before this release. Reading the changeset and
-rendering the records is about 33 of those 47 percentage points, and that work is what an eval's
-own read of the changeset used to do once an episode. A read-only call records nothing, so it adds
-less than a write call does. A read-only call is also the harder figure to pin down: repeats of the
-same command put it between about 5% and 18% above the same long-lived shape, on a call of
-under 0.1 ms.
-
-A composite instance opens a session on every node of the tree for every call. The four-node
-`emporium` world used in the framework's own tests came out at 45% to 67% on its write calls,
-which overlaps the one-node figure above, so the share does not grow in proportion to the node
-count even though the work does.
+recorded is rendered when the call commits. A read-only call records nothing, so it costs less than
+a write.

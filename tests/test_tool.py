@@ -1,25 +1,54 @@
 """Building a tool from a function: what is accepted, what is refused, and what reaches the wire."""
 
+import decimal
+import json
+import threading
+import uuid
 from dataclasses import FrozenInstanceError, dataclass, replace
-from datetime import date, datetime, time
-from enum import Enum
+from datetime import UTC, date, datetime, time
+from enum import Enum, StrEnum
+from ipaddress import IPv4Address
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, NewType, TypedDict
 
+import pydantic
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, with_config
 
 from seahaven.ctx import Ctx
 from seahaven.errors import ArgumentError, WorldBug
 from seahaven.handles import WorldHandle, Worlds
 from seahaven.tool import Tool, _blame, _build_schema
+from tests.conftest import build_world
 
 if TYPE_CHECKING:  # deliberately not importable at runtime: see the refusal below
     from decimal import Decimal
 
 
 class Point(BaseModel):
+    model_config = ConfigDict(strict=True)
+
     x: int
     y: int
+
+
+class Lax(BaseModel):
+    n: int
+
+
+Loose = NewType("Loose", Lax)
+
+
+class Relaxed(BaseModel):
+    model_config = ConfigDict(strict=False)
+
+    n: int
+
+
+@dataclass
+class Span:
+    start: int
+    end: int
 
 
 class Window(TypedDict):
@@ -29,6 +58,50 @@ class Window(TypedDict):
 
 class Colour(Enum):
     RED = "red"
+
+
+class Shade(StrEnum):
+    DARK = "dark"
+
+
+class Palette(TypedDict):
+    colour: Literal[Colour.RED]
+
+
+class Booking(TypedDict):
+    room: str
+    at: datetime
+
+
+@dataclass
+class Holder:
+    inner: Lax
+
+
+class Holding(TypedDict):
+    inner: Lax
+
+
+@pydantic.dataclasses.dataclass
+class LaxPydanticDataclass:
+    n: int
+
+
+@with_config(ConfigDict(str_strip_whitespace=True))
+class ConfiguredTypedDict(TypedDict):
+    n: int
+
+
+class Wrapper(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    inner: Lax
+
+
+class Branch(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    children: list[Branch]
 
 
 # Two names for a type that carry the type they stand for, and publish its schema.
@@ -104,46 +177,316 @@ def test_annotated_metadata_reaches_the_schema_and_is_enforced() -> None:
         tool.validate({"limit": 99})
 
 
+STAMP = "2026-06-01T09:00:00Z"
+AT = datetime(2026, 6, 1, 9, tzinfo=UTC)
+UID = uuid.UUID(int=5)
+
+# Each annotation, a value as parsed JSON spells it, and what the tool receives.
+JSON_SPELLINGS: list[tuple[Any, Any, Any]] = [
+    (tuple[int, int], [1, 2], (1, 2)),
+    (uuid.UUID, str(UID), UID),
+    (decimal.Decimal, "1.50", decimal.Decimal("1.50")),
+    (decimal.Decimal, 1.5, decimal.Decimal("1.5")),
+    (set[int], [1, 2], {1, 2}),
+    (frozenset[str], ["a"], frozenset({"a"})),
+    (bytes, "abc", b"abc"),
+    (Path, "/srv/data", Path("/srv/data")),
+    (IPv4Address, "10.0.0.1", IPv4Address("10.0.0.1")),
+    (Span, {"start": 1, "end": 2}, Span(1, 2)),
+    (datetime, STAMP, AT),
+    (date, "2026-06-01", date(2026, 6, 1)),
+    (time, "09:00:00", time(9)),
+    (Colour, "red", Colour.RED),
+    (Shade, "dark", Shade.DARK),
+    (Literal[Shade.DARK], "dark", Shade.DARK),
+    (Annotated[datetime, Field()], STAMP, AT),
+    (datetime | None, None, None),
+    (Timestamp, STAMP, AT),
+    (list[Stamp], [STAMP], [AT]),
+    (Booking, {"room": "r1", "at": STAMP}, {"room": "r1", "at": AT}),
+]
+
+
+@pytest.mark.parametrize(("annotation", "sent", "received"), JSON_SPELLINGS)
+def test_an_argument_is_accepted_as_parsed_json_spells_it(
+    annotation: Any, sent: Any, received: Any
+) -> None:
+    """What the wire hands over is parsed JSON, and the published schema describes that."""
+
+    def at(ctx: Ctx, value: annotation) -> dict:
+        """At."""
+        return {}
+
+    tool = build(at)
+
+    assert tool.validate(json.loads(json.dumps({"value": sent}))) == {"value": received}
+
+
+@pytest.mark.parametrize(("annotation", "sent", "received"), JSON_SPELLINGS)
+def test_an_in_process_caller_may_hand_over_the_python_object(
+    annotation: Any, sent: Any, received: Any
+) -> None:
+    def at(ctx: Ctx, value: annotation) -> dict:
+        """At."""
+        return {}
+
+    assert build(at).validate({"value": received}) == {"value": received}
+
+
+def test_an_in_process_object_keeps_its_identity() -> None:
+    """A value strict Python validation accepts is handed over as it was, not rebuilt."""
+
+    def place(ctx: Ctx, origin: Point, raw: str | bytes) -> dict:
+        """Place."""
+        return {}
+
+    origin = Point(x=1, y=2)
+
+    validated = build(place).validate({"origin": origin, "raw": b"\x00\xff"})
+
+    assert validated["origin"] is origin
+    assert validated["raw"] == b"\x00\xff"
+
+
+def test_a_call_holding_a_python_object_is_validated_as_python_throughout() -> None:
+    """The mode is the whole call's: beside a real `UUID`, a list is not a `tuple`."""
+
+    def book(ctx: Ctx, id: uuid.UUID, span: tuple[int, int]) -> dict:
+        """Book."""
+        return {}
+
+    tool = build(book)
+
+    assert tool.validate({"id": UID, "span": (1, 2)}) == {"id": UID, "span": (1, 2)}
+    with pytest.raises(ArgumentError) as raised:
+        tool.validate({"id": UID, "span": [1, 2]})
+
+    assert [violation["path"] for violation in raised.value.violations] == ["span"]
+
+
+@pytest.mark.parametrize(
+    ("annotation", "sent"),
+    [
+        (str, AT),
+        (str, UID),
+        (str, decimal.Decimal("1.5")),
+        (str, b"abc"),
+        (str, Colour.RED),
+        (dict[str, int], Point(x=1, y=2)),
+        (list[int], (1, 2)),
+    ],
+)
+def test_a_python_object_is_not_rendered_to_fit_another_annotation(
+    annotation: Any, sent: Any
+) -> None:
+    """Its JSON form would fit, and strict Python validation refuses it all the same."""
+
+    def at(ctx: Ctx, value: annotation) -> dict:
+        """At."""
+        return {}
+
+    with pytest.raises(ArgumentError):
+        build(at).validate({"value": sent})
+
+
+@pytest.mark.parametrize(
+    ("annotation", "sent", "received"),
+    [
+        (datetime | str, STAMP, AT),
+        (str | datetime, STAMP, STAMP),
+        (uuid.UUID | str, str(UID), UID),
+    ],
+)
+def test_a_union_of_types_one_json_string_fits_takes_the_member_pydantic_picks(
+    annotation: Any, sent: Any, received: Any
+) -> None:
+    """Pinned rather than chosen: pydantic's smart union decides, and order can matter."""
+
+    def at(ctx: Ctx, value: annotation) -> dict:
+        """At."""
+        return {}
+
+    assert build(at).validate({"value": sent}) == {"value": received}
+
+
+@pytest.mark.parametrize(
+    ("annotation", "sent"),
+    [
+        (int, "5"),
+        (bool, "true"),
+        (float, "1.5"),
+        (tuple[int, int], ["1", "2"]),
+        (uuid.UUID, 5),
+        (datetime, 1_700_000_000),
+        (datetime, "2026-06-01"),
+        (Colour, "RED"),
+        (set[int], ["1"]),
+        (Span, {"start": "1", "end": 2}),
+        (Booking, {"room": 1, "at": STAMP}),
+        (Point, {"x": "1", "y": 2}),
+    ],
+)
+def test_the_json_spelling_is_held_strictly_at_every_depth(annotation: Any, sent: Any) -> None:
+    def at(ctx: Ctx, value: annotation) -> dict:
+        """At."""
+        return {}
+
+    with pytest.raises(ArgumentError) as raised:
+        build(at).validate({"value": sent})
+
+    assert raised.value.violations[0]["path"].startswith("value")
+
+
+def test_a_value_with_no_json_form_is_refused_as_an_argument() -> None:
+    """Only an in-process caller can send one, and the refusal is Python validation's."""
+
+    def count(ctx: Ctx, n: int) -> dict:
+        """Count."""
+        return {}
+
+    with pytest.raises(ArgumentError) as raised:
+        build(count).validate({"n": threading.Lock()})
+
+    assert [violation["path"] for violation in raised.value.violations] == ["n"]
+
+
 @pytest.mark.parametrize(
     "annotation",
     [
-        datetime,
-        date,
-        time,
-        Colour,
-        Annotated[datetime, Field()],
-        datetime | None,
-        list[date],
-        # The member, not the class: a `Literal` of enum members publishes
-        # `"const": "red"` and then accepts only `Colour.RED`.
-        Literal[Colour.RED],
-        Timestamp,
-        Stamp,
-        list[Stamp],
+        Lax,
+        Lax | None,
+        list[Lax],
+        Annotated[Lax, Field(description="lax")],
+        Loose,
+        Wrapper,
+        Holder,
+        Holding,
+        LaxPydanticDataclass,
+        ConfiguredTypedDict,
     ],
 )
-def test_timestamps_and_enums_are_refused_wherever_they_appear(annotation: Any) -> None:
-    def at(ctx: Ctx, when: annotation) -> dict:
+def test_a_nested_type_with_its_own_lax_config_is_refused(annotation: Any) -> None:
+    """A type with a pydantic config of its own validates under it, not the tool's."""
+
+    def at(ctx: Ctx, value: annotation) -> dict:
         """At."""
         return {}
 
     message = refusal(at)
 
-    assert "when" in message
-    assert "use `str` with a pattern or `Literal`" in message
+    assert message.startswith("tool 'at': argument 'value' uses ")
+    assert "`strict=True`" in message
 
 
-def test_the_refusal_stops_at_the_tools_own_parameters() -> None:
-    """A nested model is the world's own declaration, and pydantic answers for it."""
+@pytest.mark.parametrize(
+    "annotation", [Literal[Colour.RED], Literal[b"red"], list[Literal["a", Colour.RED]], Palette]
+)
+def test_a_literal_json_cannot_send_is_refused(annotation: Any) -> None:
+    """The schema says `"const": "red"`, and validation would accept only the member."""
 
-    class Moment(BaseModel):
-        at: datetime
-
-    def schedule(ctx: Ctx, moment: Moment) -> dict:
-        """Schedule."""
+    def at(ctx: Ctx, value: annotation) -> dict:
+        """At."""
         return {}
 
-    assert "moment" in build(schedule).schema["properties"]
+    message = refusal(at)
+
+    assert message.startswith("tool 'at': argument 'value' is a `Literal` of ")
+    assert "JSON cannot send" in message
+
+
+def test_a_nested_model_that_chose_lax_input_gets_it() -> None:
+    def at(ctx: Ctx, value: Relaxed) -> dict:
+        """At."""
+        return {}
+
+    assert build(at).validate({"value": {"n": "5"}}) == {"value": Relaxed(n=5)}
+
+
+def test_a_model_defined_in_terms_of_itself_still_registers() -> None:
+    def grow(ctx: Ctx, root: Branch) -> dict:
+        """Grow."""
+        return {}
+
+    tool = build(grow)
+
+    assert tool.validate({"root": {"children": [{"children": []}]}}) == {
+        "root": Branch(children=[Branch(children=[])])
+    }
+
+
+def test_json_spellings_reach_a_tool_called_by_name(tmp_path: Path) -> None:
+    """The real entry point: the arguments an agent sends, through `world.instance(...)`."""
+    world = build_world(tmp_path)
+
+    received: list[tuple[Any, ...]] = []
+
+    @world.tool
+    def reserve(
+        ctx: Ctx,
+        span: tuple[int, int],
+        id: uuid.UUID,
+        amount: decimal.Decimal,
+        tags: set[str],
+        where: Span,
+        at: datetime,
+        colour: Colour,
+    ) -> dict[str, bool]:
+        """Reserve."""
+        received.append((span, id, amount, tags, where, at, colour))
+        return {"reserved": True}
+
+    sent = json.loads(
+        json.dumps(
+            {
+                "span": [1, 2],
+                "id": str(UID),
+                "amount": "9.99",
+                "tags": ["a"],
+                "where": {"start": 1, "end": 2},
+                "at": STAMP,
+                "colour": "red",
+            }
+        )
+    )
+
+    with world.instance(None) as instance:
+        assert instance.call("reserve", **sent) == {"reserved": True}
+        with pytest.raises(ArgumentError) as raised:
+            instance.call("reserve", **{**sent, "span": ["1", "2"], "colour": "RED"})
+
+    assert received == [((1, 2), UID, decimal.Decimal("9.99"), {"a"}, Span(1, 2), AT, Colour.RED)]
+    assert {violation["path"] for violation in raised.value.violations} == {
+        "span.0",
+        "span.1",
+        "colour",
+    }
+
+
+def test_a_lone_surrogate_json_can_carry_reaches_a_tool_called_by_name(tmp_path: Path) -> None:
+    """Parsed JSON with no UTF-8 text: validated as the `str` it is, not an internal error."""
+    world = build_world(tmp_path)
+
+    @world.tool
+    def echo(ctx: Ctx, s: str) -> dict[str, str]:
+        """Echo."""
+        return {"s": s}
+
+    with world.instance(None) as instance:
+        assert instance.call("echo", **json.loads('{"s": "a\\ud800"}')) == {"s": "a\ud800"}
+        with pytest.raises(ArgumentError):
+            instance.call("echo", **json.loads('{"s": ["a\\ud800"]}'))
+
+
+def test_deeply_nested_json_reaches_a_tool_called_by_name(tmp_path: Path) -> None:
+    world = build_world(tmp_path)
+
+    @world.tool
+    def keep(ctx: Ctx, value: Any) -> dict[str, bool]:
+        """Keep."""
+        return {"kept": True}
+
+    with world.instance(None) as instance:
+        assert instance.call("keep", value=json.loads("[" * 600 + "]" * 600)) == {"kept": True}
 
 
 def test_defaults_are_published_and_required_arguments_are_not() -> None:
