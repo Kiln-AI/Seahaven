@@ -26,10 +26,10 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from bench.harness import Caller, Run, Summary, gate_size, summarise, timed_loop
-from bench.runner import Cache, measure, sessions
-from bench.workloads import SLOW_STATEMENT, WORKLOADS, Session
 from seahaven import World
+from tools.bench.harness import Caller, Run, Summary, gate_size, summarise, timed_loop
+from tools.bench.runner import Cache, measure, sessions
+from tools.bench.workloads import SLOW_STATEMENT, WORKLOADS, Session
 
 __all__ = [
     "DEFAULT_GATES",

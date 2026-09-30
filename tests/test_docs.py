@@ -73,7 +73,11 @@ DOCS = Path(docs_path())
 SOURCE = Path(seahaven.__file__).resolve().parent
 # The suite always runs from a checkout, where the repository's own pages are.
 REPO = Path(__file__).resolve().parents[1]
-LINKED_PAGES = (*(DOCS / page for page in PAGES), REPO / "README.md", REPO / "CONTRIBUTING.md")
+LINKED_PAGES = (
+    *(DOCS / page for page in PAGES),
+    REPO / "README.md",
+    REPO / ".github" / "CONTRIBUTING.md",
+)
 
 
 def registered_codes() -> set[str]:

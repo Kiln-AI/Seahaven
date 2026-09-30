@@ -36,9 +36,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from bench.harness import Caller, Run, Summary, closed_loop, summarise
 from seahaven import Instance, World
 from seahaven.composition import bump
+from tools.bench.harness import Caller, Run, Summary, closed_loop, summarise
 
 __all__ = [
     "READ",
@@ -61,7 +61,7 @@ __all__ = [
 # installs these packages -- they are fixtures of the framework's own suite -- so
 # their source directories go on the path the way `tests/conftest.py` puts them
 # there, because a host reaches a world it adds by importing it.
-WORLDS = Path(__file__).resolve().parent.parent / "tests" / "worlds"
+WORLDS = Path(__file__).resolve().parents[2] / "tests" / "worlds"
 TREE_PACKAGES = ("payments", "shop", "emporium")
 
 # What a line of the per-call table is called. Named here rather than written
@@ -150,7 +150,7 @@ def trees() -> tuple[Tree, ...]:
     """The ladder, imported the way a host imports a world it adds.
 
     Cached, and the imports are inside the function rather than at the top of the
-    module, for the same reason `bench.__main__._world()` imports ProjectTracker
+    module, for the same reason `tools.bench.__main__._world()` imports ProjectTracker
     inside a function: a world is reached by importing its package, and this one
     needs `sys.path` prepared first. Node identity is object identity, so every
     caller must get the same `World` objects -- which is what the cache is for.

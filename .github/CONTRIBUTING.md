@@ -26,7 +26,7 @@ uv run ty check -c 'src.exclude=["src/seahaven/mcp", "tests/test_mcp_server.py",
 uv run pytest                              # the framework
 uv run pytest worlds/projecttracker        # the reference world
 uv run pytest extensions/seahaven-xmlrpc   # the example extension
-uv run python scripts/check_licences.py serve
+uv run python tools/check_licences.py serve
 ```
 
 `serve` and `mcp` are conflicting extras, so the second environment is a second run:
@@ -36,7 +36,7 @@ uv sync --extra mcp
 uv run python -c "import mcp.server.context, seahaven.mcp"
 uv run ty check src/seahaven/mcp tests/test_mcp_server.py tests/test_mcp_process.py
 uv run pytest
-uv run python scripts/check_licences.py mcp
+uv run python tools/check_licences.py mcp
 uv sync --extra serve                      # back to the everyday one
 ```
 

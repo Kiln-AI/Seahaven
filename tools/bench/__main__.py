@@ -1,6 +1,6 @@
-"""`python -m bench`: run the measurements and write the report.
+"""`python -m tools.bench`: run the measurements and write the report.
 
-    uv run python -m bench all --out bench/results/latest.md
+    uv run python -m tools.bench all --out tools/bench/results/latest.md
 
 Six subcommands -- `baseline`, `sweep`, `isolation`, `composite`, `recording`,
 `all` -- because a sweep takes minutes and someone changing the harness wants one
@@ -16,16 +16,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-from bench import report
-from bench.baseline import baseline, share
-from bench.composite import composite
-from bench.environment import capture
-from bench.harness import cold_cache_supported, quiet_logging
-from bench.recording import LEGS, probes, recording
-from bench.runner import CACHES, Cache
-from bench.sweep import DEFAULT_GATES, DEFAULT_WORKERS, isolation, sweep
-from bench.workloads import WORKLOADS
 from seahaven import World
+from tools.bench import report
+from tools.bench.baseline import baseline, share
+from tools.bench.composite import composite
+from tools.bench.environment import capture
+from tools.bench.harness import cold_cache_supported, quiet_logging
+from tools.bench.recording import LEGS, probes, recording
+from tools.bench.runner import CACHES, Cache
+from tools.bench.sweep import DEFAULT_GATES, DEFAULT_WORKERS, isolation, sweep
+from tools.bench.workloads import WORKLOADS
 
 __all__ = ["main"]
 
@@ -46,7 +46,7 @@ SEED = 11
 QUICK: dict[str, Any] = {
     "baseline_calls": 8,
     "calls": 8,
-    # Three and not one: `bench.recording` refuses a `repeats` that is not a
+    # Three and not one: `tools.bench.recording` refuses a `repeats` that is not a
     # whole rotation of its legs, and a quick run that skipped the rotation would
     # print the balance the report claims without having done it.
     "repeats": 3,
@@ -156,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m bench",
+        prog="python -m tools.bench",
         description="Seahaven's benchmark: two workloads over ProjectTracker agency, a "
         "sweep of the concurrency gate, what a node of a composite world costs, and what the "
         "change log costs a call. Run by hand; never a gate on anything.",
@@ -269,7 +269,7 @@ def _may_write(out: Path, *, force: bool) -> bool:
 def _command(argv: list[str] | None) -> str:
     """The command as the report should print it, so a reader can re-run it."""
     arguments = sys.argv[1:] if argv is None else argv
-    return "uv run python -m bench " + " ".join(arguments)
+    return "uv run python -m tools.bench " + " ".join(arguments)
 
 
 if __name__ == "__main__":

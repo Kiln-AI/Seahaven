@@ -45,12 +45,12 @@ from dataclasses import dataclass
 
 import apsw
 
-from bench.composite import legs, trees
-from bench.harness import Caller, Run, closed_loop
-from bench.runner import whole_cycles
-from bench.workloads import FIXTURE, WORKLOADS
 from seahaven import Instance, World
 from seahaven.changes import open_session
+from tools.bench.composite import legs, trees
+from tools.bench.harness import Caller, Run, closed_loop
+from tools.bench.runner import whole_cycles
+from tools.bench.workloads import FIXTURE, WORKLOADS
 
 __all__ = [
     "LEGS",
@@ -177,7 +177,7 @@ class Recording:
 def probes(world: World) -> tuple[Probe, ...]:
     """ProjectTracker's two workloads at one node, and `emporium`'s three at four.
 
-    `emporium`'s legs are `bench.composite`'s own, so the calls timed here are
+    `emporium`'s legs are `tools.bench.composite`'s own, so the calls timed here are
     the calls section 7 times and the two tables can be read together. `shop` and
     the `payments` leaf are not here: what this probe asks is what a *tree* of
     nodes costs a call that records, and the leaf is the one-node case
@@ -204,7 +204,7 @@ def probes(world: World) -> tuple[Probe, ...]:
                 nodes=leg.tree.nodes,
                 world=leg.tree.world,
                 fixture=None,
-                # Every composite leg is one call, as `bench.composite` drives them.
+                # Every composite leg is one call, as `tools.bench.composite` drives them.
                 cycle=1,
                 prepare=leg.prepare,
             )

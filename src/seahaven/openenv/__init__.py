@@ -431,8 +431,9 @@ def _refuse_mcp_transport(served: FastAPI) -> None:
 
 # The built web console: one self-contained HTML file with no sibling assets
 # and no request on load, which is why serving it is a route and not a static
-# directory. It is built from `ui/` in the repository (`npm run build`) and
-# copied here, so it travels in the wheel like `docs/` and `cli/templates/` do.
+# directory. It is built from `tools/console/` in the repository (`npm run
+# build`) and copied here, so it travels in the wheel like `docs/` and
+# `cli/templates/` do.
 CONSOLE_PATH = "/console"
 CONSOLE_FILE = Path(__file__).parent / "console" / "index.html"
 
