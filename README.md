@@ -85,8 +85,8 @@ you only write what's specific to your world: its tables and its tools.
 an `AGENTS.md` that points your coding agent at the docs.
 
 ```sh
-uvx seahaven new crm
-cd crm && uv sync
+uvx seahaven new crm_world # your world name
+cd crm_world && uv sync
 ```
 
 **Write your world.** A world is a schema and a set of tools. Here is a small CRM:
