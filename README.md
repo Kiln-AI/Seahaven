@@ -34,7 +34,7 @@ you only write what's specific to your world: its tables and its tools.
 
 - **[Recreate Any Environment](src/seahaven/docs/authoring.md#writing-a-tool):** Mock AI tool
   calls, REST APIs, sandboxed SQL, search, or any custom format.
-- **[Stateful](src/seahaven/docs/concepts.md#instance):** Each instance is its own independent
+- **[Stateful](src/seahaven/docs/concepts.md#instance):** Each instance of a world has its own independent
   SQLite database.
 - **[Composable](#composing-worlds):** Compose, reuse and share worlds. Example: MyCoWorld
   can include [StripeAPIWorld](https://github.com/Kiln-AI/stripe_world) and ShopifyAPIWorld.
