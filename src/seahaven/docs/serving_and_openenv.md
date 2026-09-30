@@ -112,6 +112,8 @@ Open that in a browser and you can drive the world by hand: open instances, call
 the state document, without writing a client. `seahaven serve --no-console` leaves the console out,
 for a server that should answer the protocol and nothing else.
 
+https://github.com/user-attachments/assets/33759ce9-8e01-4f8c-8d79-f04883848027
+
 ## Sessions and instances
 
 A WebSocket connection is one session, and one session holds one instance.
