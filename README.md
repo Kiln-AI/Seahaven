@@ -22,8 +22,7 @@ on what the agent changed. Production systems can't do that. Seahaven is a Pytho
 building synthetic worlds that can: working copies of your agent's tools, realistic enough that the
 agent can't tell the difference.
 
-Seahaven handles the hard parts (parallel instances, reproducibility, serving, and change logs), so
-you only write what's specific to your world: its tables and its tools.
+Seahaven handles the hard parts: parallel instances, reproducibility, serving, and change logs. You only write what's specific to your world: its tables and its tools.
 
 > Named after the town in *The Truman Show*: an entire world built so that one inhabitant believes
 > it is real.
