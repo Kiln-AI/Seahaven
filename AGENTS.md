@@ -8,7 +8,8 @@ executed by the test suite. Where nothing is written down, the code is the answe
 
 We develop with the `/spec` skill: https://github.com/scosman/vibe-crafting
 
-`.github/CONTRIBUTING.md` is the short guide for outside contributors.
+`.github/CONTRIBUTING.md` is the short guide for outside contributors. `.github/RELEASING.md` is
+the maintainer's checklist for a PyPI release.
 
 ## Specs
 
