@@ -47,16 +47,6 @@ notes/
   tests/test_fixtures.py       # the fixture recipe above, run into a temporary directory
 ```
 
-**Before you run the `uv sync` that `seahaven new` prints as its next step:** while Seahaven is
-unpublished, that step does not do what it looks like. A scaffold depends on `seahaven~=0.0`, and
-that resolves to a placeholder release on PyPI which contains none of the framework. `uv sync`
-succeeds, and the world then fails at import with `ModuleNotFoundError: No module named
-'seahaven.world'`, raised by the scaffold's own `middleware/error_handler.py`, which says nothing
-about where the package came from. `seahaven check` does not even start, because the placeholder
-ships no console script. Install the framework from a checkout instead (`uv pip install -e
-/path/to/Seahaven`, with `[serve]` if the world will be served), or work in an environment that
-already has it. This paragraph disappears when Seahaven is published.
-
 Three rules about the layout are worth stating now.
 
 **A world is a package**, never a directory loaded by path. The tooling finds a world by importing

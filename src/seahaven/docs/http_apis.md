@@ -158,9 +158,9 @@ Seahaven adds nothing for this. It is a plain function call.
 ### Install the server
 
 The server needs Starlette and uvicorn, which the `serve` extra installs.
-[Install the extra from a checkout](serving_and_openenv.md#install-the-serve-extra) until Seahaven
-is published. Without it, `seahaven.http.app` and `serve` raise an `ImportError` that says so, and
-`serve_http.py` prints the same message and exits 1.
+[Install the extra](serving_and_openenv.md#install-the-serve-extra). Without it,
+`seahaven.http.app` and `serve` raise an `ImportError` that says so, and `serve_http.py` prints the
+same message and exits 1.
 
 ### The script
 
