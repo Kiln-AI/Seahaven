@@ -73,13 +73,7 @@ reaches the scaffolded `world.py` verbatim, so a world it cannot import is refus
 directory is written. A name whose package has the same name as a standard library module or
 `seahaven` is refused too, because Python imports that module instead of the world.
 
-The command finishes by printing what to do next. While Seahaven is unpublished, the `uv sync` in
-that list is a trap: the scaffold's `seahaven~=0.0` resolves to a placeholder release that contains
-none of the framework, so the sync succeeds and the world fails at import with `ModuleNotFoundError:
-No module named 'seahaven.world'`. `seahaven check` itself cannot start either, because the
-placeholder ships no console script. Install the framework from a checkout until publication. The
-same applies to `--hub`: the `Dockerfile` it writes runs `uv sync --extra serve`, which today builds
-an image whose container cannot start.
+The command finishes by printing what to do next.
 
 ## `seahaven check`
 

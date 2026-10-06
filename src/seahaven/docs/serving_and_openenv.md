@@ -44,11 +44,12 @@ The server and the client are in Seahaven's `serve` extra, because OpenEnv's dep
 large and a world used in process should not pay for it. The environment needs a final CPython 3.14
 or newer, not a release candidate.
 
-**Do not run `pip install "seahaven[serve]"`.** The framework is not published yet. The `seahaven`
-name on PyPI currently holds a placeholder release that contains none of this and has no `serve`
-extra, so that command succeeds and installs nothing useful, which is worse than failing. Until
-publication, install the framework and its extra from a checkout of the Seahaven repository, for
-example `uv pip install -e "/path/to/Seahaven[serve]"` into the environment your world runs in.
+A world made by `seahaven new` has a `serve` extra that installs Seahaven's. Run `uv sync --extra
+serve` in the world's directory. In any other project, add `seahaven[serve]` as a dependency:
+
+```sh
+uv add "seahaven[serve]"
+```
 
 ### The app file
 
@@ -554,12 +555,6 @@ root `Dockerfile`, a root `__init__.py`, `client.py` and `models.py`. It adds no
 world that does not publish to a hub carries none of them. `client.py` is a single re-export,
 because the typed client for every Seahaven world is `SeahavenClient`.
 
-**That `Dockerfile` does not build a working image today.** Its build step is `RUN uv sync --extra
-serve`, and the world's `serve` extra is `seahaven[serve]`, which resolves to the placeholder
-release described at the top of this page. The image builds, and the container cannot start: there
-is no `seahaven.openenv` in it. Until publication, an image has to get the framework from a checkout
-or a private index, which means editing that `RUN` line.
-
 **The image is a checkout, and has to stay one.** The generated `Dockerfile` does `COPY . /app` and
 then `uv sync`, so the container holds the world's whole directory with the framework installed into
 its environment. Replace those two lines with a plain install of the world and the image builds, the
@@ -602,8 +597,7 @@ document and no control tool.
 
 Two steps run a world in a client:
 
-1. `uv run --extra mcp seahaven mcp`, in the world's own directory ([from a checkout until
-   publication](#install-the-serve-extra)).
+1. `uv run --extra mcp seahaven mcp`, in the world's own directory.
 2. Give a client that same command. The `.mcp.json` below is the whole configuration:
 
 ```json
