@@ -25,7 +25,7 @@ agent can't tell the difference.
 Seahaven handles the hard parts: parallel instances, reproducibility, serving, and change logs. You only write what's specific to your world: its tables and its tools.
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=VIDEO_ID">
+  <a href="https://www.youtube.com/watch?v=E1l-EKsO0Q8">
     <img width="300" alt="Watch the Seahaven video" src="https://github.com/user-attachments/assets/3c0bfbf7-1c4a-45fd-8c0b-a1a467d130d8" />
   </a>
 </p>
