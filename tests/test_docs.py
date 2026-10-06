@@ -77,6 +77,7 @@ LINKED_PAGES = (
     *(DOCS / page for page in PAGES),
     REPO / "README.md",
     REPO / ".github" / "CONTRIBUTING.md",
+    REPO / ".github" / "RELEASING.md",
 )
 
 
