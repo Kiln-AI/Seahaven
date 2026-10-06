@@ -7,7 +7,7 @@ db_schema_and_fixtures.md, clock.md, testing.md, state.md, reference/lints.md; c
 this world adds other worlds.
 
 Commands: `uv run seahaven check` (lint; run before every commit), `uv run pytest`,
-`uv run seahaven fixture list`, `uv run seahaven serve`.
+`uv run seahaven fixture list`, `uv run --extra serve seahaven serve`.
 
 Rules: time comes from `ctx.clock` and ids and randomness from `ctx.ids`, so a replay of the same
 fixture and seed on a `fixed` or `tick` clock gives the same result; SQL goes through `ctx.db`

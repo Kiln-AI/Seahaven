@@ -7,6 +7,7 @@ to something that already worked, so the first failure they see is one they made
 """
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -114,6 +115,32 @@ def test_the_scaffold_declares_the_conflict_between_serve_and_mcp(scaffold: Path
     assert {"serve", "mcp"} in paired, (
         f"a generated world does not declare serve and mcp as conflicting extras: {conflicts}"
     )
+
+
+def test_the_scaffold_docs_run_each_server_with_its_extra(scaffold: Path) -> None:
+    """Every `uv run seahaven serve` or `seahaven mcp` in the world's docs passes its extra.
+
+    The next steps `seahaven new` prints say `uv sync`, which installs no extra,
+    so a bare `uv run seahaven serve` after it fails with "needs the serve extra".
+    Each server command is named after the extra it needs.
+    """
+    servers = {"serve", "mcp"}
+    commands = [
+        shlex.split(span)
+        for page in ("README.md", "AGENTS.md")
+        for span in re.findall(r"`(uv run [^`]+)`", (scaffold / page).read_text(encoding="utf-8"))
+    ]
+    runs = [
+        (command, command[at + 1])
+        for command in commands
+        for at, word in enumerate(command[:-1])
+        if word == "seahaven" and command[at + 1] in servers
+    ]
+    assert runs, "the scaffold's docs run no server, so this test is asking the wrong question"
+    for command, extra in runs:
+        assert f"--extra {extra}" in shlex.join(command), (
+            f"{shlex.join(command)!r} lacks --extra {extra}"
+        )
 
 
 def test_the_scaffold_installs_pytest_with_uv_sync(scaffold: Path) -> None:
