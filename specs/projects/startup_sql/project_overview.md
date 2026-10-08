@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Startup SQL
@@ -15,7 +15,9 @@ express, without a new fixture or a new hook for each scenario.
 
 This is a framework feature that every world gets for free, not something each world opts in to.
 
-## Design question to settle
+## Design decision
 
-Should it just be an `instance_startup` hook that is registered by default on every world, reusing
-the existing architecture for startup hooks?
+Same machinery as startup hooks, new key. The SQL runs inside the startup step of instance creation
+(same transaction, same failure handling, not in the change log), but it is a framework parameter,
+`setup_sql`, beside `fixture` and `startup`, and not a startup keyword or a default
+`instance_startup` hook. `startup` stays the world's own namespace.
