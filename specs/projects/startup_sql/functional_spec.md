@@ -21,7 +21,7 @@ It reuses the startup step of instance creation. It is not a startup keyword and
 world.instance(
     fixture=None, *, seed=None, now=None, clock_mode=None, state_format=None,
     control_tools=False, startup=None,
-    setup_sql: str | Mapping[str, str] | None = None,
+    setup_sql: str | None = None,
 )
 ```
 
@@ -31,34 +31,26 @@ Over OpenEnv:
 {"type": "reset", "data": {
   "fixture": "agency",
   "seed": 7,
-  "setup_sql": "UPDATE issues SET due_at = '2026-10-01T00:00:00.000Z' WHERE key = 'ENG-12';
-                DELETE FROM comments WHERE issue_id = (SELECT id FROM issues WHERE key = 'ENG-12');",
+  "setup_sql": "UPDATE issues SET due_at = '2026-10-01T00:00:00.000Z' WHERE key = 'ENG-12'; DELETE FROM comments WHERE issue_id = (SELECT id FROM issues WHERE key = 'ENG-12');",
   "startup": {"user_id": "a0b45f75-0917-49b9-9efd-d0279f2dd73d"}
 }}
 ```
 
-### Value forms
+`setup_sql` is one string. It may hold several statements separated by `;`, and they run in the
+order written. `null` or omitted means no setup SQL. An empty or whitespace-only string is accepted
+and runs nothing.
 
-| Form | Meaning |
-|---|---|
-| omitted or `null` | no setup SQL |
-| a string | SQL for the root node (`main`) |
-| an object | SQL per node, keyed by canonical path: `{"main": "...", "payments": "...", "payments/ledger": "..."}`. A node with no key gets no SQL |
+### Table names in a composed world
 
-The string form is shorthand for `{"main": "..."}`. A world that adds no other world only ever needs
-the string.
+The SQL runs on one connection that sees every node, named as `inst.inspect()` names them:
 
-A string may hold several statements separated by `;`. They run in order, on the node's own
-connection, so a statement names that node's tables unqualified (`issues`, not `main.issues` or
-`payments.charges`). An empty or whitespace-only string is accepted and runs nothing.
+- the root's tables unqualified (`issues`), or as `main.issues`;
+- an added node's tables under a schema named by its canonical path, with `/` replaced by `__`:
+  `payments.charges`, `payments__tax.rates`.
 
-### Composition keys
-
-Keys are canonical paths, the same keys as `composition` and `fixture["nodes"]` in the state
-document: `main` for the root, `<name>` for a world the root adds, `<parent path>/<name>` deeper.
-A key that is not a canonical path of this world's composition is refused. A key that is an alias
-of a node is refused, and the message names the node's canonical path. This keeps one spelling per
-node in the request and in the state document.
+A statement may read and write across nodes, for example
+`INSERT INTO payments.charges (...) SELECT ... FROM orders`. A world that adds no other world only
+ever uses unqualified names.
 
 ## Behaviour
 
@@ -67,23 +59,26 @@ node in the request and in the state document.
 Instance creation, in order:
 
 1. Copy the fixture, or build the blank schema.
-2. Open every node's transaction (as today, before startup hooks).
-3. **Run `setup_sql`**, every node that has some, root first then hosts before what they add (the
-   order startup hooks already use). Statements within one node run in the order written.
-4. Run the startup hooks, as today. A hook sees the rows `setup_sql` wrote: for example, SQL that
-   inserts a user and `startup={"user_id": <that id>}` together work.
-5. Commit, and the instance is ready for its first call.
+2. **Run `setup_sql`** in its own transaction, on a writable connection to the root's file with
+   every other node attached writable under its schema name. Commit, then close the connection.
+3. Open every node's transaction and run the startup hooks, as today. A hook sees the rows
+   `setup_sql` wrote: for example, SQL that inserts a user and `startup={"user_id": <that id>}`
+   together work.
+4. Commit, and the instance is ready for its first call.
+
+Step 2 commits before step 3 so that its write locks on the attached files cannot block a hook.
+Creation is still all or nothing: a failure at any step removes the whole instance directory, as
+a failing startup hook does today.
 
 ### The change log and the state document
 
-- Rows `setup_sql` writes are **not** in the change log. No change-log session is open during
-  creation; they are part of the starting state, as rows a startup hook writes are today. A
-  grader folding the log sees only what the agent's calls changed. `call_count` is unchanged.
-- The state document's envelope gains a field, `setup_sql`, beside `startup`: always the object
-  form, keyed by canonical path, holding the SQL exactly as given. `{}` when there was none. The
-  string form is reported as `{"main": "..."}`. Before the first `reset` over a server it is `null`,
-  as `startup` is.
-- `fixture.nodes[path].file_sha256` keeps naming the fixture file the node was copied from. A
+- Rows `setup_sql` writes are **not** in the change log. Change-log sessions are opened only per
+  tool call; creation runs before any exists. They are part of the starting state, as rows a startup
+  hook writes are today. A grader folding the log sees only what the agent's calls changed.
+  `call_count` is unchanged.
+- The state document's envelope gains a field, `setup_sql`, beside `startup`: the string exactly as
+  given, or `null` when there was none (and before the first `reset` over a server).
+- `fixture.nodes[path].file_sha256` keeps naming the fixture file each node was copied from. A
   reader reconstructs the starting state from `fixture` plus `setup_sql` plus `startup`.
 
 ### What SQL is allowed
@@ -95,30 +90,30 @@ Runtime enforcement (priority P3 unless the architecture step finds it cheap, wh
 because `seahaven.sandbox.Authorizer` already default-denies everything but row reads, row writes
 and allowlisted functions): refuse schema changes (`CREATE`, `DROP`, `ALTER`), `ATTACH`/`DETACH`,
 `PRAGMA` writes, transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and functions outside the
-`run_sql` allowlist. Read and write access covers every table of the node's schema.
+`run_sql` allowlist. Read and write access covers every table of every node.
 
 Without enforcement, SQL that commits or changes the schema can leave the instance inconsistent.
-Transaction control in particular would end the creation transaction early, so it must be refused
-even if the rest is P3.
+Transaction control in particular would end the setup transaction early, so it must be refused
+even if the rest is P3. `ATTACH` and `DETACH` must also be refused: the setup connection's
+attachments are the framework's.
 
-`random()` and `randomblob()` draw from the node's seeded stream, as everywhere else in an
-instance, so the same `seed` and the same `setup_sql` give the same starting state.
+`random()` and `randomblob()` draw from the root node's seeded stream, whichever node the row lands
+in, so the same `seed` and the same `setup_sql` give the same starting state.
 
 ### Errors
 
-A failure aborts instance creation with `seahaven.WorldBug`, every node's transaction is rolled
-back, and nothing is left behind, exactly as when a startup hook raises. Over OpenEnv the session is
+A failure aborts instance creation with `seahaven.WorldBug` and nothing is left behind, exactly as
+when a startup hook raises. Over OpenEnv the session is
 left fresh (no instance, no episode) and open for another `reset`; the frame is `EXECUTION_ERROR`.
 
 Refused before anything is copied (the checks `world.instance` already runs first):
 
-- `setup_sql` is not a string, an object of strings, or `null`.
-- An object key that is not a canonical path, or is an alias (message names the canonical path).
+- `setup_sql` is not a string or `null`.
 
 Refused while running:
 
-- A statement SQLite rejects (syntax, constraint, missing table). The message names the node path,
-  the statement's position in the string (1-based) and SQLite's own text.
+- A statement SQLite rejects (syntax, constraint, missing table). The message names the
+  statement's position in the string (1-based) and SQLite's own text.
 - A statement the enforcement refuses, named the same way.
 
 ## Every entry point
@@ -131,14 +126,13 @@ Refused while running:
 | OpenEnv `reset` (WebSocket and `SeahavenEnv.reset`) | `"setup_sql"` key; published in the reset schema from `GET /schema` |
 | HTTP API instance creation (`PUT` body) and `seahaven serve` reset options | `"setup_sql"` key |
 | `seahaven mcp --reset-options` | `"setup_sql"` key |
-| `/ui` reset form | rendered from the reset schema; the object form may be entered as JSON |
+| `/ui` reset form | rendered from the reset schema as a multi-line text box; no console change |
 
 It is always available. There is no operator flag to turn it off.
 
 ## Out of scope
 
 - Bound parameters (`:now`, `:seed`). Statements are plain literal SQL.
-- Cross-node statements (one statement touching two nodes' tables).
 - Setup SQL on `add_world(...)` (a host fixing a child's SQL at composition time).
 - A per-world opt-out.
 - Turning setup SQL into a fixture (freezing). Authors who reuse the same setup across many evals
@@ -151,4 +145,4 @@ It is always available. There is no operator flag to turn it off.
   startup hook, and the advice to write rows only.
 - `state.md`: the new envelope field.
 - `reference/api.md`: the `world.instance` signature.
-- `composition.md`: the object form and its keys.
+- `composition.md`: the schema names an added node's tables have in `setup_sql`.
