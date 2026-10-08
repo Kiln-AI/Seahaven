@@ -522,6 +522,7 @@ class World:
         state_format: str | None = None,
         control_tools: bool = False,
         startup: Mapping[str, Any] | None = None,
+        setup_sql: str | None = None,
     ) -> Instance:
         """Make a live instance: a private copy of a fixture, or a blank one.
 
@@ -535,8 +536,10 @@ class World:
         they are not callable at all, and their names answer `UnknownTool` like
         any name the world does not have. `startup` is the world's own
         namespace: every keyword in it is passed to the startup hooks that named
-        it, and a keyword no hook names is refused. The instance is a context
-        manager and leaving the block destroys it.
+        it, and a keyword no hook names is refused. `setup_sql` is SQL that
+        reads and writes rows of the new instance before any startup hook runs,
+        every node's tables in reach. The instance is a context manager and
+        leaving the block destroys it.
 
         Never from inside a tool call: a handler that wants another world reaches
         it through `ctx.worlds`, and a world that made its own instance would be
@@ -555,6 +558,7 @@ class World:
             state_format=state_format,
             control_tools=control_tools,
             startup=startup,
+            setup_sql=setup_sql,
         )
 
     def fixtures(self) -> list[Fixture]:

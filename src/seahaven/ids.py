@@ -34,6 +34,7 @@ __all__ = [
     "CONTROL_STREAM",
     "INSPECTION_STREAM",
     "INSTANCE_STREAM",
+    "SETUP_STREAM",
     "Ids",
     "instance_seed",
     "register_random_functions",
@@ -98,10 +99,13 @@ class Ids:
 # door redraws. Every door draws from the start of its stream each time it is
 # opened, so a build that drew from `INSTANCE_STREAM` would hand a schema-seeded
 # row exactly the bytes the world's own first draw is about to take.
+# `SETUP_STREAM` is the same kind of door for the caller's `setup_sql`
+# (`setup_sql.py`): an instance's own draws are the same whether or not it ran.
 INSTANCE_STREAM = b"instance"
 INSPECTION_STREAM = b"inspection"
 CONTROL_STREAM = b"control"
 BUILD_STREAM = b"build"
+SETUP_STREAM = b"setup"
 
 # Registered on connections that have SQLITE_DBCONFIG_TRUSTED_SCHEMA off, where
 # INNOCUOUS is what keeps them callable from a DEFAULT clause or a trigger.

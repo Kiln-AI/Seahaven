@@ -6,7 +6,7 @@ status: complete
 
 ## Phases
 
-- [ ] Phase 1: Core. `seahaven/setup_sql.py` (`run_setup_sql`, `split_statements`,
+- [x] Phase 1: Core. `seahaven/setup_sql.py` (`run_setup_sql`, `split_statements`,
   `SetupAuthorizer`, `_explain`), `SETUP_STREAM`, the `setup_sql` parameter on `World.instance`,
   `InstanceManager.create` and `Instance` (stored as `inst.setup_sql`), the pre-copy type check, and
   the pytest marker signature. Tests in `tests/test_setup_sql.py` through `world.instance(...)`:

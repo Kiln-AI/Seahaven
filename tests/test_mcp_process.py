@@ -585,9 +585,9 @@ def test_a_startup_keyword_at_the_top_level_is_refused_before_anything_is_served
     assert finished.code == 1
     assert finished.err.splitlines() == [
         '--reset-options does not take "region"; --reset-options takes "clock_mode", "fixture", '
-        '"now", "seed", "startup" and "state_format", and a world\'s own startup keywords go '
-        'inside "startup": --reset-options \'{"fixture": "small_startup", "startup": '
-        '{"user_id": "u_12"}}\''
+        '"now", "seed", "setup_sql", "startup" and "state_format", and a world\'s own startup '
+        'keywords go inside "startup": --reset-options \'{"fixture": "small_startup", '
+        '"startup": {"user_id": "u_12"}}\''
     ]
     assert finished.out == ""
     assert project.living() == []
