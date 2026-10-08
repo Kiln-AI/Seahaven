@@ -79,14 +79,15 @@ seahaven new <name>           # scaffold a world
 seahaven check                # run every lint; do this before a commit
 seahaven fixture list         # every fixture: id, parent, now, description
 seahaven serve                # run this world's server
+seahaven hub                  # add the files for publishing to a hub
 seahaven mcp                  # serve this world to one MCP client
 seahaven docs                 # print the directory holding these pages
 ```
 
-Every command except `new` and `docs` finds the world by convention: the project's package, taken
-from `[project] name` in the nearest `pyproject.toml`, exporting an attribute called `world`. Pass
-`--world module:attr` to name it yourself. [reference/cli.md](reference/cli.md) has every command
-and option.
+Every command except `new`, `hub` and `docs` finds the world by convention: the project's package,
+taken from `[project] name` in the nearest `pyproject.toml`, exporting an attribute called `world`.
+Pass `--world module:attr` to name it yourself. [reference/cli.md](reference/cli.md) has every
+command and option.
 
 ## Where to go next
 

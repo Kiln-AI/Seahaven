@@ -18,10 +18,10 @@ from pathlib import Path
 import pytest
 from packaging.requirements import Requirement
 
-from seahaven.cli import CliError
-from seahaven.cli.new import HUB_FILES, render, seahaven_requirement
+from seahaven.cli import CliError, build_parser
+from seahaven.cli.new import render, seahaven_requirement
 from seahaven.fixtures import load
-from tests.conftest import CliResult, run_cli
+from tests.conftest import CliResult, assert_scaffold_pytest_passes, run_cli
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -199,17 +199,13 @@ def build_as_the_readme_says(scaffold: Path) -> None:
 
 
 def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
-    """A subprocess, because a second pytest cannot run inside this one."""
-    finished = python_in(scaffold, "-m", "pytest", "-q")
-    assert finished.returncode == 0, finished.stdout + finished.stderr
+    assert_scaffold_pytest_passes(scaffold)
 
 
 def test_pytest_passes_after_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
     """The README's first step is a `build`, and the tests have to survive it."""
     build_as_the_readme_says(scaffold)
-
-    finished = python_in(scaffold, "-m", "pytest", "-q")
-    assert finished.returncode == 0, finished.stdout + finished.stderr
+    assert_scaffold_pytest_passes(scaffold)
 
 
 def test_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
@@ -264,34 +260,17 @@ def test_a_name_that_is_not_a_world_name_is_refused(tmp_path: Path, name: str) -
     assert not (tmp_path / "world").exists()
 
 
-def test_hub_adds_five_files_and_nothing_else(tmp_path: Path) -> None:
-    """One world, rendered twice: the difference is exactly what `openenv push` wants."""
-    plain = render("hubbed", tmp_path / "plain" / "hubbed")
-    hubbed = render("hubbed", tmp_path / "hub" / "hubbed", hub=True)
-    assert files(hubbed) - files(plain) == set(HUB_FILES)
-    assert files(plain) - files(hubbed) == set()
+def test_new_has_no_hub_option() -> None:
+    """The hub files are `seahaven hub`'s, run in the world afterwards."""
+    parsed = build_parser().parse_args(["new", "my-world"])
+    assert set(vars(parsed)) == {"command", "name", "dir", "handler"}
 
 
-def test_the_hub_files_re_export_the_framework(tmp_path: Path) -> None:
-    """Not placeholders: every Seahaven world's client and models are the same."""
-    hubbed = render("hubbed", tmp_path / "hub" / "hubbed", hub=True)
-    assert "SeahavenClient as Client" in (hubbed / "client.py").read_text(encoding="utf-8")
-    models = (hubbed / "models.py").read_text(encoding="utf-8")
-    assert "SeahavenObservation" in models
-    assert "SeahavenState" in models
-    assert "hubbed.openenv_app:app" in (hubbed / "Dockerfile").read_text(encoding="utf-8")
-    assert "name: hubbed" in (hubbed / "openenv.yaml").read_text(encoding="utf-8")
-
-
-def test_the_hub_container_serves_on_every_interface(tmp_path: Path) -> None:
-    """The server binds loopback by default, so the container has to say otherwise itself."""
-    hubbed = render("hubbed", tmp_path / "hub" / "hubbed", hub=True)
-    command = next(
-        line
-        for line in (hubbed / "Dockerfile").read_text(encoding="utf-8").splitlines()
-        if line.startswith("CMD ")
-    )
-    assert '"--host", "0.0.0.0"' in command
+def test_a_world_without_the_hub_files_has_no_hub_readme_sections(scaffold: Path) -> None:
+    readme = (scaffold / "README.md").read_text(encoding="utf-8")
+    assert readme.startswith("# my-world\n")
+    assert "`uv run pytest`.\n\n## Making a fixture" in readme
+    assert "from_hub" not in readme
 
 
 def test_new_prints_the_next_steps(
@@ -303,6 +282,7 @@ def test_new_prints_the_next_steps(
     assert "cd my-world" in result.out
     assert "uv run pytest" in result.out
     assert "uv run seahaven check" in result.out
+    assert "uv run seahaven hub" in result.out
 
 
 def test_new_writes_into_the_directory_it_is_given(

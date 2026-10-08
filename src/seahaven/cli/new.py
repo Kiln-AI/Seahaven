@@ -1,16 +1,10 @@
 """`seahaven new <name>`: the scaffold, and nothing more than the scaffold.
 
-Renders `templates/` and stops. Nothing is imported, no world is built and no
-fixture is made, so `new` cannot fail halfway through something: either the
-directory is there and complete, or it was never created.
-
-The templates are ordinary files with a `.tmpl` suffix, substituted with
-`string.Template` -- `$name`, `$package`, `$seahaven_requirement` -- and written
-out without it. The suffix is what keeps a directory full of `$package` out of
-the repository's own ruff, ty and pytest runs: a `.py` holding
-`from $package.world import world` is not Python, and every tool in the tree
-would have an opinion about it. The package directory is spelled `PACKAGE` in
-the template tree for the same reason, and is renamed on the way out.
+Renders `templates/base/` (`cli/scaffold.py` says how) and stops. Nothing is
+imported, no world is built and no fixture is made, so `new` cannot fail halfway
+through something: either the directory is there and complete, or it was never
+created. The files a world needs to publish to a hub are `seahaven hub`'s, run
+afterwards in the world's directory.
 
 The result passes `seahaven check` with no findings and `pytest` with no fixture
 on disk, which is the point: an author's first run of both succeeds, so the first
@@ -22,29 +16,16 @@ import keyword
 import re
 import shutil
 import sys
-from collections.abc import Iterator
-from importlib import resources
-from importlib.resources.abc import Traversable
 from pathlib import Path
-from string import Template
 
 import seahaven
 from seahaven.cli import CliError, package_name
+from seahaven.cli.scaffold import render_group
 from seahaven.names import NAME_RULE, why_not_a_name
 
-__all__ = ["HUB_FILES", "TEMPLATE_SUFFIX", "add_parser", "render", "run"]
-
-TEMPLATE_SUFFIX = ".tmpl"
-# The directory the world's package is spelled as inside `templates/`.
-PACKAGE_PLACEHOLDER = "PACKAGE"
+__all__ = ["add_parser", "render", "run"]
 
 BASE_TEMPLATES = "base"
-HUB_TEMPLATES = "hub"
-
-# What `--hub` adds, and the whole of what it adds: the files `openenv push`
-# validates a pushed directory for (`components/openenv.md` §6). A world that
-# does not publish to a hub carries none of them.
-HUB_FILES = ("Dockerfile", "__init__.py", "client.py", "models.py", "openenv.yaml")
 
 # `seahaven~=X.Y`: a world is built against the framework's authoring API, which
 # moves with the minor version, and a world that pinned the patch would need a
@@ -63,28 +44,24 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
         metavar="<path>",
         help="the directory to create the world in (default: here)",
     )
-    parser.add_argument(
-        "--hub",
-        action="store_true",
-        help="also write the files `openenv push` requires, for a world that publishes to a hub",
-    )
     parser.set_defaults(handler=run)
 
 
 def run(args: argparse.Namespace) -> int:
     """Render the scaffold and print what to do next."""
     target = Path(args.dir) / args.name
-    render(args.name, target, hub=args.hub)
+    render(args.name, target)
     print(f"created {target}")
     print("next:")
     print(f"  cd {target}")
     print("  uv sync")
     print("  uv run pytest")
     print("  uv run seahaven check")
+    print("to publish it to a hub: uv run seahaven hub")
     return 0
 
 
-def render(name: str, target: Path, *, hub: bool = False) -> Path:
+def render(name: str, target: Path) -> Path:
     """Write a world named `name` into `target`, and return it.
 
     Refuses an existing directory rather than merging into one: a scaffold is a
@@ -123,8 +100,10 @@ def render(name: str, target: Path, *, hub: bool = False) -> Path:
         "seahaven_requirement": seahaven_requirement(),
     }
     try:
-        for group in (BASE_TEMPLATES, *((HUB_TEMPLATES,) if hub else ())):
-            _render_group(group, target, package, substitutions)
+        for relative, text in render_group(BASE_TEMPLATES, package, substitutions).items():
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(text, encoding="utf-8")
     except BaseException:
         # Either a whole world or nothing: a directory holding three of its
         # seventeen files is worse than no directory at all.
@@ -139,31 +118,3 @@ def seahaven_requirement() -> str:
     if release is None:  # pragma: no cover - a version string setuptools cannot produce
         return "seahaven"
     return f"seahaven~={release.group(1)}.{release.group(2)}"
-
-
-def _render_group(group: str, target: Path, package: str, substitutions: dict[str, str]) -> None:
-    root = resources.files(__package__) / "templates" / group
-    for source, relative in _templates(root, Path()):
-        destination = target / _destination(relative, package)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(
-            Template(source.read_text(encoding="utf-8")).substitute(substitutions),
-            encoding="utf-8",
-        )
-
-
-def _templates(root: Traversable, prefix: Path) -> Iterator[tuple[Traversable, Path]]:
-    """Every template under `root`, with its path relative to the group."""
-    for entry in sorted(root.iterdir(), key=lambda entry: entry.name):
-        here = prefix / entry.name
-        if entry.is_dir():
-            yield from _templates(entry, here)
-        elif entry.name.endswith(TEMPLATE_SUFFIX):
-            yield entry, here
-
-
-def _destination(relative: Path, package: str) -> Path:
-    """Where a template lands: the suffix dropped, `PACKAGE` renamed."""
-    parts = [package if part == PACKAGE_PLACEHOLDER else part for part in relative.parts]
-    parts[-1] = parts[-1][: -len(TEMPLATE_SUFFIX)]
-    return Path(*parts)

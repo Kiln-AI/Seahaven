@@ -31,7 +31,8 @@ from pathlib import Path
 
 import pytest
 
-from seahaven.cli.new import TEMPLATE_SUFFIX, render
+from seahaven.cli.new import render
+from seahaven.cli.scaffold import TEMPLATE_SUFFIX
 from tests.test_docs import PAGES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

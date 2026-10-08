@@ -127,6 +127,23 @@ def test_a_package_with_no_world_attribute_names_the_fix() -> None:
     assert raised.value.code == "SH501"
 
 
+def test_a_root_init_imported_as_the_package_names_the_fix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What pytest does with a `tests/__init__.py` in a world `seahaven hub` has been run in."""
+    root = tmp_path / "rootinit"
+    root.mkdir()
+    (root / "pyproject.toml").write_text('[project]\nname = "rootinit"\n', encoding="utf-8")
+    (root / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    with pytest.raises(CliError) as raised:
+        discover(None, root)
+    error = raised.value
+    assert error.code == "SH501"
+    assert f"rootinit was imported from {root.resolve() / '__init__.py'}" in error.message
+    assert error.fix is not None and "delete tests/__init__.py" in error.fix
+
+
 def test_an_attribute_that_is_not_a_world_is_refused() -> None:
     with pytest.raises(CliError) as raised:
         discover("no_world:NOT_A_WORLD", WORLDS / "no_world")

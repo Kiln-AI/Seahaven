@@ -1,8 +1,11 @@
 """The pytest fixtures a world's own tests are written against.
 
 Registered through the `pytest11` entry point, so installing `seahaven` activates
-it in any project and nothing has to be added to a `conftest.py`. It does nothing
-to a run that does not use its fixtures: two fixtures, one marker and one option.
+it in any project and nothing has to be added to a `conftest.py`. It adds two
+fixtures, one marker and one option, and does nothing to a run that does not use
+them, with one exception: a directory that holds an `__init__.py` and
+`src/<the directory's own name>/` is collected as a plain directory and not as a
+package, as in a world `seahaven hub` has been run on.
 
 A world's test says which fixture it starts from and nothing else::
 
@@ -31,6 +34,7 @@ is the whole interface.
 """
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -80,6 +84,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     """Register the marker, so `--strict-markers` accepts a world's tests."""
     config.addinivalue_line("markers", _MARKER_SIGNATURE)
+
+
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
+def pytest_collect_directory(path: Path, parent: pytest.Collector) -> pytest.Collector | None:
+    """A directory holding an `__init__.py` and `src/<its own name>` is a directory to pytest,
+    not a package."""
+    # optionalhook: pytest 7 has no pytest_collect_directory, and an unknown hook fails every run.
+    # `openenv push` requires an `__init__.py` at a hub world's root. Collected as a
+    # package, pytest imports that file under the directory's name, and when that
+    # is the world's package name `import_module` returns it instead of `src/<name>`.
+    if (path / "__init__.py").is_file() and (path / "src" / path.name).is_dir():
+        return pytest.Dir.from_parent(parent, path=path)
+    return None
 
 
 @pytest.fixture(scope="session")
