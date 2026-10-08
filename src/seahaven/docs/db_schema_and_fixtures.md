@@ -9,6 +9,7 @@ runs on, the schema that shapes it, and the fixtures that hold the starting stat
 | [The schema](#the-schema) | Where the tables are declared, the three rules, and the schema hash |
 | [What a fixture is](#what-a-fixture-is) | The directory, the sidecar file, and the rules that keep a fixture trustworthy |
 | [Building a fixture](#building-a-fixture) | Blank instances, bulk loading, and the commands |
+| [Adjusting a fixture per episode](#adjusting-a-fixture-per-episode) | `setup_sql`, and when a fixture or a startup hook is the better tool |
 | [The generator is committed](#the-generator-is-committed) | Why the script that builds a fixture ships beside it |
 | [Writing a description](#writing-a-description) | The one field written for a person |
 | [When the schema changes](#when-the-schema-changes) | Regenerating every fixture, and why nothing migrates |
@@ -236,6 +237,70 @@ with world.instance("seeded") as inst:
 
 `freeze` cannot run inside a `bulk()` block, because the rows are not committed yet. Leave the block
 first.
+
+## Adjusting a fixture per episode
+
+An eval often needs a fixture with one small change: a due date moved, a comment deleted, one more
+user. `setup_sql` makes that change without a new fixture and without code. It is a parameter of
+`world.instance(...)`, and so of `reset` over a server
+([serving_and_openenv.md](serving_and_openenv.md#sessions-and-instances)).
+
+`setup_sql` is one string of SQL statements separated by `;`. Seahaven runs them in order on the new
+instance, after the fixture is copied (or the blank schema is built) and before the startup hooks
+run, in one transaction. A startup hook therefore sees the rows `setup_sql` wrote. Those rows are
+starting state, so they are not in the change log. `inst.state()["setup_sql"]` records the string
+as given.
+
+```python
+from pathlib import Path
+
+import seahaven
+
+world = seahaven.World(
+    name="notes",
+    version="1.0.0",
+    schema=(
+        "CREATE TABLE notes "
+        "(id TEXT PRIMARY KEY, body TEXT NOT NULL, done INTEGER NOT NULL) STRICT;"
+    ),
+    fixtures_dir=Path("fixtures"),
+    state_format="seahaven.state/1",
+)
+
+with world.instance(now="2026-06-01T09:00:00.000Z", clock_mode="fixed") as inst:
+    with inst.bulk() as ctx:
+        ctx.db.execute("INSERT INTO notes (id, body, done) VALUES ('n1', 'Buy milk', 0)")
+    inst.freeze("one_note", "One open note.")
+
+setup_sql = """
+    UPDATE notes SET done = 1 WHERE id = 'n1';
+    INSERT INTO notes (id, body, done) VALUES ('n2', 'Call the bank; ask about fees', 0);
+"""
+
+with world.instance("one_note", setup_sql=setup_sql) as inst:
+    rows = inst.inspect().rows("SELECT id, done FROM notes ORDER BY id")
+    assert rows == [{"id": "n1", "done": 1}, {"id": "n2", "done": 0}]
+    assert inst.change_log() == []
+    assert inst.state()["setup_sql"] == setup_sql
+```
+
+**Write rows only.** Use `INSERT`, `UPDATE` and `DELETE`. A statement that changes the schema,
+controls the transaction or attaches a database is refused, and instance creation fails with a
+`WorldBug` that names the statement. [reference/api.md](reference/api.md#setup_sql) lists what is
+refused. To change the schema, change the world and bump its version.
+
+In a world that adds other worlds, an added node's tables are named `<schema>.<table>`, as in
+`inst.inspect()` ([composition.md](composition.md#what-an-eval-sees)). `random()` and
+`randomblob()` draw from the instance's seed, so the same `seed` and the same `setup_sql` write the
+same rows. SQL's clock functions read the instance's clock.
+
+Choose the tool by what the change is:
+
+| Use | When |
+|---|---|
+| a new fixture | many evals start from the same state, or the change is large. Freeze it once, as above |
+| `setup_sql` | one eval needs a small change to the rows of a fixture |
+| a startup hook | the setup needs the world's own logic or `ctx.state`, such as who the agent acts as ([authoring.md](authoring.md#instance-startup)) |
 
 ## The generator is committed
 

@@ -18,6 +18,6 @@ status: complete
   `tests/state_v1.schema.json`. Tests for OpenEnv (in process and over the WebSocket), HTTP `PUT`,
   `seahaven mcp --reset-options`, and the projecttracker test (SQL inserts a user, `startup` names
   them, `create_issue` is attributed to them).
-- [ ] Phase 3: Docs. Updates to six existing pages, no new page: `serving_and_openenv.md`, `db_schema_and_fixtures.md` (new short section with
+- [x] Phase 3: Docs. Updates to six existing pages, no new page: `serving_and_openenv.md`, `db_schema_and_fixtures.md` (new short section with
   a runnable example), `state.md`, `composition.md`, `reference/api.md`, `reference/cli.md`, per
   the AGENTS.md docs style.

@@ -209,14 +209,16 @@ uv run --extra mcp seahaven mcp
 uv run --extra mcp seahaven mcp --fixture small_startup --seed 7
 uv run --extra mcp seahaven mcp --fixture small_startup --clock-mode tick
 uv run --extra mcp seahaven mcp --reset-options '{"startup": {"reviewer": "ada"}}'
+uv run --extra mcp seahaven mcp --reset-options '{"setup_sql": "UPDATE issues SET due_at = NULL"}'
 ```
 
-`--reset-options` is the whole of what `world.instance()` is called with, and the only way to reach
-a world's own startup keywords, which go inside `"startup"`. `--fixture`, `--seed`, `--now` and
-`--clock-mode` are convenience spellings of four of its keys. Giving `--reset-options` together with
-one of those four flags is refused rather than merged, and so is a key `world.instance()` does not
-take. An instance this command makes never has control tools, and `--reset-options` refuses the
-`"control_tools"` key that would ask for them.
+`--reset-options` is the whole of what `world.instance()` is called with. It is the only way to
+pass `"startup"`, which holds a world's own startup keywords, and `"setup_sql"`, the SQL that
+changes the fixture's rows before the startup hooks run ([api.md](api.md#setup_sql)). `--fixture`,
+`--seed`, `--now` and `--clock-mode` are convenience spellings of four of its keys. Giving
+`--reset-options` together with one of those four flags is refused rather than merged, and so is a
+key `world.instance()` does not take. An instance this command makes never has control tools, and
+`--reset-options` refuses the `"control_tools"` key that would ask for them.
 
 Read [../serving_and_openenv.md](../serving_and_openenv.md#serving-one-world-to-an-mcp-client) for
 the `.mcp.json` that launches the command, and for what a client is and is not given.
