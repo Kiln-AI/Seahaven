@@ -602,6 +602,9 @@ The image serves `<package>.openenv_app:app` on port 8000, and answers its `HEAL
 `/health`. The `app` key in `openenv.yaml` names the same app, because OpenEnv's Modal and Daytona
 providers start the server from that key rather than from the `Dockerfile`.
 
+A Hugging Face Space runs the image as user 1000, not as root. The server can read what the build
+installed, but it cannot write to `/app` or to anything else the build made.
+
 **The image is a checkout, and has to stay one.** The generated `Dockerfile` does `COPY . /app` and
 then `uv sync`, so the container holds the world's whole directory with the framework installed into
 its environment. Replace those two lines with a plain install of the world and the image builds, the

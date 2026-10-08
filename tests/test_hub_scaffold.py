@@ -121,15 +121,67 @@ def test_the_healthcheck_asks_a_route_the_server_has(
     get(url + probe[2])
 
 
-def test_the_worlds_interpreter_is_first_on_the_images_path(published: Path) -> None:
-    """The providers run `python -m uvicorn <app>`; `uv sync` puts the venv in the workdir."""
-    instructions = [
+def instructions(published: Path) -> list[list[str]]:
+    """Each top-level Dockerfile instruction as `[keyword, argument]`, in order."""
+    return [
         line.split(maxsplit=1)
         for line in (published / "Dockerfile").read_text(encoding="utf-8").splitlines()
         if line and not line.startswith((" ", "#"))
     ]
-    workdir = next(argument for keyword, argument in instructions if keyword == "WORKDIR")
-    assert ["ENV", f'PATH="{workdir}/.venv/bin:$PATH"'] in instructions
+
+
+def workdir(published: Path) -> str:
+    return next(argument for keyword, argument in instructions(published) if keyword == "WORKDIR")
+
+
+def position(published: Path, keyword: str, argument_start: str) -> int:
+    """The index of the one instruction with this keyword whose argument starts so."""
+    [index] = [
+        index
+        for index, (instruction, argument) in enumerate(instructions(published))
+        if instruction == keyword and argument.startswith(argument_start)
+    ]
+    return index
+
+
+def test_the_worlds_interpreter_is_first_on_the_images_path(published: Path) -> None:
+    """The providers run `python -m uvicorn <app>`; `uv sync` puts the venv in the workdir."""
+    assert ["ENV", f'PATH="{workdir(published)}/.venv/bin:$PATH"'] in instructions(published)
+
+
+def test_the_sync_runs_with_a_uv_that_can_install_cpython_3_14(published: Path) -> None:
+    """The base image's uv 0.5.27 knows no final 3.14; uv 0.9.0 was the first that did."""
+    copy = position(published, "COPY", "--from=ghcr.io/astral-sh/uv:")
+    pinned = re.fullmatch(
+        r"--from=ghcr\.io/astral-sh/uv:(\d+)\.(\d+)\.(\d+) /uv /uvx /usr/local/bin/",
+        instructions(published)[copy][1],
+    )
+    assert pinned is not None, "uv is not copied in at an exact version"
+    assert tuple(int(part) for part in pinned.groups()) >= (0, 9, 0)
+    assert copy < position(published, "RUN", "uv sync")
+
+
+def test_the_sync_installs_cpython_where_a_non_root_user_can_read_it(published: Path) -> None:
+    """A Space runs the image as uid 1000, and uv's default directory is under /root."""
+    setting = position(published, "ENV", "UV_PYTHON_INSTALL_DIR=")
+    directory = instructions(published)[setting][1].removeprefix("UV_PYTHON_INSTALL_DIR=")
+    assert directory.startswith("/") and not Path(directory).is_relative_to("/root")
+    assert setting < position(published, "RUN", "uv sync")
+
+
+def test_the_server_starts_without_uv(published: Path) -> None:
+    """`uv run` as uid 1000 cannot write a cache or sync the root-owned venv."""
+    command = parse_dockerfile_cmd((published / "Dockerfile").read_text(encoding="utf-8"))
+    assert command is not None
+    assert command.split()[:3] == ["python", "-m", "uvicorn"]
+
+
+def test_the_healthcheck_runs_the_worlds_own_interpreter(published: Path) -> None:
+    """A bare `python` falls through to the base image's, and passes on a broken image."""
+    dockerfile = (published / "Dockerfile").read_text(encoding="utf-8")
+    probe = re.search(r"^HEALTHCHECK .*? CMD[\s\\]+(\S+) -c ", dockerfile, re.M | re.S)
+    assert probe is not None, "the HEALTHCHECK does not run a Python interpreter"
+    assert probe[1] == f"{workdir(published)}/.venv/bin/python"
 
 
 def test_the_space_card_points_hugging_face_at_the_server(
