@@ -375,6 +375,17 @@ def test_reset_options_reach_a_startup_hook(project: Project) -> None:
     assert talk(project, work, "--reset-options", given)["region"] == "eu"
 
 
+def test_reset_options_carry_setup_sql_to_the_instance(project: Project) -> None:
+    """The instance starts with the rows the SQL wrote, before the first call."""
+
+    async def work(client: Client) -> Any:
+        return answered(await client.call_tool("notes", {}))
+
+    given = json.dumps({"setup_sql": "INSERT INTO notes (id, body) VALUES ('n1', 'seeded')"})
+
+    assert talk(project, work, "--reset-options", given) == ["seeded"]
+
+
 def test_two_calls_in_flight_serialise(project: Project) -> None:
     """Calls into one instance queue on the instance's lock, so no update is lost."""
 

@@ -306,6 +306,14 @@ def test_a_put_body_is_laid_over_the_servers_options(notes_world: World) -> None
         assert len(client.get("/worlds/c/notes").json()) == 1
 
 
+def test_a_put_body_with_setup_sql_starts_the_instance_with_its_rows(
+    client: httpx.Client,
+) -> None:
+    setup_sql = "INSERT INTO notes VALUES ('n1', 'seeded', '2024-03-05T12:00:00.000Z')"
+    assert client.put("/worlds/a", json={"setup_sql": setup_sql}).status_code == 201
+    assert [note["body"] for note in client.get("/worlds/a/notes").json()] == ["seeded"]
+
+
 @pytest.mark.parametrize(
     ("body", "words"),
     [
@@ -320,6 +328,8 @@ def test_a_put_body_is_laid_over_the_servers_options(notes_world: World) -> None
         (b'{"fixture": "nope"}', "world 'notes_api' has no fixture 'nope'"),
         (b'{"clock_mode": "nope"}', "unknown clock mode 'nope'"),
         (b'{"startup": {"nope": 1}}', "unknown startup keyword(s): ['nope']"),
+        (b'{"setup_sql": 1}', "setup_sql takes a string of SQL statements"),
+        (b'{"setup_sql": "DROP TABLE notes"}', "setup_sql statement 1 of 1 was refused"),
     ],
 )
 def test_a_put_body_that_is_refused_is_400(

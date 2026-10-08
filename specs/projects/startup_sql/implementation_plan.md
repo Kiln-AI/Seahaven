@@ -12,7 +12,7 @@ status: complete
   the pytest marker signature. Tests in `tests/test_setup_sql.py` through `world.instance(...)`:
   behaviour, composed worlds, FTS5, startup hooks seeing setup rows, seeding, change log, every
   refusal and error message, rollback leaving no directory, and the unit tests.
-- [ ] Phase 2: Entry points and state document. `setup_sql` in the state document envelope and
+- [x] Phase 2: Entry points and state document. `setup_sql` in the state document envelope and
   `SeahavenState`; OpenEnv `reset`, `SeahavenResetRequest` and `RESET_ORDER`; the stale
   `cli/mcp.py` comment; console mock schema and smoke order; every pinned test and
   `tests/state_v1.schema.json`. Tests for OpenEnv (in process and over the WebSocket), HTTP `PUT`,

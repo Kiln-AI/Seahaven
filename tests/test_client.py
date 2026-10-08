@@ -141,6 +141,7 @@ DOCUMENT_FRAME: dict[str, Any] = {
     "now": INSTANT_ISO,
     "clock_mode": "tick",
     "startup": {"tenant": "globex"},
+    "setup_sql": "UPDATE notes SET n = 1",
     "call_count": 2,
     "state": {
         "db": {
@@ -177,6 +178,7 @@ def test_parse_state_answers_a_typed_state(client: SeahavenClient) -> None:
     assert (state.seed, state.now, state.call_count) == (7, INSTANT_ISO, 2)
     assert state.clock_mode == "tick"
     assert state.startup == {"tenant": "globex"}
+    assert state.setup_sql == "UPDATE notes SET n = 1"
     # `state` is untyped on purpose: the format owns its shape, so it arrives as
     # the dict the formatter produced and nothing validates it here.
     assert state.state["db"]["log"][0]["key"] == {"id": "n1"}
@@ -193,7 +195,7 @@ def test_the_document_is_the_state_without_the_step_count(client: SeahavenClient
 def test_state_answers_none_for_the_fields_a_pre_reset_frame_leaves_null(
     client: SeahavenClient,
 ) -> None:
-    """Before the first reset the document answers `null` for five envelope fields.
+    """Before the first reset the document answers `null` for seven envelope fields.
 
     They are declared with a default for that reason, so a harness that logs
     `state.fixture` every step does not fail on step zero -- and nor does a frame
@@ -210,13 +212,15 @@ def test_state_answers_none_for_the_fields_a_pre_reset_frame_leaves_null(
             "state": {"db": {"log": []}},
         }
     )
-    assert (state.composition, state.fixture, state.seed, state.now, state.startup) == (
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
+    assert (
+        state.composition,
+        state.fixture,
+        state.seed,
+        state.now,
+        state.clock_mode,
+        state.startup,
+        state.setup_sql,
+    ) == (None, None, None, None, None, None, None)
 
 
 def test_state_keeps_an_envelope_field_it_does_not_know(client: SeahavenClient) -> None:

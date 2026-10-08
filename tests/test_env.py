@@ -253,6 +253,35 @@ def test_a_failed_reset_leaves_the_session_as_a_fresh_one(env: SeahavenEnv) -> N
     assert env.state.episode_id == "second"
 
 
+def test_setup_sql_reaches_the_instance_through_reset(env: SeahavenEnv, world: World) -> None:
+    """The SQL runs on the fixture's copy, and the document reports it without logging its rows."""
+    fixture_id = make_fixture(world)
+    setup_sql = "UPDATE notes SET n = 5 WHERE id = 'n0'; INSERT INTO notes VALUES ('n1', 'b', 1)"
+    env.reset(fixture=fixture_id, setup_sql=setup_sql)
+
+    rows = call(env, "rows", sql="SELECT id, n FROM notes ORDER BY id").result
+    assert rows == [{"id": "n0", "n": 5}, {"id": "n1", "n": 1}]
+    state = env.state
+    assert state.setup_sql == setup_sql
+    assert state.state == {"db": {"log": []}}
+    assert state.call_count == 1
+
+
+def test_a_failing_setup_sql_leaves_the_session_as_a_fresh_one(env: SeahavenEnv) -> None:
+    env.reset(setup_sql="INSERT INTO notes VALUES ('n0', 'a', 0)")
+    first = env.instance
+    assert first is not None
+
+    with pytest.raises(WorldBug, match=r"^setup_sql statement 2 of 2 failed: no such table: nope"):
+        env.reset(setup_sql="INSERT INTO notes VALUES ('n1', 'a', 0); DELETE FROM nope")
+    assert env.instance is None
+    assert not first.dir.exists()
+    assert (env.state.episode_id, env.state.setup_sql) == (None, None)
+
+    env.reset()
+    assert call(env, "rows", sql="SELECT id FROM notes").result == []
+
+
 RESET_PARAMETERS = (
     "self",
     "seed",
@@ -263,6 +292,7 @@ RESET_PARAMETERS = (
     "state_format",
     "control_tools",
     "startup",
+    "setup_sql",
 )
 
 
@@ -1043,6 +1073,10 @@ DECLARED_DESCRIPTIONS: dict[type[BaseModel], dict[str, str]] = {
             "The world's own startup keywords -- reset's `startup` -- rendered as JSON when "
             "the instance was created: a hook receives the caller's value and this carries its "
             "JSON rendering. Empty when there were none, null before any reset."
+        ),
+        "setup_sql": (
+            "The SQL that reset's `setup_sql` ran against the instance when it was created, "
+            "exactly as given. Null when there was none, and before any reset."
         ),
         "call_count": (
             "How many calls have been dispatched to the instance. Not `step_count`, which also "

@@ -273,7 +273,7 @@ class SeahavenState(State):
     # subclass's fields were published at all.
     #
     # Declared in `functional_spec.md` §3.1's order, less `episode_id`, which the
-    # base carries. A field the document always writes is required here; the six
+    # base carries. A field the document always writes is required here; the seven
     # it answers `null` for default to `None`, so reading one off a frame that
     # left it out answers `None` rather than raising.
     format: str = Field(
@@ -322,6 +322,13 @@ class SeahavenState(State):
             "JSON rendering. Empty when there were none, null before any reset."
         ),
     )
+    setup_sql: str | None = Field(
+        default=None,
+        description=(
+            "The SQL that reset's `setup_sql` ran against the instance when it was created, "
+            "exactly as given. Null when there was none, and before any reset."
+        ),
+    )
     call_count: int = Field(
         description=(
             "How many calls have been dispatched to the instance. Not `step_count`, which also "
@@ -339,7 +346,7 @@ class SeahavenState(State):
 # The console lays its reset form out in `properties` order, and pydantic puts
 # the inherited OpenEnv fields first. The fields not named here keep their own
 # order, after these.
-RESET_ORDER = ("fixture", "startup", "now", "clock_mode", "state_format")
+RESET_ORDER = ("fixture", "startup", "setup_sql", "now", "clock_mode", "state_format")
 
 
 def _order_properties(schema: dict[str, Any], leading: tuple[str, ...]) -> None:
@@ -391,6 +398,13 @@ class SeahavenResetRequest(ResetRequest):
     )
     startup: dict[str, Any] | None = Field(
         default=None, description="The world's own startup keywords, passed to its startup hooks."
+    )
+    setup_sql: str | None = Field(
+        default=None,
+        description=(
+            "SQL statements, separated by ';', run against the new instance before its startup "
+            "hooks. Rows only: INSERT, UPDATE, DELETE and SELECT."
+        ),
     )
 
     @classmethod
@@ -490,6 +504,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         state_format: str | None = None,
         control_tools: Any = None,
         startup: Mapping[str, Any] | None = None,
+        setup_sql: str | None = None,
         **unknown: Any,
     ) -> Observation:
         """Start an episode: a fresh instance, and the session's previous one gone.
@@ -513,7 +528,8 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         unregistered format is refused before anything is copied. Those are the
         instance's own rules and not a second set: everything here is passed
         straight through, including `startup`, the world's own keyword
-        namespace.
+        namespace, and `setup_sql`, the SQL the new instance runs before its
+        startup hooks.
 
         This signature is the reset wire schema. OpenEnv has no schema of its
         own for a reset message: its server introspects this method to bind the
@@ -587,6 +603,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
             episode_id=episode_id or str(uuid.uuid4()),
             control_tools=self.include_control_tools,
             startup=startup,
+            setup_sql=setup_sql,
         )
         self._instance = instance
         return Observation(
