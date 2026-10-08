@@ -46,8 +46,8 @@ WORLD_OPTION = "--seahaven-world"
 
 _MARKER_SIGNATURE = (
     f"{MARKER}(fixture, seed=None, now=None, clock_mode=None, state_format=None, "
-    "control_tools=False, startup=None): the fixture the `instance` fixture is created from; "
-    "fixture=None is a blank instance"
+    "control_tools=False, startup=None, setup_sql=None): the fixture the `instance` fixture is "
+    "created from; fixture=None is a blank instance"
 )
 
 _EXAMPLE = (

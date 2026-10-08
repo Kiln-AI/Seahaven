@@ -120,7 +120,7 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call it; there is nothing to decorate |
 | `world.state_format(name)` | register a state format of this world's own, as a decorator. The name is `<family>/<major>` and may not begin with `seahaven.` |
 | `world.resolve_state_format(name)` | the formatter a name answers to: a built-in, or one this world registered. Asked of the root of an instance and of nothing else |
-| `world.instance(fixture=None, *, seed=None, now=None, clock_mode=None, state_format=None, control_tools=False, startup=None)` | make an instance; a context manager. `now` is where the clock starts, no earlier than the fixture's `now`. `clock_mode` is how the clock moves, `None` for `world.default_clock_mode`. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance. `startup` is the world's own keywords, passed to the startup hooks that name them |
+| `world.instance(fixture=None, *, seed=None, now=None, clock_mode=None, state_format=None, control_tools=False, startup=None, setup_sql=None)` | make an instance; a context manager. `now` is where the clock starts, no earlier than the fixture's `now`. `clock_mode` is how the clock moves, `None` for `world.default_clock_mode`. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance. `startup` is the world's own keywords, passed to the startup hooks that name them. `setup_sql` is SQL run on the new instance before the startup hooks; see [`setup_sql`](#setup_sql) |
 | `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
@@ -187,6 +187,7 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
 | `inst.id`, `inst.fixture`, `inst.seed` | the instance id, the fixture id (or `None`), the derived seed bytes |
 | `inst.state_format` | the format `inst.state()` answers in, fixed for the instance's life |
+| `inst.setup_sql` | the `setup_sql` the instance was created with, as given, or `None` |
 | `inst.control_tools` | whether the framework's own control tool is callable on this instance, fixed for the instance's life |
 | `inst.clock`, `inst.world`, `inst.state_path` | the clock, the world, and the instance's own database file |
 
@@ -197,6 +198,28 @@ with `control_tools=True`. On every other instance its name raises `UnknownTool`
 a name the world does not have raises, and no instance lists it either way. The tool is deprecated:
 read `inst.state()` instead. Over a server, `serve --include-control-tools` is what makes each
 session's instance one that can call it, and [cli.md](cli.md) names the tool.
+
+### `setup_sql`
+
+`world.instance(setup_sql=...)` takes a string of SQL statements separated by `;`, or `None`. The
+statements run in order, after the fixture is copied (or the blank schema is built) and before the
+startup hooks, in one transaction. The connection has the root's tables unqualified and every added
+node's tables under its schema name, as `inst.inspect()` does. A statement may read and write the
+rows of every table, call the functions in `seahaven.sandbox.ALLOWED_FUNCTIONS`, and run a pragma
+that only reports, such as `PRAGMA table_info(issues)`. It is refused when it:
+
+- changes the schema: `CREATE`, `DROP`, `ALTER`, `REINDEX` or `ANALYZE`;
+- controls the transaction: `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT` or `RELEASE`;
+- runs `ATTACH` or `DETACH`;
+- runs any other pragma, with or without a value, such as `PRAGMA foreign_keys = OFF` or
+  `PRAGMA user_version`;
+- calls a function outside the allowlist, `MATCH` and `load_extension()` included;
+- reads a table-valued function, such as `json_each()` or `pragma_table_info()`;
+- writes an FTS5 shadow table or one of SQLite's own tables.
+
+A refused or failing statement raises `WorldBug` naming its position, and every statement before it
+is rolled back. No instance is left behind. See
+[../db_schema_and_fixtures.md](../db_schema_and_fixtures.md#adjusting-a-fixture-per-episode).
 
 ## `Ctx`
 
@@ -626,8 +649,8 @@ it to use Seahaven. See [../http_apis.md](../http_apis.md) for more.
 
 Installing `seahaven` activates the plugin. It adds two fixtures, `world` (session-scoped) and
 `instance` (one per test); one marker, `@pytest.mark.seahaven(fixture, seed=None, now=None,
-clock_mode=None, state_format=None, control_tools=False, startup=None)`; and one option,
-`--seahaven-world module:attr`. See [../testing.md](../testing.md).
+clock_mode=None, state_format=None, control_tools=False, startup=None, setup_sql=None)`; and one
+option, `--seahaven-world module:attr`. See [../testing.md](../testing.md).
 
 ## The concurrency gate
 

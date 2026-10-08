@@ -282,6 +282,13 @@ const RESET_SCHEMA = {
       default: null,
       description: "The world's own startup keywords, passed to its startup hooks.",
     },
+    setup_sql: {
+      anyOf: [{ type: "string" }, { type: "null" }],
+      default: null,
+      title: "Setup Sql",
+      description:
+        "SQL statements, separated by ';', run against the new instance before its startup hooks. Rows only: INSERT, UPDATE, DELETE and SELECT.",
+    },
     now: {
       anyOf: [{ type: "string" }, { type: "null" }],
       default: null,

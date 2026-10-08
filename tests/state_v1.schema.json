@@ -14,6 +14,7 @@
     "now",
     "clock_mode",
     "startup",
+    "setup_sql",
     "call_count",
     "state"
   ],
@@ -79,6 +80,7 @@
     "now": {"type": ["string", "null"]},
     "clock_mode": {"enum": ["fixed", "tick", "running", "wall", null]},
     "startup": {"type": ["object", "null"]},
+    "setup_sql": {"type": ["string", "null"]},
     "call_count": {"type": "integer", "minimum": 0},
     "state": {
       "type": "object",

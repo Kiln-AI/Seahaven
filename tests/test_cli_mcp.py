@@ -165,6 +165,15 @@ def test_reset_options_are_passed_whole(
     }
 
 
+def test_setup_sql_is_a_reset_option(calls: list[Call], capsys: pytest.CaptureFixture[str]) -> None:
+    given = '{"setup_sql": "UPDATE notes SET n = 1; DELETE FROM notes WHERE n = 2"}'
+
+    assert serve_mcp(capsys, "--reset-options", given).code == 0
+    assert calls[0].reset_options["setup_sql"] == (
+        "UPDATE notes SET n = 1; DELETE FROM notes WHERE n = 2"
+    )
+
+
 def test_the_general_variable_is_passed_whole(
     calls: list[Call], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -289,6 +298,7 @@ def test_reset_options_take_the_keyword_arguments_of_world_instance() -> None:
         "fixture",
         "now",
         "seed",
+        "setup_sql",
         "startup",
         "state_format",
     ]
@@ -314,9 +324,9 @@ def test_a_key_world_instance_does_not_take_is_refused(
     assert (result.code, calls) == (1, [])
     assert result.err.strip() == (
         '--reset-options does not take "region"; --reset-options takes "clock_mode", "fixture", '
-        '"now", "seed", "startup" and "state_format", and a world\'s own startup keywords go '
-        'inside "startup": --reset-options \'{"fixture": "small_startup", "startup": '
-        '{"user_id": "u_12"}}\''
+        '"now", "seed", "setup_sql", "startup" and "state_format", and a world\'s own startup '
+        'keywords go inside "startup": --reset-options \'{"fixture": "small_startup", '
+        '"startup": {"user_id": "u_12"}}\''
     )
 
 

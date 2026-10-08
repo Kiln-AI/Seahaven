@@ -77,6 +77,7 @@ def test_the_envelope_reports_the_format_the_versions_and_the_world(instance: In
         "now",
         "clock_mode",
         "startup",
+        "setup_sql",
         "call_count",
         "state",
     ]
@@ -173,6 +174,20 @@ def test_the_startup_keywords_are_reported_as_the_hooks_received_them(tmp_path: 
         assert live.state()["startup"] == {"tier": "paid", "limits": {"calls": 10}}
     with world.instance(None) as live:
         assert live.state()["startup"] == {}
+
+
+def test_the_setup_sql_is_reported_exactly_as_given(tmp_path: Path) -> None:
+    """The string itself, not the statements it was split into, so a reader can run it again."""
+    world = build_world(tmp_path)
+    given = "INSERT INTO notes VALUES ('n1', 'a; b', 0);\n  -- seeded\n"
+
+    with world.instance(None, setup_sql=given) as live:
+        assert live.state()["setup_sql"] == given
+        assert live.state()["state"]["db"]["log"] == []
+    with world.instance(None, setup_sql="") as live:
+        assert live.state()["setup_sql"] == ""
+    with world.instance(None) as live:
+        assert live.state()["setup_sql"] is None
 
 
 def test_a_startup_keyword_a_document_could_not_carry_is_refused_at_creation(
@@ -355,6 +370,7 @@ def test_every_built_in_answers_with_no_instance(world: World) -> None:
         assert (answered["episode_id"], answered["seed"], answered["now"]) == (None, None, None)
         assert answered["clock_mode"] is None
         assert answered["startup"] is None
+        assert answered["setup_sql"] is None
         assert answered["call_count"] == 0
         assert log_of(answered) == []
         if name == SEAHAVEN_STATE_CALLS_V1:
@@ -363,7 +379,7 @@ def test_every_built_in_answers_with_no_instance(world: World) -> None:
 
 def test_a_built_in_document_validates_against_the_published_schema(tmp_path: Path) -> None:
     live_world = emporium_world(tmp_path)
-    with live_world.instance(None, now=INSTANT_ISO) as live:
+    with live_world.instance(None, now=INSTANT_ISO, setup_sql="SELECT 1") as live:
         live.call("settle_order", total=250)
         live.call("pay_create_charge", amount=100)
 

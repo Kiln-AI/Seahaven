@@ -419,13 +419,14 @@ def test_the_state_document_over_the_wire_carries_no_internals(tmp_path: Path) -
 SCHEMA = json.loads((Path(__file__).parent / "state_v1.schema.json").read_text())
 
 # The one episode both clients drive: a fixture, a seed, a named episode, a
-# startup keyword and one write, so no envelope field below is left at its
-# default.
+# startup keyword, setup SQL and one write, so no envelope field below is left
+# at its default. The setup row is not in the log: only calls are.
 EPISODE: dict[str, Any] = {
     "seed": 7,
     "episode_id": "ep-1",
     "clock_mode": "fixed",
     "startup": {"tenant": "globex"},
+    "setup_sql": "INSERT INTO notes VALUES ('n2', 'seeded', 0)",
 }
 WRITE = CallToolAction(tool_name="execute", arguments={"sql": insert("n1")})
 
@@ -465,6 +466,7 @@ def expected_document(world: World, fixture_id: str) -> dict[str, Any]:
         "now": INSTANT_ISO,
         "clock_mode": "fixed",
         "startup": {"tenant": "globex"},
+        "setup_sql": "INSERT INTO notes VALUES ('n2', 'seeded', 0)",
         "call_count": 1,
         "state": {
             "db": {
@@ -608,6 +610,21 @@ def test_an_unknown_startup_keyword_is_an_error_frame_and_the_session_survives(
         reset = env.reset(now=INSTANT_ISO, clock_mode="fixed")
         assert reset.observation.metadata["now"] == INSTANT_ISO
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
+
+
+def test_setup_sql_reaches_the_instance_over_the_wire(world: World) -> None:
+    """A refused statement is an error frame, and the session takes the next reset."""
+    setup_sql = "INSERT INTO notes VALUES ('n1', 'a body', 0)"
+    with serving(world) as url, SeahavenClient(base_url=url) as env:
+        with pytest.raises(
+            RuntimeError,
+            match=r"(?s)setup_sql statement 1 of 1 was refused: it changes the schema\..*"
+            r"\(code: EXECUTION_ERROR\)",
+        ):
+            env.reset(setup_sql="DROP TABLE notes")
+        env.reset(setup_sql=setup_sql)
+        assert ids(env.call("rows", sql="SELECT id FROM notes")) == ["n1"]
+        assert env.state().setup_sql == setup_sql
 
 
 def test_a_second_reset_over_the_wire_starts_from_the_fixture_again(world: World) -> None:

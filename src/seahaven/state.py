@@ -103,6 +103,7 @@ def envelope(world: World, instance: Instance | None, format: str) -> dict[str, 
         # Copied, not handed out: a caller that edits the document it was given
         # must not edit the instance, and every later read with it.
         "startup": copy.deepcopy(instance.startup) if instance is not None else None,
+        "setup_sql": instance.setup_sql if instance is not None else None,
         "call_count": instance.call_count if instance is not None else 0,
     }
 

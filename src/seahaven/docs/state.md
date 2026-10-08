@@ -59,6 +59,7 @@ A document has two halves, and each half has its own owner.
   "now": "2026-06-01T09:00:00.004Z",
   "clock_mode": "running",
   "startup": {},                                               // the startup keywords, if any
+  "setup_sql": null,                                           // the setup SQL, if any
   "call_count": 2,
   "state": {"db": {"log": [ … ]}}                              // the formatter's output
 }
@@ -79,6 +80,7 @@ every format, built in or your own.
 | `now` | The instance's clock reading when the document was produced, as an ISO-8601 instant, the same string `inst.clock.iso()` answers. Producing a document reads the clock and never moves it |
 | `clock_mode` | How the instance's clock moves: `fixed`, `tick`, `running` or `wall` ([clock.md](clock.md)). `null` before the first `reset` over a server |
 | `startup` | The world's own startup keywords — `world.instance(startup={...})`, or the same `startup` on `reset` — rendered as JSON at instance creation. A hook receives the value the caller passed; the document carries that value's JSON rendering, so a `datetime` or a model is text or an object here. Empty when there were none |
+| `setup_sql` | The SQL that ran on the instance before its startup hooks — `world.instance(setup_sql=...)`, or the same `setup_sql` on `reset` — exactly as given ([db_schema_and_fixtures.md](db_schema_and_fixtures.md#adjusting-a-fixture-per-episode)). `null` when there was none |
 | `call_count` | How many calls have been dispatched to the instance. The last call's ordinal is one less. Over a server this is **not** `step_count`, which counts tool listings as well |
 | `state` | The formatter's output, and the only part of the document `format` describes |
 
@@ -419,9 +421,9 @@ Four more rules are worth knowing:
   records for both, under the same `i`, told apart by `world`. A tool that reaches another node
   through `ctx.worlds.<name>.call(...)` takes no ordinal of its own: the caller made one call, and
   the rows that tool wrote carry that call's `i`.
-- **Startup writes are not in the log.** Startup hooks run when the instance is created, before the
-  first call, so what they wrote is starting state rather than the agent's work. Every write after
-  that is in the log, `inst.bulk()` writes included, which carry `i: null`.
+- **Startup writes are not in the log.** `setup_sql` and the startup hooks run when the instance is
+  created, before the first call, so what they wrote is starting state rather than the agent's work.
+  Every write after that is in the log, `inst.bulk()` writes included, which carry `i: null`.
 
 What is tracked is every table of every node, except the tables that node's world named in
 `World(untracked_tables=...)`, FTS5's shadow tables, and virtual tables. A table with no explicit
@@ -522,12 +524,12 @@ with projecttracker.world.instance() as blank:
     assert blank.state()["fixture"] is None  # built from the schema
 ```
 
-For a blank instance, `fixture` is `null` and the starting state is the world's schema plus
-whatever the startup hooks wrote, with `startup` recording the startup keywords it was created
-with. **The format does not promise that starting state is reproducible.** A startup hook is
-ordinary world code and may read anything, a blank instance's clock starts at wall time unless
-`now=` was given, and only the `fixed` and `tick` clocks replay.
-Grade against a frozen fixture when the starting state has to be pinned down.
+The starting state is the fixture, then the rows `setup_sql` wrote, then whatever the startup hooks
+wrote. `setup_sql` and `startup` record what the instance was created with. For a blank instance,
+`fixture` is `null` and the world's schema takes the fixture's place. **The format does not promise
+that starting state is reproducible.** A startup hook is ordinary world code and may read anything,
+a blank instance's clock starts at wall time unless `now=` was given, and only the `fixed` and
+`tick` clocks replay. Grade against a frozen fixture when the starting state has to be pinned down.
 
 ## The compatibility contract
 

@@ -85,7 +85,7 @@ WITHHELD_REASON = (
 # The keys a `--reset-options` object may name. Read off the signature of
 # `world.instance()` rather than written out, so a keyword argument the
 # framework adds is one this command takes without an edit here.
-# `tests/test_cli_mcp.py` pins the five names, so a parameter added to
+# `tests/test_cli_mcp.py` pins the names, so a parameter added to
 # `world.instance()` fails a test rather than reaching an MCP client unreviewed.
 RESET_OPTION_KEYS = frozenset(
     name

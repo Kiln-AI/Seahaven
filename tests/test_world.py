@@ -788,7 +788,9 @@ def test_a_world_with_no_startup_hooks_accepts_no_startup_keywords(world: World)
     assert world.accepted_startup_kwargs == frozenset()
 
 
-@pytest.mark.parametrize("name", ["fixture", "seed", "now", "state_format", "control_tools"])
+@pytest.mark.parametrize(
+    "name", ["fixture", "seed", "now", "state_format", "control_tools", "setup_sql"]
+)
 def test_a_startup_hook_may_take_a_framework_parameters_name(world: World, name: str) -> None:
     """Startup keywords have their own namespace, so no name is spent by the framework."""
     namespace: dict[str, Any] = {}

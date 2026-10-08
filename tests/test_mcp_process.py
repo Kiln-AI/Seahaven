@@ -375,6 +375,17 @@ def test_reset_options_reach_a_startup_hook(project: Project) -> None:
     assert talk(project, work, "--reset-options", given)["region"] == "eu"
 
 
+def test_reset_options_carry_setup_sql_to_the_instance(project: Project) -> None:
+    """The instance starts with the rows the SQL wrote, before the first call."""
+
+    async def work(client: Client) -> Any:
+        return answered(await client.call_tool("notes", {}))
+
+    given = json.dumps({"setup_sql": "INSERT INTO notes (id, body) VALUES ('n1', 'seeded')"})
+
+    assert talk(project, work, "--reset-options", given) == ["seeded"]
+
+
 def test_two_calls_in_flight_serialise(project: Project) -> None:
     """Calls into one instance queue on the instance's lock, so no update is lost."""
 
@@ -585,9 +596,9 @@ def test_a_startup_keyword_at_the_top_level_is_refused_before_anything_is_served
     assert finished.code == 1
     assert finished.err.splitlines() == [
         '--reset-options does not take "region"; --reset-options takes "clock_mode", "fixture", '
-        '"now", "seed", "startup" and "state_format", and a world\'s own startup keywords go '
-        'inside "startup": --reset-options \'{"fixture": "small_startup", "startup": '
-        '{"user_id": "u_12"}}\''
+        '"now", "seed", "setup_sql", "startup" and "state_format", and a world\'s own startup '
+        'keywords go inside "startup": --reset-options \'{"fixture": "small_startup", '
+        '"startup": {"user_id": "u_12"}}\''
     ]
     assert finished.out == ""
     assert project.living() == []

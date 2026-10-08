@@ -98,12 +98,13 @@ check(
   "the JSON box was shown although the environment publishes a reset schema",
 )
 // The form follows the schema's property order: fixture, then the startup
-// keywords in startup's place, then the rest.
+// keywords in startup's place, then setup_sql as a multi-line box, then the rest.
 const top = async (locator) => (await locator.boundingBox()).y
 const formOrder = [
   await top(page.getByRole("button", { name: "agency", exact: true })),
   await top(page.getByLabel("startup · User Id")),
   await top(page.getByLabel("startup · Team")),
+  await top(page.getByLabel("Setup Sql")),
   await top(page.getByLabel("Now")),
   await top(page.getByLabel("Seed")),
   await top(page.getByLabel("Episode Id")),
@@ -111,6 +112,10 @@ const formOrder = [
 check(
   formOrder.every((y, index) => index === 0 || formOrder[index - 1] < y),
   `the reset form is not in schema order: ${formOrder}`,
+)
+check(
+  (await page.getByLabel("Setup Sql").evaluate((element) => element.tagName)) === "TEXTAREA",
+  "setup_sql is not a multi-line text box",
 )
 await page.getByRole("button", { name: "agency", exact: true }).click()
 await page.getByLabel("Seed").fill("7")

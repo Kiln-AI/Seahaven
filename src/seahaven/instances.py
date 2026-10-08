@@ -51,7 +51,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, closing, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -83,6 +83,7 @@ from seahaven.errors import ToolError, UnknownTool, WorldBug
 from seahaven.fixtures import Fixture, check_composition, check_id, freeze, load, verify
 from seahaven.handles import Frame, unbound
 from seahaven.ids import CONTROL_STREAM, INSPECTION_STREAM, Ids, instance_seed
+from seahaven.setup_sql import run_setup_sql
 from seahaven.state import Formatter, document
 from seahaven.tool import Tool
 
@@ -305,6 +306,7 @@ class Instance:
         caller_seed: int | None,
         fixture_files: Mapping[str, str] | None,
         startup: Mapping[str, Any],
+        setup_sql: str | None,
         control_tools: bool,
     ) -> None:
         self.id = id
@@ -332,6 +334,7 @@ class Instance:
         # serialised at creation, so a keyword no document could carry is refused
         # there rather than at `state()` time.
         self.startup = dict(startup)
+        self.setup_sql = setup_sql
         # The format this instance answers in, fixed for its life, and the
         # formatter the root resolved it to when the instance was made.
         self.state_format = state_format
@@ -899,14 +902,9 @@ class Instance:
         """Every node but the root, as `open_inspection` attaches them.
 
         Built from the instance's own runtime, which is the set of files that
-        exist on disk, and not from the world's current seal. By depth rather
-        than by position, so the invariant is read off the node itself.
+        exist on disk, and not from the world's current seal.
         """
-        return [
-            (runtime.node.schema_name, self.dir / runtime.node.file_name)
-            for runtime in self._runtime.values()
-            if runtime.node.depth > 0
-        ]
+        return _attachment_pairs((runtime.node for runtime in self._runtime.values()), self.dir)
 
     def _nodes(self) -> tuple[NodeRuntime, ...]:
         """Every node's runtime, root first, in the composition's canonical order.
@@ -1082,6 +1080,7 @@ class InstanceManager:
         episode_id: str | None = None,
         control_tools: bool = False,
         startup: Mapping[str, Any] | None = None,
+        setup_sql: str | None = None,
     ) -> Instance:
         """Materialise an instance from a fixture, or from the world's DDL.
 
@@ -1106,6 +1105,9 @@ class InstanceManager:
         `startup` is the world's own keyword namespace, kept apart from the
         parameters above so that the framework can add a parameter without
         taking a name a world was already using.
+
+        `setup_sql` is SQL that runs against the new files, every node attached,
+        before any node is opened and so before any startup hook (`setup_sql.py`).
         """
         world = self._world
         # `None` is the only spelling of "no startup keywords". Anything else is
@@ -1123,6 +1125,7 @@ class InstanceManager:
         # fixture's own. A creation that cannot succeed copies nothing and leaves
         # nothing behind.
         _check_startup_keywords(composition, keywords)
+        _check_setup_sql(setup_sql)
         serialised_startup = _serialised_startup(keywords)
         # On the root, and only the root: an added world's registrations are
         # never consulted (`functional_spec.md` §6).
@@ -1164,6 +1167,16 @@ class InstanceManager:
                     ).close()
             else:
                 _copy_fixture(fixture, composition, directory)
+            if setup_sql is not None:
+                # Committed and closed before any node is opened, so its write
+                # locks on the attached files cannot block a startup hook.
+                run_setup_sql(
+                    setup_sql,
+                    root=directory / composition.root.file_name,
+                    attachments=_attachment_pairs(composition.nodes, directory),
+                    clock=clock,
+                    seed=node_seed(base, ROOT_PATH),
+                )
             info = InstanceInfo(id=instance_id, fixture=fixture_id, seed=base)
             for node in composition.nodes:
                 runtime[node.key] = _open_node(node, directory, clock, base, info)
@@ -1183,6 +1196,7 @@ class InstanceManager:
                 caller_seed=seed,
                 fixture_files=_fixture_files(fixture),
                 startup=serialised_startup,
+                setup_sql=setup_sql,
                 control_tools=control_tools,
             )
             # One activation for the whole of creation, so a root hook's handles
@@ -1558,6 +1572,23 @@ def _copy_fixture(fixture: Fixture, composition: Composition, directory: Path) -
     by_path = {node.path: node for node in composition.nodes}
     for node in fixture.nodes:
         shutil.copyfile(fixture.file_of(node), directory / by_path[node.path].file_name)
+
+
+def _check_setup_sql(setup_sql: object) -> None:
+    """Refuse a `setup_sql=` that is not a string. Its SQL is not looked at until it runs."""
+    if setup_sql is not None and not isinstance(setup_sql, str):
+        raise WorldBug(
+            "setup_sql takes a string of SQL statements separated by ';', not "
+            f"{type(setup_sql).__name__}"
+        )
+
+
+def _attachment_pairs(nodes: Iterable[Node], directory: Path) -> list[tuple[str, Path]]:
+    """Every node but the root, as `(schema name, file)`: how a connection attaches them.
+
+    By depth rather than by position, so the invariant is read off the node itself.
+    """
+    return [(node.schema_name, directory / node.file_name) for node in nodes if node.depth > 0]
 
 
 def _check_startup_keywords(composition: Composition, keywords: Mapping[str, Any]) -> None:

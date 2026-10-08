@@ -86,6 +86,7 @@ def test_the_reference_world_publishes_its_reset_message() -> None:
     assert list(reset["properties"]) == [
         "fixture",
         "startup",
+        "setup_sql",
         "now",
         "clock_mode",
         "state_format",
@@ -98,6 +99,9 @@ def test_the_reference_world_publishes_its_reset_message() -> None:
         {"$ref": "#/$defs/SeahavenStartup"},
         {"type": "null"},
     ]
+    # The console renders a string field titled like SQL as a multi-line box.
+    assert reset["properties"]["setup_sql"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    assert reset["properties"]["setup_sql"]["title"] == "Setup Sql"
     startup = reset["$defs"]["SeahavenStartup"]
     assert list(startup["properties"]) == ["user_id"]
     assert startup["additionalProperties"] is False

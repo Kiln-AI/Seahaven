@@ -609,6 +609,16 @@ Nothing agent-facing says a world is composed. Everything eval-facing does.
   the first `reset`, so a session can say what tree it is running against. `state` is not an
   observation, and nothing agent-facing carries any of it.
 
+`setup_sql` ([db_schema_and_fixtures.md](db_schema_and_fixtures.md#adjusting-a-fixture-per-episode))
+names tables as `inst.inspect()` does, on a connection that can write every store. One statement
+can read the root's tables and write an added node's:
+
+```py
+setup_sql = "INSERT INTO payments.charges (id, amount) SELECT 'c-' || id, 500 FROM staff"
+with company.instance("acme", setup_sql=setup_sql) as inst:
+    charged = inst.inspect().rows("SELECT id, amount FROM payments.charges")
+```
+
 ## Typed access
 
 A tool is a plain typed function, so calling it **by the function itself** gives a type checker

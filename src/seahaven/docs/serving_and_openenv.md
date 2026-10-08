@@ -133,9 +133,10 @@ A WebSocket connection is one session, and one session holds one instance.
 | `episode_id=` | your own id for the episode, echoed back on `state` so a trajectory ties to your run |
 | `state_format=` | the format the `state` message answers in, in place of the world's pin ([state.md](state.md)) |
 | `startup=` | an object of the world's own startup keywords, passed to its startup hooks, so a world can be set up per episode |
+| `setup_sql=` | a string of SQL statements, separated by `;`, run on the new instance before its startup hooks, to change the fixture's rows for this episode ([db_schema_and_fixtures.md](db_schema_and_fixtures.md#adjusting-a-fixture-per-episode)) |
 
-`reset` is therefore where a run is customised. One served world covers every scenario a fixture and
-a startup hook can express.
+`reset` is therefore where a run is customised. One served world covers every scenario a fixture,
+`setup_sql` and a startup hook can express.
 
 The list above is every key that changes what a reset does. A key outside the list is refused before
 the session is touched: the error names the stray keys and the keys `reset` does take, the session
@@ -148,6 +149,15 @@ refused rather than delivered:
 
 ```jsonc
 {"fixture": "agency", "seed": 7, "startup": {"user_id": "u_12"}}
+```
+
+`setup_sql` is one string, which may hold several statements:
+
+```jsonc
+{
+  "fixture": "agency",
+  "setup_sql": "UPDATE issues SET due_at = NULL; UPDATE issues SET priority = 1 WHERE key = 'ENG-3'"
+}
 ```
 
 `reset` answers a plain OpenEnv `Observation`, not the shape of a tool call, because no tool was
@@ -326,6 +336,7 @@ envelope field of the document is a typed field on the model:
 | `clock_mode` | `ClockMode \| None` | how the instance's clock moves: `fixed`, `tick`, `running` or `wall` |
 | `seed` | `int \| None` | the seed `reset` was given |
 | `startup` | `dict[str, Any] \| None` | the world's own startup keywords, reset's `startup`, rendered as JSON at instance creation |
+| `setup_sql` | `str \| None` | the SQL reset's `setup_sql` ran on the instance, as given |
 | `call_count` | `int` | how many calls were dispatched |
 | `state` | `dict[str, Any]` | the formatter's output, left untyped because its shape is the format's |
 | `step_count` | `int` | OpenEnv's count of everything the session asked for, tool listings included. Not `call_count` |
@@ -337,9 +348,9 @@ from `seahaven.openenv` beside `SeahavenState`. The model keeps OpenEnv's `extra
 newer server can talk to an older client: read the fields you know and ignore the rest.
 
 Before the first `reset` there is no instance, so `composition`, `fixture`, `episode_id`, `seed`,
-`now`, `clock_mode` and `startup` are `null`, `call_count` is 0, and the world's pinned formatter
-runs with no instance. A blank instance is still told apart from no instance, because a blank
-instance has a `now` and a `composition`.
+`now`, `clock_mode`, `startup` and `setup_sql` are `null`, `call_count` is 0, and the world's pinned
+formatter runs with no instance. A blank instance is still told apart from no instance, because a
+blank instance has a `now` and a `composition`.
 
 **Choosing the format.** `reset(state_format="…")` selects the format for that episode, in place of
 the root world's pin. The `state` message itself carries no arguments, so one episode answers in one

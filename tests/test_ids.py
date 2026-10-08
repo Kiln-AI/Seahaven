@@ -15,6 +15,7 @@ from seahaven.ids import (
     CONTROL_STREAM,
     INSPECTION_STREAM,
     INSTANCE_STREAM,
+    SETUP_STREAM,
     Ids,
     instance_seed,
     register_random_functions,
@@ -153,7 +154,7 @@ def test_no_sql_stream_is_the_one_ctx_ids_draws_from() -> None:
     mirror = Ids(seed)
     from_ids = [mirror.random.randbytes(8) for _ in range(5)]
 
-    for stream in (INSTANCE_STREAM, INSPECTION_STREAM, CONTROL_STREAM, BUILD_STREAM):
+    for stream in (INSTANCE_STREAM, INSPECTION_STREAM, CONTROL_STREAM, BUILD_STREAM, SETUP_STREAM):
         with seeded_connection(seed, stream) as conn:
             assert [conn.execute("SELECT randomblob(8)").get for _ in range(5)] != from_ids
 
@@ -175,7 +176,7 @@ def test_a_door_replays_its_own_stream_and_echoes_no_other(seeded: apsw.Connecti
         # And the door it replays is where it was left, not back at its start.
         assert seeded.execute("SELECT random()").get not in drawn
 
-    for other in (INSPECTION_STREAM, CONTROL_STREAM, BUILD_STREAM):
+    for other in (INSPECTION_STREAM, CONTROL_STREAM, BUILD_STREAM, SETUP_STREAM):
         with seeded_connection(seed, other) as door:
             assert [door.execute("SELECT random()").get for _ in range(3)] != drawn
 

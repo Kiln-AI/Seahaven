@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 import seahaven
-from conftest import BLANK_NOW, SMALL_STARTUP, Scaffold, an_issue
+from conftest import AGENCY, BLANK_NOW, SMALL_STARTUP, Scaffold, an_issue
 
 pytestmark = pytest.mark.seahaven(fixture=None, now=BLANK_NOW, clock_mode="fixed")
 
@@ -408,6 +408,27 @@ def test_the_fixtures_viewer_is_the_actor_when_a_call_names_none(
     project = instance.call("list_projects")["projects"][0]
     filed = instance.call("create_issue", project_id=project["id"], title="Filed by the viewer")
     assert filed["creator_id"] == admin["id"]
+
+
+NEW_HIRE = "0f6c2d4e-8a1b-4c3d-9e5f-7a8b9c0d1e2f"
+
+
+@pytest.mark.seahaven(
+    fixture=AGENCY,
+    setup_sql=(
+        "INSERT INTO users (id, email, name, role, created_at) VALUES "
+        f"('{NEW_HIRE}', 'new.hire@example.com', 'New Hire', 'member', '2026-01-05T09:00:00.000Z')"
+    ),
+    startup={"user_id": NEW_HIRE},
+)
+def test_a_user_setup_sql_inserts_can_be_the_viewer_who_files_an_issue(
+    instance: seahaven.Instance,
+) -> None:
+    """The startup hook runs after the setup SQL, so it finds the user the SQL wrote."""
+    project = instance.call("list_projects")["projects"][0]
+    filed = instance.call("create_issue", project_id=project["id"], title="My first issue")
+    assert filed["creator_id"] == NEW_HIRE
+    assert "users" not in {record.table for record in instance.change_log()}
 
 
 @pytest.mark.seahaven(fixture=SMALL_STARTUP)
