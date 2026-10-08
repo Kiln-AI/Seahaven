@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Functional Spec: Startup SQL
@@ -16,6 +16,14 @@ It reuses the startup step of instance creation. It is not a startup keyword and
 `instance_startup` hook: `startup` stays the world's own keyword namespace.
 
 ## The interface
+
+The single string below is the preferred design. It depends on a new writable connection that
+attaches every node. If the architecture step finds that connection adds disproportionate
+complexity or risk (locking, triggers, seeding, attach limits), it may push back to the fallback:
+`setup_sql: str | Mapping[str, str] | None`, where a string is the root's SQL and an object maps a
+canonical node path to that node's SQL, run on each node's own connection. The fallback needs a
+per-world reset schema and a console change to render well; the architecture must cover both if
+it is chosen.
 
 ```py
 world.instance(
@@ -86,16 +94,19 @@ a failing startup hook does today.
 The docs tell an author to use `INSERT`, `UPDATE` and `DELETE`, and to change the schema with a new
 world version, not with setup SQL.
 
-Runtime enforcement (priority P3 unless the architecture step finds it cheap, which it likely is,
-because `seahaven.sandbox.Authorizer` already default-denies everything but row reads, row writes
-and allowlisted functions): refuse schema changes (`CREATE`, `DROP`, `ALTER`), `ATTACH`/`DETACH`,
-`PRAGMA` writes, transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`) and functions outside the
-`run_sql` allowlist. Read and write access covers every table of every node.
+Runtime enforcement is part of v1, through `seahaven.sandbox.Authorizer`, which already
+default-denies everything but row reads, row writes and allowlisted functions. It refuses schema
+changes (`CREATE`, `DROP`, `ALTER`), `ATTACH`/`DETACH`, `PRAGMA` writes, transaction control
+(`BEGIN`, `COMMIT`, `SAVEPOINT`) and functions outside the `run_sql` allowlist. Read and write
+access covers every table of every node.
 
-Without enforcement, SQL that commits or changes the schema can leave the instance inconsistent.
-Transaction control in particular would end the setup transaction early, so it must be refused
-even if the rest is P3. `ATTACH` and `DETACH` must also be refused: the setup connection's
-attachments are the framework's.
+A refusal fails loudly: instance creation aborts with a `WorldBug` whose message names the
+statement's position, what was refused, and what to do instead. For example: "setup_sql statement
+2 was refused: CREATE TABLE is a schema change. setup_sql may only read and write rows (INSERT,
+UPDATE, DELETE); change the schema in the world and bump its version."
+
+Transaction control would end the setup transaction early, and `ATTACH` and `DETACH` would change
+the setup connection's attachments, which are the framework's.
 
 `random()` and `randomblob()` draw from the root node's seeded stream, whichever node the row lands
 in, so the same `seed` and the same `setup_sql` give the same starting state.
