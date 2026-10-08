@@ -8,7 +8,8 @@ executed by the test suite. Where nothing is written down, the code is the answe
 
 We develop with the `/spec` skill: https://github.com/scosman/vibe-crafting
 
-`CONTRIBUTING.md` is the short guide for outside contributors.
+`.github/CONTRIBUTING.md` is the short guide for outside contributors. `.github/RELEASING.md` is
+the maintainer's checklist for a PyPI release.
 
 ## Specs
 
@@ -89,7 +90,7 @@ uv run ty check -c 'src.exclude=["src/seahaven/mcp", "tests/test_mcp_server.py",
 uv run pytest                              # the framework
 uv run pytest worlds/projecttracker        # the reference world
 uv run pytest extensions/seahaven-xmlrpc   # the example extension
-uv run python scripts/check_licences.py serve
+uv run python tools/check_licences.py serve
 ```
 
 ```sh
@@ -97,7 +98,7 @@ uv sync --extra mcp
 uv run python -c "import mcp.server.context, seahaven.mcp"
 uv run ty check src/seahaven/mcp tests/test_mcp_server.py tests/test_mcp_process.py
 uv run pytest                              # the framework again, on the other extra
-uv run python scripts/check_licences.py mcp
+uv run python tools/check_licences.py mcp
 ```
 
 End on the sync you want to keep working in; `uv sync --extra serve` is the everyday one. The
@@ -113,8 +114,8 @@ goes on the `mcp` side of the split, in both places `.github/workflows/ci.yml` n
 
 The three suites are separate because a world and an extension are separate packages with their own
 pytest rootdir. `ruff format` also formats Python blocks inside Markdown, and
-`tests/test_docs_examples.py` executes every example in the docs, `README.md` and `CONTRIBUTING.md`,
-so an example that is added anywhere it reaches will be run.
+`tests/test_docs_examples.py` executes every example in the docs, `README.md` and
+`.github/CONTRIBUTING.md`, so an example that is added anywhere it reaches will be run.
 
 ## Rules
 
@@ -130,5 +131,5 @@ so an example that is added anywhere it reaches will be run.
 - No real customer data, ever. The reference world is fictional: no real product's names, schema or
   error text.
 - No copyleft in anything Seahaven ships. Runtime dependencies and every extra must be permissively
-  licensed; `scripts/check_licences.py` is the rule and CI runs it. The bar for adding a runtime
+  licensed; `tools/check_licences.py` is the rule and CI runs it. The bar for adding a runtime
   dependency at all is high, because Seahaven is vendored into other people's products.

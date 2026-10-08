@@ -2,8 +2,9 @@
 
 The public API is the names exported from `seahaven`, the `seahaven.helpers`, `seahaven.sandbox` and
 `seahaven.fixtures` modules, the type aliases in `seahaven.world`, `seahaven.openenv` (in the
-`serve` extra), and the pytest plugin's two fixtures. A name that is not below is internal and may
-change without notice.
+`serve` extra), and the pytest plugin's two fixtures. The optional `seahaven.http` module is
+public too, and [../http_apis.md](../http_apis.md) documents it. A name that is on neither page is
+internal and may change without notice.
 
 | Section | What it covers |
 |---|---|
@@ -20,26 +21,15 @@ change without notice.
 | [`seahaven.helpers`](#seahavenhelpers) | `run_sql` and `describe_schema` |
 | [`seahaven.sandbox`](#seahavensandbox) | Agent SQL containment |
 | [`seahaven.openenv`](#seahavenopenenv-the-serve-extra) | The server and the client |
+| [`seahaven.http`](#seahavenhttp) | What the optional module is, and when you might need it |
 | [The pytest plugin](#the-pytest-plugin) | Two fixtures, one marker, one option |
 | [The concurrency gate](#the-concurrency-gate) | `set_concurrency` and friends |
 | [Middleware and hook types](#middleware-and-hook-types) | `Handler`, `Middleware` and `StartupHook` |
 
-Ten names on this page are not exported from `seahaven/__init__.py`, and there are two reasons for
-that:
-
-- Seven of them are public by the repository's own rule. `seahaven.world.Handler`, `Middleware` and
-  `StartupHook` are the type aliases the scaffolded error handler imports, and
-  `seahaven.fixtures.load`, `load_all`, `verify` and `freeze` read a fixture directory. Both sets
-  are part of their module's stated interface, in `components/world_and_dispatch.md` §1 and
-  `components/fixtures_instances.md` §1. `architecture.md` §1 makes that the rule: a name the
-  component document lists as part of a module's interface is public, and `seahaven/__init__.py`
-  re-exports only the subset worth a short import.
-- The other three are `seahaven.instances.default_concurrency`, `concurrency` and `set_concurrency`,
-  the concurrency gate. No component document lists them, so **this page declares them public on its
-  own authority**. The gate is on in every process, and `serve --concurrency` is otherwise the only
-  documented way to change it, which leaves an in-process harness with a real control and no name
-  for it. That goes further than the specification, and this page says so rather than implying the
-  rule above covers it.
+Some names on this page are not exported from `seahaven/__init__.py`. They are public all the same,
+and are imported from their own module. They include `seahaven.world.Handler`, `Middleware` and
+`StartupHook`; `seahaven.fixtures.load`, `load_all`, `verify` and `freeze`; and the concurrency
+gate, `seahaven.instances.default_concurrency`, `concurrency` and `set_concurrency`.
 
 ```py
 import seahaven
@@ -193,7 +183,7 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.state(format=None)` | the state document as a plain dict: the envelope, and `state` from this instance's format. `format` answers in another of the world's formats instead. Refused inside `bulk()` or a tool call |
 | `inst.composition()` | what this instance is running against: one `NodeReport` per store, root first |
 | `inst.freeze(id, description)` | mint a fixture from the current state; returns the `Fixture`. Refuses inside `bulk()` |
-| `inst.bulk()` | a context manager yielding the instance's own `Ctx`, in one transaction, for loading rows fast |
+| `inst.bulk()` | a context manager yielding the root node's `Ctx`, with one transaction per node, for loading rows fast. See [composition.md](../composition.md#one-instance-many-stores) for a composite |
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
 | `inst.id`, `inst.fixture`, `inst.seed` | the instance id, the fixture id (or `None`), the derived seed bytes |
 | `inst.state_format` | the format `inst.state()` answers in, fixed for the instance's life |
@@ -313,10 +303,12 @@ identity.
 Every connection overrides SQLite's `current_timestamp`, `current_date`, `current_time` and the
 `'now'` argument of `datetime`, `date`, `time`, `strftime`, `julianday`, `unixepoch` and `timediff`
 to return the clock's reading, so SQL sees the same time world code does. One SQL statement takes
-one reading, and a trigger it fires shares that reading. Two rare cases are exceptions: see the
-[clock modes risk report](https://github.com/Kiln-AI/Seahaven/blob/main/specs/projects/clock_modes/risk_report.md).
-The overrides are registered as innocuous, so schema objects may reference them. What they return
-compares and sorts correctly against the canonical text a world stores.
+one reading, and a trigger it fires shares that reading. Two rare cases take another statement's
+reading: a statement whose text starts with a `-- ` comment, and a statement whose rows are read
+while another statement runs on the same connection. Neither happens under `fixed`, and under `tick`
+only on `inst.inspect()` and the control tool. Under `running` and `wall`, either can happen on any
+connection. The overrides are registered as innocuous, so schema objects may reference them. What
+they return compares and sorts correctly against the canonical text a world stores.
 
 ## `Ids`
 
@@ -370,6 +362,11 @@ class Tool:
 `from_function` is what a tool factory builds its tool with, whether that factory is one of
 Seahaven's helpers or an extension's. `control` is Seahaven's own flag for its control tool and
 cannot be set through it.
+
+`validate` is strict in one of two modes, chosen for the whole call. Arguments that are plain JSON
+at every depth are validated as JSON, the form the schema publishes. Arguments that hold any other
+Python object are validated as Python, and each must be the annotated type's own object. It returns
+the Python objects.
 
 ## `LogRecord`
 
@@ -588,7 +585,7 @@ def app(
     *,
     include_control_tools=False,
     max_concurrent_envs=500,
-    session_timeout=3600.0,
+    session_timeout=None,
     console=True,
 ) -> FastAPI: ...
 
@@ -605,6 +602,8 @@ class SeahavenClient:  # .reset(...), .call(tool, /, **arguments), .list_tools()
 `SeahavenClient.call(...)` answers a `SeahavenObservation`. On a failed call its `error` is
 OpenEnv's own `{error_type, message}` model and its `seahaven_error` is the world's
 `{code, message, details}` triple, read from `metadata["seahaven_error"]`.
+`SeahavenClient.step(ListToolsAction())` answers a `ListToolsObservation`, whose `tools` are OpenEnv
+`Tool` models.
 
 `SeahavenClient.state()` answers a `SeahavenState`: the state document, plus OpenEnv's
 `step_count`. Every envelope field of the document is a typed field on it, with `world` a
@@ -614,6 +613,14 @@ OpenEnv's own `{error_type, message}` model and its `seahaven_error` is the worl
 process.
 
 See [../serving_and_openenv.md](../serving_and_openenv.md) and [../state.md](../state.md).
+
+## `seahaven.http`
+
+`seahaven.http` is an optional module for a world that mocks a REST API. A world writes the REST
+API as one handler function, and its tools call the handler. The module also has a web server that
+serves the handler, so that the world can be a mock of the REST API when you test code that calls
+the real one. You might need it when the product you model is based on a REST API. You do not need
+it to use Seahaven. See [../http_apis.md](../http_apis.md) for more.
 
 ## The pytest plugin
 

@@ -110,9 +110,10 @@ def world(request: pytest.FixtureRequest) -> World:
     try:
         return cli.find_world(request.config.getoption(WORLD_OPTION), start=request.config.rootpath)
     except cli.CliError as error:
-        # Every `CliError` is one line with the fix in it. Raising it would print
-        # that line under a traceback through `import_module`, which says only
-        # that Python was involved.
+        # Every `CliError` is one line with the fix in it; an import that raised
+        # names the file and line of the world's code that raised it. Raising it
+        # would print that line under a traceback through `import_module`, which
+        # says only that Python was involved.
         pytest.fail(str(error), pytrace=False)
 
 

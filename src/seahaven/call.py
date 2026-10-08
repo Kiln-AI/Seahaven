@@ -7,7 +7,6 @@ its files, its manager -- out of the call path entirely.
 """
 
 import dataclasses
-import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self
@@ -15,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Self
 import pydantic
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
-from seahaven.errors import ToolError, WorldBug
+from seahaven.errors import WorldBug
 from seahaven.tool import Tool
 
 if TYPE_CHECKING:  # `ctx.py` is below this module; the annotation is all that is needed here
@@ -39,8 +38,6 @@ __all__ = [
 # that declaration runs its own middleware with. Nothing in the chain reads it.
 type Handler = Callable[["Ctx[Any]", "Call"], Any]
 type Middleware = Callable[["Ctx[Any]", "Call", Handler], Any]
-
-_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -141,7 +138,9 @@ def invoke(ctx: Ctx, call: Call) -> Any:
     """Validate and run one call, and answer with what the tool returned: the innermost handler.
 
     Raised inside the chain rather than before it, so a world's error handler
-    sees `ArgumentError` and can restate it in the product's own words.
+    sees `ArgumentError` and can restate it in the product's own words. Nothing
+    is logged here: a middleware above may still turn a failure into an answer,
+    and `Instance` logs what escapes the whole chain.
     """
     tool = call.tool
     # Replaced, not merged: the validated arguments are the model's fields under
@@ -150,27 +149,16 @@ def invoke(ctx: Ctx, call: Call) -> Any:
     # function as an argument it has no parameter for.
     call = dataclasses.replace(call, arguments=tool.validate(call.arguments))
     ctx = ctx.with_call(call)
-    try:
-        if tool.transaction:
-            with ctx.db.transaction():
-                # Serialised inside the transaction and the rendering thrown
-                # away: a result that cannot be serialised rolls the call back
-                # rather than committing a write whose answer never reached the
-                # caller, and what comes back is the object the tool returned, so
-                # a host tool handed a `Charge` is handed a `Charge`. The wire is
-                # served by `openenv/env.py`, which renders it there.
-                return _proved(tool.fn(ctx, **call.arguments))
-        return _proved(tool.fn(ctx, **call.arguments))
-    except ToolError:
-        raise
-    except Exception:
-        # Not a failure the agent was meant to read. It still passes through the
-        # chain unchanged -- the world's handler decides what the agent sees --
-        # but the traceback is on record whatever that decision is.
-        # "failed", not "raised": a result this framework refuses to serialise
-        # fails here too, and the tool returned normally.
-        _log.error("tool %r failed on instance %s", tool.name, ctx.instance.id, exc_info=True)
-        raise
+    if tool.transaction:
+        with ctx.db.transaction():
+            # Serialised inside the transaction and the rendering thrown
+            # away: a result that cannot be serialised rolls the call back
+            # rather than committing a write whose answer never reached the
+            # caller, and what comes back is the object the tool returned, so
+            # a host tool handed a `Charge` is handed a `Charge`. The wire is
+            # served by `openenv/env.py`, which renders it there.
+            return _proved(tool.fn(ctx, **call.arguments))
+    return _proved(tool.fn(ctx, **call.arguments))
 
 
 def _proved(result: Any) -> Any:

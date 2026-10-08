@@ -18,7 +18,11 @@ from typing import Any, Self
 
 from openenv.core.client_types import StepResult
 from openenv.core.env_client import EnvClient
-from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
+from openenv.core.env_server.mcp_types import (
+    CallToolAction,
+    ListToolsAction,
+    ListToolsObservation,
+)
 from openenv.core.env_server.types import Observation
 
 from seahaven.openenv.env import SeahavenObservation, SeahavenState
@@ -117,27 +121,32 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         return action.model_dump()
 
     def _parse_result(self, payload: dict[str, Any]) -> StepResult[Observation]:
-        """A reply frame as a `StepResult` carrying a `SeahavenObservation`.
+        """A reply frame as a `StepResult` carrying a `SeahavenObservation`, or a tool list.
 
         The base client parses the reply to a `step` and the reply to a `reset`
-        through this one hook, so both arrive as a `SeahavenObservation`. A tool
-        call fills `tool_name` and one of `result` and `error`, and an error also
-        fills `metadata["seahaven_error"]`, which `obs.seahaven_error` reads. A
-        reset fills only the inherited `metadata`, because the server answers a
-        reset with a plain `Observation` and this model's own three fields all
-        have defaults.
+        through this one hook, so both arrive as a `SeahavenObservation`, unless
+        the step was a `ListToolsAction`. A tool call fills `tool_name` and one
+        of `result` and `error`, and an error also fills
+        `metadata["seahaven_error"]`, which `obs.seahaven_error` reads. A reset
+        fills only the inherited `metadata`, because the server answers a reset
+        with a plain `Observation` and this model's own three fields all have
+        defaults.
 
         Reading `result` off a reset is therefore `None` at runtime rather than
         an error, which is why this client is parameterised on `Observation`
         instead: `reset(...).observation.result` does not type-check, and
         `metadata` is how a reset is read.
 
-        A `ListToolsAction` answers a `ListToolsObservation`, which has a
-        `tools` list and no `result`; it does not come through here, and
-        `list_tools` below says why.
+        `step(ListToolsAction())` answers a `ListToolsObservation`, whose `tools`
+        are OpenEnv's `Tool` models. A caller narrows the observation with
+        `isinstance`.
         """
+        observation = payload.get("observation", {})
+        # A tool list is the one reply with a `tools` field; a reset carries its
+        # tool count in `metadata`, never at the top level.
+        model = ListToolsObservation if "tools" in observation else SeahavenObservation
         return StepResult(
-            observation=SeahavenObservation.model_validate(payload.get("observation", {})),
+            observation=model.model_validate(observation),
             reward=payload.get("reward"),
             done=payload.get("done", False),
             metadata=payload.get("metadata"),
@@ -167,10 +176,8 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         Each entry is `{"name", "description", "input_schema"}`. Control tools are
         never listed, whatever the server was started with.
 
-        This is the one verb that reads the frame itself instead of parsing it
-        into `SeahavenObservation`: that model forbids extra fields and has no
-        `tools`, because it is the shape of a tool *call*. The list is read
-        straight off the step payload as `list[dict]`.
+        The list is read straight off the step payload as `list[dict]`;
+        `step(ListToolsAction())` answers the same list as `Tool` models.
         """
         return self._dispatch(self._list_tools_async)
 

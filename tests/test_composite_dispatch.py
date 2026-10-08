@@ -19,7 +19,7 @@ import pytest
 from seahaven import instances
 from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
-from seahaven.errors import ArgumentError, UnknownTool, WorldBug
+from seahaven.errors import ArgumentError, ToolError, UnknownTool, WorldBug
 from seahaven.handles import WorldHandle
 from seahaven.instances import Instance
 from seahaven.world import World
@@ -86,7 +86,7 @@ def test_two_accounts_of_one_world_do_not_share_rows(tmp_path: Path) -> None:
 # ----------------------------------------------------------------- the chain
 
 
-def test_the_agent_chain_is_the_whole_canonical_route(tmp_path: Path) -> None:
+def test_the_agent_chain_is_the_whole_contributing_route(tmp_path: Path) -> None:
     trace: list[str] = []
     with three_levels(tmp_path, trace).instance(None) as live:
         live.call("leaf_write", value="x")
@@ -238,6 +238,173 @@ def test_a_layers_worlds_is_its_own_nodes(tmp_path: Path) -> None:
         assert sorted(live.call("leaf_read")) == ["middle/leaf", "x"]
 
     assert seen[:2] == ["host: has middle, no leaf", "middle: has leaf, no middle"]
+
+
+# ------------------------------------------------------ the chain, shared
+
+
+def shared_under_a_middle(tmp_path: Path, trace: list[str]) -> tuple[World, World, World]:
+    """`leaf` twice: through `middle` as `m_`, and straight from the host as `l_`.
+
+    The canonical route to `leaf` is the host's direct edge, so only the `m_`
+    names cross a world the canonical route does not.
+    """
+    host = traced(rooted("host", tmp_path), trace)
+    middle = traced(composable_world("middle"), trace)
+    leaf = traced(composable_world("leaf"), trace)
+    middle.add_world(leaf, name="leaf")
+    host.add_world(middle, name="middle", tool_prefix="m_")
+    host.add_world(leaf, name="leaf", tool_prefix="l_")
+    return host, middle, leaf
+
+
+def recording_names(world: World, seen: list[str]) -> None:
+    @world.middleware
+    def record_name(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        seen.append(call.name)
+        return next_(ctx, call)
+
+
+def test_sharing_a_node_keeps_the_middle_worlds_middleware_on_what_it_contributes(
+    tmp_path: Path,
+) -> None:
+    seen: list[str] = []
+    company = rooted("company", tmp_path)
+    shop = composable_world("shop")
+    payments = composable_world("payments")
+    recording_names(shop, seen)
+    shop.add_world(payments, name="payments")
+    company.add_world(shop, name="shop", tool_prefix="shop_")
+    with company.instance(None) as live:
+        live.call("shop_payments_write", value="before")
+    assert seen == ["shop_payments_write"]
+
+    company.add_world(payments, name="payments", tool_prefix="pay_")
+    with company.instance(None) as live:
+        live.call("shop_payments_write", value="through the shop")
+        live.call("pay_payments_write", value="direct")
+        assert sorted(live.call("pay_payments_read")) == ["direct", "through the shop"]
+    assert seen == ["shop_payments_write", "shop_payments_write"]
+
+
+def test_each_name_of_a_shared_tool_runs_its_own_routes_middleware(tmp_path: Path) -> None:
+    trace: list[str] = []
+    host, _middle, _leaf = shared_under_a_middle(tmp_path, trace)
+    with host.instance(None) as live:
+        live.call("m_leaf_write", value="through the middle")
+        assert trace == ["host sees host", "middle sees middle", "leaf sees leaf"]
+        trace.clear()
+        live.call("l_leaf_write", value="direct")
+        assert trace == ["host sees host", "leaf sees leaf"]
+        both = ["direct", "through the middle"]
+        assert sorted(live.call("m_leaf_read")) == both
+        assert sorted(live.call("l_leaf_read")) == both
+
+
+def test_both_sides_of_a_diamond_run_their_own_middle(tmp_path: Path) -> None:
+    trace: list[str] = []
+    host = traced(rooted("host", tmp_path), trace)
+    leaf = traced(composable_world("leaf"), trace)
+    for side in ("left", "right"):
+        middle = traced(composable_world(side), trace)
+        middle.add_world(leaf, name="leaf")
+        host.add_world(middle, name=side, tool_prefix=f"{side[0]}_")
+    with host.instance(None) as live:
+        live.call("r_leaf_write", value="x")
+        assert trace == ["host sees host", "right sees right", "leaf sees leaf"]
+        trace.clear()
+        live.call("l_leaf_write", value="x")
+        assert trace == ["host sees host", "left sees left", "leaf sees leaf"]
+
+
+def test_a_route_the_lists_filter_out_does_not_choose_the_chain(tmp_path: Path) -> None:
+    trace: list[str] = []
+    host = traced(rooted("host", tmp_path), trace)
+    middle = traced(composable_world("middle"), trace)
+    leaf = traced(composable_world("leaf"), trace)
+    host.add_world(leaf, name="leaf", tool_allow_list=[])
+    middle.add_world(leaf, name="leaf")
+    host.add_world(middle, name="middle")
+    route = ["host sees host", "middle sees middle", "leaf sees leaf"]
+    with host.instance(None) as live:
+        live.call("leaf_write", value="by name")
+        assert trace == route
+        trace.clear()
+        live.call(leaf.tools["leaf_write"].fn, value="by function")
+        assert trace == route
+
+
+def test_a_shared_leaf_three_deep_keeps_every_world_between(tmp_path: Path) -> None:
+    trace: list[str] = []
+    host = traced(rooted("host", tmp_path), trace)
+    a, b = traced(composable_world("a"), trace), traced(composable_world("b"), trace)
+    leaf = traced(composable_world("leaf"), trace)
+    b.add_world(leaf, name="leaf")
+    a.add_world(b, name="b")
+    host.add_world(a, name="a")
+    host.add_world(leaf, name="leaf", tool_prefix="x_")
+    with host.instance(None) as live:
+        live.call("leaf_write", value="deep")
+        assert trace == ["host sees host", "a sees a", "b sees b", "leaf sees leaf"]
+        trace.clear()
+        live.call("x_leaf_write", value="shallow")
+        assert trace == ["host sees host", "leaf sees leaf"]
+
+
+class MiddleError(ToolError):
+    """The middle world's own error, which its handler turns every leaf error into."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("middle", message)
+
+
+def test_a_middle_worlds_error_handler_shapes_the_errors_it_contributes(tmp_path: Path) -> None:
+    host, middle, leaf = shared_under_a_middle(tmp_path, [])
+
+    @leaf.tool
+    def refuse(ctx: Ctx) -> None:
+        """Fail the way the leaf's own world fails."""
+        raise Boom("the leaf said no")
+
+    @middle.middleware
+    def as_the_middles(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        try:
+            return next_(ctx, call)
+        except Boom as error:
+            raise MiddleError(str(error)) from error
+
+    with host.instance(None) as live:
+        with pytest.raises(MiddleError):
+            live.call("m_refuse")
+        with pytest.raises(Boom):
+            live.call("l_refuse")
+
+
+def test_a_middleware_registered_later_reaches_a_route_through_a_shared_node(
+    tmp_path: Path,
+) -> None:
+    seen: list[str] = []
+    host, middle, _leaf = shared_under_a_middle(tmp_path, [])
+    with host.instance(None) as live:
+        live.call("m_leaf_write", value="before")
+        recording_names(middle, seen)
+        live.call("m_leaf_write", value="after")
+        live.call("l_leaf_write", value="after")
+    assert seen == ["m_leaf_write"]
+
+
+def test_a_nested_call_into_a_shared_node_runs_only_the_owners_layer(tmp_path: Path) -> None:
+    trace: list[str] = []
+    host, _middle, _leaf = shared_under_a_middle(tmp_path, trace)
+
+    @host.tool
+    def reach(ctx: Ctx) -> None:
+        """Write into the leaf through the middle's handle."""
+        ctx.worlds.middle.worlds.leaf.call("leaf_write", value="nested")
+
+    with host.instance(None) as live:
+        live.call("reach")
+    assert trace == ["host sees host", "leaf sees leaf"]
 
 
 # ------------------------------------------------------------- nested calls
@@ -647,6 +814,64 @@ def test_the_log_line_carries_the_node_and_marks_a_nested_call_internal(
     assert lines[1].endswith("(node=main)")
     # Nothing owns a name that is not registered, so there is no node to name.
     assert "call nope on instance" in lines[2] and "node=" not in lines[2]
+
+
+def crashing_host(tmp_path: Path) -> World:
+    """A host whose tool calls a child tool that raises something other than a `ToolError`."""
+    host = rooted("host", tmp_path)
+    child = composable_world("child")
+    host.add_world(child, name="child", tool_allow_list=[])
+
+    @child.tool
+    def child_crash(ctx: Ctx) -> None:
+        """A bug in the child world's code."""
+        raise ValueError("a bug in the child")
+
+    @host.tool
+    def relay_crash(ctx: Ctx) -> None:
+        """Call the child tool and let whatever it raises through."""
+        ctx.worlds.child.call("child_crash")
+
+    return host
+
+
+def test_a_child_failure_the_hosts_middleware_answers_is_not_logged_as_an_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A handle is not the boundary: the host's chain around it may still answer."""
+    host = crashing_host(tmp_path)
+
+    @host.middleware
+    def forgiving(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        try:
+            return next_(ctx, call)
+        except ValueError as error:
+            return {"handled": str(error)}
+
+    with caplog.at_level(logging.DEBUG), host.instance(None) as live:
+        assert live.call("relay_crash") == {"handled": "a bug in the child"}
+
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR] == []
+
+
+def test_a_child_failure_that_escapes_the_host_is_logged_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    host = crashing_host(tmp_path)
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        host.instance(None) as live,
+        pytest.raises(ValueError) as raised,
+    ):
+        live.call("relay_crash")
+
+    (record,) = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    # Against the agent's call, not the nested one the handle made.
+    assert record.getMessage().startswith("call relay_crash on instance")
+    assert record.getMessage().endswith("failed (node=main)")
+    assert record.exc_info is not None
+    assert record.exc_info[1] is raised.value
 
 
 # ---------------------------------------------------------- the committed tree

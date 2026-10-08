@@ -72,13 +72,10 @@ seahaven new notes --dir ~/projects
 The command refuses an existing directory rather than merging into one. It also refuses a name that
 does not make a Python package name, and a name `World(name=...)` would not accept — the name
 reaches the scaffolded `world.py` verbatim, so a world it cannot import is refused before the
-directory is written.
+directory is written. A name whose package has the same name as a standard library module or
+`seahaven` is refused too, because Python imports that module instead of the world.
 
-The command finishes by printing what to do next. While Seahaven is unpublished, the `uv sync` in
-that list is a trap: the scaffold's `seahaven~=0.0` resolves to a placeholder release that contains
-none of the framework, so the sync succeeds and the world fails at import with `ModuleNotFoundError:
-No module named 'seahaven.world'`. `seahaven check` itself cannot start either, because the
-placeholder ships no console script. Install the framework from a checkout until publication.
+The command finishes by printing what to do next.
 
 ## `seahaven hub`
 
@@ -102,9 +99,6 @@ The command never overwrites. It checks every file first, and if one of the five
 `README.md` already has front matter or the connecting section, it names each one and writes
 nothing. It also refuses a world with no `src/<package>/openenv_app.py`, because the `Dockerfile`
 and `openenv.yaml` serve `<package>.openenv_app:app`.
-
-While Seahaven is unpublished, the `Dockerfile` does not build a working image: its
-`uv sync --extra serve` installs the same placeholder release as `uv sync` does for `seahaven new`.
 
 A world with the hub files differs from the environment `openenv init` makes in three ways:
 
@@ -212,17 +206,17 @@ Runs the OpenEnv server for this world: one world, many sessions, one worker pro
 
 | Option | Default | What it does |
 |---|---|---|
-| `--host HOST` | `0.0.0.0` | the address to bind |
+| `--host HOST` | `127.0.0.1` | the address to bind; `0.0.0.0` serves on every interface |
 | `--port PORT` | `8000` | the port to bind |
 | `--max_concurrent_envs N` | `500` | how many sessions may be open at once |
 | `--concurrency N` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
-| `--session-timeout SECONDS` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
+| `--session-timeout SECONDS` | off | seconds of idleness before a session is reaped; `0` turns the reaper off |
 | `--include-control-tools` | off | make each session's instance one that can call `controller_run_sql`; without the flag the name is an unknown tool. It is never listed either way, and it is deprecated in favour of the state document -- run Python with `-W default::DeprecationWarning` to see the warning |
 | `--no-console` | off | do not serve the web console at `/console`; the address is otherwise printed when the server starts |
 
 ```sh
 seahaven serve
-seahaven serve --host 127.0.0.1 --port 9000
+seahaven serve --host 0.0.0.0 --port 9000
 seahaven serve --include-control-tools --concurrency 0
 ```
 

@@ -25,6 +25,11 @@ dependencies = ["$seahaven_requirement"]
 serve = ["seahaven[serve]"]
 mcp = ["seahaven[mcp]"]
 
+# `uv sync` installs the `dev` group by default, and pytest is not a dependency
+# of seahaven itself: without this group `uv run pytest` has nothing to run.
+[dependency-groups]
+dev = ["pytest>=8"]
+
 # Saying the two extras conflict is what keeps `uv lock` solvable: without this
 # table uv has to satisfy both at once, which no version of openenv and the MCP
 # SDK allows, and the lock fails rather than the install.

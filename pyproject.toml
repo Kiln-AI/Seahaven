@@ -8,16 +8,20 @@ build-backend = "uv_build"
 
 [project]
 name = "seahaven"
-version = "0.0.1"
-description = "A framework for building synthetic worlds/environments for AI agents. Useful for RL and evaluations."
+version = "0.5.0"
+description = "Synthetic world framework for agent evals and RL."
 readme = "README.md"
 requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Steve Cosman" }]
 keywords = ["ai", "agents", "rl", "evaluation", "environments", "simulation"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 # Lower bounds are the versions this project is known to work on, not the
@@ -86,8 +90,7 @@ line-length = 100
 src = [
     "src",
     "tests",
-    "scripts",
-    "bench",
+    ".",
     "worlds/projecttracker/src",
     "worlds/projecttracker/tests",
     "extensions/seahaven-xmlrpc/src",
@@ -110,7 +113,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 "tests/test_mcp_process.py" = ["E402"]
 
 [tool.ty.src]
-include = ["src", "tests", "scripts", "worlds", "extensions", "bench"]
+include = ["src", "tests", "tools", "worlds", "extensions"]
 
 # The composite worlds of `tests/worlds/README.md` are packages that import one
 # another, because that is how a host world reaches a world it adds. Nothing

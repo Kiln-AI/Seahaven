@@ -60,6 +60,9 @@ _NON_PACKAGE = re.compile(r"[-.]+")
 
 _OVERRIDE = "or pass --world module:attr"
 
+# Seahaven's own package: its frames are never where a world's import failed.
+_SEAHAVEN_DIR = Path(__file__).resolve().parents[1]
+
 
 class CliError(Exception):
     """A failure with a fix in it, printed as one line and never as a traceback.
@@ -69,13 +72,29 @@ class CliError(Exception):
     SH501, and one that failed on the world's DDL is SH104. A `CliError` without
     a code -- no `pyproject.toml`, a malformed `--world` -- is the user's to fix
     before any lint can run at all.
+
+    `path` and `line` place a finding, `fix` is the edit `check` prints beside
+    it, and `root` is the project `check` shows the path relative to: the same
+    as `path` unless `path` names a file inside it.
     """
 
-    def __init__(self, message: str, *, code: str | None = None, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        path: Path | None = None,
+        line: int | None = None,
+        fix: str | None = None,
+        root: Path | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code
         self.path = path
+        self.line = line
+        self.fix = fix
+        self.root = root or path
 
 
 @dataclass(frozen=True)
@@ -210,23 +229,33 @@ def _import(module_name: str, attribute: str, *, root: Path) -> Discovery:
         module = import_module(module_name)
     except SeahavenError as error:
         # A world that refused to be constructed. Its message is written for its
-        # author and is the whole of what `check` should print: SH104 when the
-        # DDL is what SQLite refused, SH501 for everything else a `World` raises
-        # at import -- a duplicate tool name, a middleware of the wrong shape.
-        code = "SH104" if DDL_DOES_NOT_EXECUTE in str(error) else "SH501"
-        raise CliError(str(error), code=code, path=root) from error
+        # author: SH104 when the DDL is what SQLite refused, SH501, placed at the
+        # line of world code that made the call, for everything else a `World`
+        # raises at import -- a duplicate tool name, a middleware of the wrong shape.
+        if DDL_DOES_NOT_EXECUTE in str(error):
+            raise CliError(str(error), code="SH104", path=root) from error
+        raise _placed(str(error), module_name, error, root) from error
     except Exception as error:
-        raise CliError(
-            f"cannot import {module_name!r}: {_last_traceback_line(error)}",
-            code="SH501",
-            path=root,
-        ) from error
+        raise _import_failure(module_name, error, root) from error
     imported = frozenset(sys.modules)
     world = getattr(module, attribute, None)
     if not isinstance(world, World):
         if _is_the_project_roots_init(module, root):
-            raise CliError(_root_init_imported(module_name, root), code="SH501", path=root)
-        raise CliError(_no_world(module_name, attribute, world), code="SH501", path=root)
+            raise CliError(
+                _root_init_imported(module_name, root),
+                code="SH501",
+                path=root,
+                fix=(
+                    "delete tests/__init__.py, move conftest.py into tests/, or rename the "
+                    "project directory"
+                ),
+            )
+        raise CliError(
+            _no_world(module_name, attribute, world),
+            code="SH501",
+            path=root,
+            fix="give the package a world, or point at the one it has",
+        )
     package = _package_of(module)
     if package is None:
         # Functional spec §2.1: a world is a package, never a single module and
@@ -283,6 +312,87 @@ def _root_init_imported(module_name: str, root: Path) -> str:
         f"beside that file does this: delete tests/__init__.py, move conftest.py into tests/, "
         f"or rename the directory {root.name} so it is not the package's name"
     )
+
+
+def _import_failure(module_name: str, error: Exception, root: Path) -> CliError:
+    """SH501 for an import that raised, placed at the line of the world's code that raised it."""
+    summary = _last_traceback_line(error)
+    if isinstance(error, ModuleNotFoundError) and _is_the_world_module(module_name, error.name):
+        return CliError(
+            f"cannot import {module_name!r}: {summary}",
+            code="SH501",
+            path=root,
+            fix=(
+                f"make {module_name!r} importable (the package the [project] name names, under "
+                f"{SOURCE_DIRNAME}/), or point at the world with --world module:attr"
+            ),
+        )
+    return _placed(f"cannot import {module_name!r}: {summary}", module_name, error, root)
+
+
+def _placed(message: str, module_name: str, error: Exception, root: Path) -> CliError:
+    """SH501 at the innermost frame of the world's own code, or with the command that finds it."""
+    command = f"python -c 'import {module_name}'"
+    place = _world_frame(error, root)
+    if place is None:
+        return CliError(
+            f"{message}; {command} prints the whole traceback",
+            code="SH501",
+            path=root,
+            fix=f"fix the error {command} ends in",
+        )
+    file, line = place
+    where = f"{_shown(file, root)}:{line}"
+    return CliError(
+        f"{message}, at {where}; {command} prints the whole traceback",
+        code="SH501",
+        path=file,
+        line=line,
+        fix=f"fix the error at {where}",
+        root=root,
+    )
+
+
+def _world_frame(error: Exception, root: Path) -> tuple[Path, int] | None:
+    """The file and line in the world's own code that raised, preferring the project's own files.
+
+    A `SyntaxError` is raised by the compiler, not by a frame of the file it is
+    in, so its place comes off the exception.
+    """
+    if isinstance(error, SyntaxError) and error.filename and error.lineno:
+        path = Path(error.filename)
+        if path.is_file():
+            return path.resolve(), error.lineno
+    places = [
+        (Path(frame.filename).resolve(), frame.lineno)
+        for frame in reversed(traceback.extract_tb(error.__traceback__))
+        if frame.lineno is not None and _authored(Path(frame.filename))
+    ]
+    in_project = [place for place in places if place[0].is_relative_to(root)]
+    return next(iter(in_project or places), None)
+
+
+def _authored(path: Path) -> bool:
+    """Whether a traceback frame is in code an author wrote, not in Python, a library or Seahaven.
+
+    `sys.prefix` holds a project's own virtual environment, and `sys.base_prefix`
+    the standard library. An `importlib` frame names a file that does not exist.
+    """
+    if not path.is_file():
+        return False
+    resolved = path.resolve()
+    outside = (_SEAHAVEN_DIR, Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve())
+    return not any(resolved.is_relative_to(directory) for directory in outside)
+
+
+def _is_the_world_module(module_name: str, missing: str | None) -> bool:
+    """Whether the module that was not found is the one named, or a package above it."""
+    return missing is not None and (missing == module_name or module_name.startswith(f"{missing}."))
+
+
+def _shown(path: Path, root: Path) -> str:
+    """`path` relative to the project when it is inside it, as `check` prints paths."""
+    return str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
 
 
 def _last_traceback_line(error: BaseException) -> str:

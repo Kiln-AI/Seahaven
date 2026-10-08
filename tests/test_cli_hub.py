@@ -62,6 +62,17 @@ def test_the_hub_files_re_export_the_framework(world: Path) -> None:
     assert "name: my-world" in (world / "openenv.yaml").read_text(encoding="utf-8")
 
 
+def test_the_hub_container_serves_on_every_interface(world: Path) -> None:
+    """The server binds loopback by default, so the container has to say otherwise itself."""
+    add_hub_files(world)
+    command = next(
+        line
+        for line in (world / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if line.startswith("CMD ")
+    )
+    assert '"--host", "0.0.0.0"' in command
+
+
 def test_the_readme_gets_front_matter_on_top_and_connecting_after_usage(world: Path) -> None:
     original = (world / README).read_text(encoding="utf-8")
     add_hub_files(world)

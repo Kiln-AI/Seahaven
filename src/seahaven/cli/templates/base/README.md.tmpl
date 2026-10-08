@@ -21,7 +21,7 @@ with $package.world.instance(None) as instance:
     instance.call("get_item", item_id=item["id"])
 ```
 
-Serve it over OpenEnv with `uv run seahaven serve`, and run its tests with
+Serve it over OpenEnv with `uv run --extra serve seahaven serve`, and run its tests with
 `uv run pytest`.
 
 ## Making a fixture

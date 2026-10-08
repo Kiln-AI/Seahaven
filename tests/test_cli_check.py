@@ -15,7 +15,7 @@ import pytest
 from seahaven.cli import CliError
 from seahaven.cli.check import collect
 from seahaven.cli.new import render
-from tests.conftest import WORLDS, run_cli
+from tests.conftest import BROKEN_MODULE, WORLDS, broken_tidy, run_cli
 
 pytestmark = pytest.mark.usefixtures("isolated_imports")
 
@@ -141,13 +141,27 @@ def test_a_package_with_no_world_is_sh501(
     assert code == 1
     assert line.startswith("SH501 error")
     assert "world = seahaven.World(...)" in line
+    assert "fix: give the package a world" in line
 
 
-def test_an_import_error_is_sh501_with_the_last_traceback_line() -> None:
+def test_a_missing_world_module_is_sh501_with_the_last_traceback_line() -> None:
     (finding,) = collect("no_such_module_at_all:world", WORLDS / "tidy").findings
     assert finding.code == "SH501"
     assert "ModuleNotFoundError" in finding.message
     assert "\n" not in finding.message
+    assert "--world" in finding.fix
+
+
+def test_an_import_error_is_a_finding_at_the_line_that_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, line = broken_tidy(tmp_path, "undefined_name")
+    code, (printed,) = check(root, monkeypatch, capsys)
+    assert code == 1
+    assert FINDING_LINE.match(printed), printed
+    assert printed.startswith(f"SH501 error {BROKEN_MODULE}:{line}  ")
+    assert "NameError" in printed
+    assert printed.endswith(f"fix: fix the error at {BROKEN_MODULE}:{line}")
 
 
 def test_a_user_error_is_not_a_finding() -> None:

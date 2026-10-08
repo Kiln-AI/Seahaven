@@ -1,17 +1,18 @@
-"""The bundled docs: the layout exists, and the lint reference is not stale.
+"""The bundled docs: the layout exists, every link resolves, and the lint reference is not stale.
 
 The pages are hand-written and nothing generates them, so there is no drift test
-to write for their prose -- `components/pytest_and_docs.md` §2 says so. What can
-go wrong silently is checked here: a page named by the layout (and by `index.md`,
-and by a scaffolded world's `AGENTS.md`) that is not there; the lint reference
-falling behind the rules, which is the one page whose content is a list of things
-that exist elsewhere in the code; and a page still naming either of the two
-surfaces the state-format project removed from the docs, which no fence check
-catches in prose.
+to write for their prose. What can go wrong silently is checked here: a page
+named by the layout (and by `index.md`, and by a scaffolded world's `AGENTS.md`)
+that is not there; a relative link or anchor in a page, `README.md` or
+`CONTRIBUTING.md` that goes nowhere; the lint reference falling behind the rules,
+which is the one page whose content is a list of things that exist elsewhere in
+the code; and a page still naming either of the two surfaces the state-format
+project removed from the docs, which no fence check catches in prose.
 """
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -31,6 +32,7 @@ PAGES = (
     "testing.md",
     "state.md",
     "serving_and_openenv.md",
+    "http_apis.md",
     "extensions.md",
     "projecttracker.md",
     "reference/api.md",
@@ -54,16 +56,29 @@ _REGISTERED = re.compile(r'code="(SH\d+)"')
 # exactly the staleness these tests exist to catch.
 _DOCUMENTED = re.compile(r"^\|\s*(SH\d+)\s*\|", re.MULTILINE)
 
-# Every markdown link target except an `http`/`https` URL, which is a link *out*
-# of the docs: the test below is about which pages exist, and matching one would
-# fail the layout test over a working link. Nothing else is excluded -- a
-# `mailto:`, a protocol-relative `//host/x` or an in-page `#anchor` would be read
-# as a page and fail. None exists in the docs, and this is a layout test rather
-# than a link checker, so the pattern is left as narrow as what it is asked.
-_PAGE_LINK = re.compile(r"\]\((?!https?://)([^)]+)\)")
+# A markdown link's target, with an optional title after it. Read from text with
+# its code removed, so that code is never taken for a link.
+_LINK = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+# A target with a scheme (`https:`, `mailto:`) or no scheme but a host is a link
+# out, which this suite does not fetch.
+_EXTERNAL = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*:|//)")
+_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1", re.MULTILINE | re.DOTALL)
+_CODE_SPAN = re.compile(r"(`+).+?\1")
+_HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t#]*$", re.MULTILINE)
+_EXPLICIT_ANCHOR = re.compile(r"<a\s+(?:id|name)=\"([^\"]+)\"")
+_LINK_MARKUP = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_HTML_TAG = re.compile(r"<[^>]+>")
 
 DOCS = Path(docs_path())
 SOURCE = Path(seahaven.__file__).resolve().parent
+# The suite always runs from a checkout, where the repository's own pages are.
+REPO = Path(__file__).resolve().parents[1]
+LINKED_PAGES = (
+    *(DOCS / page for page in PAGES),
+    REPO / "README.md",
+    REPO / ".github" / "CONTRIBUTING.md",
+    REPO / ".github" / "RELEASING.md",
+)
 
 
 def registered_codes() -> set[str]:
@@ -110,21 +125,86 @@ def test_the_docs_are_where_seahaven_docs_says_they_are() -> None:
     assert found == sorted(PAGES)
 
 
-def test_every_page_index_md_links_to_is_a_page_of_the_layout() -> None:
-    """`index.md` is the reading order, and it ships: a dead link in it ships too."""
-    index = (DOCS / "index.md").read_text(encoding="utf-8")
-    linked = set(_PAGE_LINK.findall(index))
-    assert linked <= set(PAGES), f"{sorted(linked - set(PAGES))} is linked from index.md"
+def without_fences(text: str) -> str:
+    return _FENCE.sub("", text)
+
+
+def relative_links(text: str) -> list[str]:
+    """Every link target in `text` that points into the repository, outside code."""
+    prose = _CODE_SPAN.sub("", without_fences(text))
+    return [target for target in _LINK.findall(prose) if not _EXTERNAL.match(target)]
+
+
+def slug(heading: str) -> str:
+    """A heading's anchor as GitHub spells it, before a duplicate's `-1` suffix."""
+    text = _LINK_MARKUP.sub(r"\1", heading)
+    # Code keeps its text, `<name>` included; a tag outside code is dropped.
+    text = _HTML_TAG.sub("", _CODE_SPAN.sub(lambda span: re.sub(r"[`<>]", "", span[0]), text))
+    return re.sub(r"[^\w\- ]", "", text.lower()).replace(" ", "-")
+
+
+def anchors(text: str) -> set[str]:
+    """Every fragment a link into `text` may name: its headings' slugs and explicit anchors."""
+    found: set[str] = set()
+    seen: dict[str, int] = {}
+    for heading in _HEADING.findall(without_fences(text)):
+        base = slug(heading)
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        found.add(base if count == 0 else f"{base}-{count}")
+    return found | set(_EXPLICIT_ANCHOR.findall(text))
+
+
+def broken_links(page: Path) -> list[str]:
+    """Each relative link in `page` whose file, or whose anchor in that file, is not there."""
+    bundled = page.is_relative_to(DOCS)
+    broken = []
+    for target in relative_links(page.read_text(encoding="utf-8")):
+        path, _, fragment = target.partition("#")
+        resolved = (page.parent / unquote(path)).resolve() if path else page
+        if not resolved.exists():
+            broken.append(f"{target} (missing)")
+        elif bundled and not resolved.is_relative_to(DOCS):
+            # The docs ship in the wheel without the rest of the repository.
+            broken.append(f"{target} (outside the bundled docs)")
+        elif (
+            bundled
+            and resolved.suffix == ".md"
+            and resolved.relative_to(DOCS).as_posix() not in PAGES
+        ):
+            broken.append(f"{target} (not a page of the layout)")
+        elif (
+            fragment
+            and resolved.suffix == ".md"
+            and fragment not in anchors(resolved.read_text(encoding="utf-8"))
+        ):
+            broken.append(f"{target} (no anchor)")
+    return broken
+
+
+@pytest.mark.parametrize("page", LINKED_PAGES, ids=lambda page: page.name)
+def test_every_relative_link_resolves(page: Path) -> None:
+    """Pages, files and anchors, for every page that ships and the two a contributor reads first."""
+    broken = broken_links(page)
+    assert not broken, f"{page.relative_to(REPO)}: {', '.join(broken)}"
 
 
 def test_a_link_out_of_the_docs_is_not_read_as_a_page_of_the_layout() -> None:
-    """`index.md` has no external link today, and the first one must not fail the test above.
+    """Asserted on a sample, because a page with no such link cannot show this."""
+    sample = (
+        "[the OpenEnv spec](https://example.invalid/spec), [mail](mailto:a@example.invalid), "
+        '[concepts](concepts.md "Concepts"), [here](#setup) and `[code](not-a-link.md)`\n'
+        "```md\n[fenced](not-a-link-either.md)\n```\n"
+    )
+    assert relative_links(sample) == ["concepts.md", "#setup"]
 
-    Asserted on a sample rather than on the page, because the page that has no
-    such link is exactly the page that cannot show this.
-    """
-    sample = "[the OpenEnv spec](https://example.invalid/spec) and [concepts](concepts.md)\n"
-    assert set(_PAGE_LINK.findall(sample)) == {"concepts.md"}
+
+def test_a_heading_anchor_is_the_one_github_makes() -> None:
+    assert slug("SH103 — a wall-clock `DEFAULT`") == "sh103--a-wall-clock-default"
+    assert slug("[Composition](composition.md) and `ctx.worlds`") == "composition-and-ctxworlds"
+    assert slug("`seahaven new <name>`") == "seahaven-new-name"
+    text = '# Setup\n\n## Setup\n\n```sh\n# not a heading\n```\n<a id="kept"></a>\n'
+    assert anchors(text) == {"setup", "setup-1", "kept"}
 
 
 def test_every_registered_lint_code_is_documented() -> None:

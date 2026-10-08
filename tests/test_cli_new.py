@@ -7,6 +7,7 @@ to something that already worked, so the first failure they see is one they made
 """
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -15,8 +16,9 @@ from importlib.metadata import metadata
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
-from seahaven.cli import CliError, main
+from seahaven.cli import CliError, build_parser
 from seahaven.cli.new import render, seahaven_requirement
 from seahaven.fixtures import load
 from tests.conftest import CliResult, assert_scaffold_pytest_passes, run_cli
@@ -115,6 +117,43 @@ def test_the_scaffold_declares_the_conflict_between_serve_and_mcp(scaffold: Path
     )
 
 
+def test_the_scaffold_docs_run_each_server_with_its_extra(scaffold: Path) -> None:
+    """Every `uv run seahaven serve` or `seahaven mcp` in the world's docs passes its extra.
+
+    The next steps `seahaven new` prints say `uv sync`, which installs no extra,
+    so a bare `uv run seahaven serve` after it fails with "needs the serve extra".
+    Each server command is named after the extra it needs.
+    """
+    servers = {"serve", "mcp"}
+    commands = [
+        shlex.split(span)
+        for page in ("README.md", "AGENTS.md")
+        for span in re.findall(r"`(uv run [^`]+)`", (scaffold / page).read_text(encoding="utf-8"))
+    ]
+    runs = [
+        (command, command[at + 1])
+        for command in commands
+        for at, word in enumerate(command[:-1])
+        if word == "seahaven" and command[at + 1] in servers
+    ]
+    assert runs, "the scaffold's docs run no server, so this test is asking the wrong question"
+    for command, extra in runs:
+        assert f"--extra {extra}" in shlex.join(command), (
+            f"{shlex.join(command)!r} lacks --extra {extra}"
+        )
+
+
+def test_the_scaffold_installs_pytest_with_uv_sync(scaffold: Path) -> None:
+    """The next steps say `uv run pytest`, and seahaven does not depend on pytest.
+
+    `uv sync` installs the `dev` group by default, so that group is where the
+    scaffold has to ask for it.
+    """
+    declared = tomllib.loads((scaffold / "pyproject.toml").read_text(encoding="utf-8"))
+    dev = declared["dependency-groups"]["dev"]
+    assert [Requirement(entry).name for entry in dev] == ["pytest"]
+
+
 def test_the_scaffold_pins_the_installed_minor_version(scaffold: Path) -> None:
     requirement = seahaven_requirement()
     assert requirement.startswith("seahaven~=")
@@ -130,34 +169,48 @@ def test_check_passes_on_a_fresh_scaffold(
     assert result.code == 0
 
 
-def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
-    assert_scaffold_pytest_passes(scaffold)
+def python_in(scaffold: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """This interpreter, run in the scaffold with its package on `PYTHONPATH`.
 
-
-def test_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
-    """The command under the README's "Making a fixture", run as written.
-
-    `uv run python` is this interpreter with the package on `PYTHONPATH`, as in
-    the pytest test above: the scaffold's own environment would install seahaven
-    from an index it has not been published to.
+    Standing in for `uv run python`: the scaffold's own environment would install
+    seahaven from an index it has not been published to.
     """
+    return subprocess.run(
+        [sys.executable, *args],
+        cwd=scaffold,
+        env={**os.environ, "PYTHONPATH": str(scaffold / "src")},
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+
+
+def build_as_the_readme_says(scaffold: Path) -> None:
+    """The command under the README's "Making a fixture", run as written."""
     readme = (scaffold / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Making a fixture\n", 1)[1]
     command = section.split("```sh\n", 1)[1].split("\n```", 1)[0]
     launcher = "uv run python "
     assert command.startswith(launcher)
 
-    finished = subprocess.run(
-        [sys.executable, *shlex.split(command.removeprefix(launcher))],
-        cwd=scaffold,
-        env={**os.environ, "PYTHONPATH": str(scaffold / "src")},
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-
+    finished = python_in(scaffold, *shlex.split(command.removeprefix(launcher)))
     assert finished.returncode == 0, finished.stdout + finished.stderr
+
+
+def test_pytest_passes_on_a_fresh_scaffold(scaffold: Path) -> None:
+    assert_scaffold_pytest_passes(scaffold)
+
+
+def test_pytest_passes_after_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
+    """The README's first step is a `build`, and the tests have to survive it."""
+    build_as_the_readme_says(scaffold)
+    assert_scaffold_pytest_passes(scaffold)
+
+
+def test_the_readme_builds_the_first_fixture(scaffold: Path) -> None:
+    build_as_the_readme_says(scaffold)
+
     generator = (scaffold / "fixtures_src" / "generate.py").read_text(encoding="utf-8")
     fixture = load(scaffold / "fixtures" / "empty")
     assert fixture.id == "empty"
@@ -184,6 +237,16 @@ def test_a_name_that_is_not_a_package_name_is_refused(tmp_path: Path, name: str)
     assert not (tmp_path / "world").exists()
 
 
+@pytest.mark.parametrize("name", ["email", "json", "Queue", "seahaven"])
+def test_a_name_that_shadows_an_existing_module_is_refused(tmp_path: Path, name: str) -> None:
+    """Each is a legal package name that loses to a module already on the path."""
+    with pytest.raises(CliError) as raised:
+        render(name, tmp_path / "world")
+    assert f"add a suffix, such as '{name.lower()}_world'" in str(raised.value)
+    assert f"the package {name.lower()!r}" in str(raised.value)
+    assert not (tmp_path / "world").exists()
+
+
 @pytest.mark.parametrize("name", ["café", "con", "trailing.", "x" * 129])
 def test_a_name_that_is_not_a_world_name_is_refused(tmp_path: Path, name: str) -> None:
     """All four make a legal package name, and none makes a legal `World(name=...)`.
@@ -197,12 +260,10 @@ def test_a_name_that_is_not_a_world_name_is_refused(tmp_path: Path, name: str) -
     assert not (tmp_path / "world").exists()
 
 
-def test_new_has_no_hub_flag(tmp_path: Path) -> None:
+def test_new_has_no_hub_option() -> None:
     """The hub files are `seahaven hub`'s, run in the world afterwards."""
-    with pytest.raises(SystemExit) as raised:
-        main(["new", "my-world", "--dir", str(tmp_path), "--hub"])
-    assert raised.value.code == 2
-    assert not (tmp_path / "my-world").exists()
+    parsed = build_parser().parse_args(["new", "my-world"])
+    assert set(vars(parsed)) == {"command", "name", "dir", "handler"}
 
 
 def test_a_world_without_the_hub_files_has_no_hub_readme_sections(scaffold: Path) -> None:

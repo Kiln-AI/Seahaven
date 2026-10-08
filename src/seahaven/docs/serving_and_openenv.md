@@ -16,6 +16,8 @@ WebSocket endpoint `/ws`. A harness has no third transport and no Seahaven-speci
 learn. A person working against a world by hand has a third command,
 [`seahaven mcp`](#serving-one-world-to-an-mcp-client), which puts one world in front of one
 [MCP](https://modelcontextprotocol.io) client such as an editor or a chat client.
+A world that copies a product's HTTP API can also serve that API as a test server, which
+[http_apis.md](http_apis.md) describes.
 
 | Section | What it covers |
 |---|---|
@@ -42,11 +44,12 @@ The server and the client are in Seahaven's `serve` extra, because OpenEnv's dep
 large and a world used in process should not pay for it. The environment needs a final CPython 3.14
 or newer, not a release candidate.
 
-**Do not run `pip install "seahaven[serve]"`.** The framework is not published yet. The `seahaven`
-name on PyPI currently holds a placeholder release that contains none of this and has no `serve`
-extra, so that command succeeds and installs nothing useful, which is worse than failing. Until
-publication, install the framework and its extra from a checkout of the Seahaven repository, for
-example `uv pip install -e "/path/to/Seahaven[serve]"` into the environment your world runs in.
+A world made by `seahaven new` has a `serve` extra that installs Seahaven's. Run `uv sync --extra
+serve` in the world's directory. In any other project, add `seahaven[serve]` as a dependency:
+
+```sh
+uv add "seahaven[serve]"
+```
 
 ### The app file
 
@@ -69,28 +72,22 @@ the extra. A world used in process — in pytest, in a script, in a notebook —
 
 ```sh
 seahaven serve
-seahaven serve --host 127.0.0.1 --port 9000
+seahaven serve --host 0.0.0.0 --port 9000
 ```
 
 | Option | Default | What it does |
 |---|---|---|
-| `--host` | `0.0.0.0` | the address to bind. A container serves on the network it was given; pass `--host 127.0.0.1` for loopback |
+| `--host` | `127.0.0.1` | the address to bind. Pass `--host 0.0.0.0` to serve on every interface, as a container does |
 | `--port` | `8000` | the port to bind |
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
-| `--session-timeout` | `3600` | seconds of idleness before a session is reaped; `0` disables the reaper |
+| `--session-timeout` | off | seconds of idleness before a session is reaped; `0` turns the reaper off. See [the idle reaper](#running-it-in-production) |
 | `--include-control-tools` | off | make each session's instance one that can call the deprecated control tool; without the flag the name is an unknown tool. [reference/cli.md](reference/cli.md) names it |
 | `--no-console` | off | do not serve the web console at `/console` |
 | `--world module:attr` | the convention | which world to serve |
 
 `--max_concurrent_envs` is spelled with underscores because that is OpenEnv's own option name, and a
 second spelling here would be one more thing to translate.
-
-If the command fails on a release candidate of CPython 3.14, that is expected and there are two
-separate breakages under it. On 3.14.0rc2 Seahaven does not import at all, because pydantic cannot
-evaluate its forward references there. The extra would also meet a second one on its own: 3.14.0rc2
-has no `collections.abc.ByteString`, and `beartype` asks for that name unguarded. Both are gone on
-3.14.0 final, where the extra installs and works unpatched.
 
 One process serves one world, and `serve` always runs a single worker. A session's instance,
 connections and working directory are in-process state, so a second worker would answer a session's
@@ -123,8 +120,7 @@ A WebSocket connection is one session, and one session holds one instance.
 - **A second `reset`** destroys the current instance before making the new one, so a session never
   holds two. If creation then fails, the session is left exactly as a fresh one — no instance, no
   episode, no steps — and is open for another `reset`.
-- **Closing the connection** destroys the instance. A dropped client costs nothing once it is
-  reaped.
+- **Closing the connection**, or losing it, destroys the instance.
 
 `reset` takes what `world.instance(...)` takes, because it *is* `world.instance(...)`:
 
@@ -490,6 +486,8 @@ observation too, and raises only on a framework or protocol failure.
 The gate bounds how many tool calls run at once. It never bounds admission: calls queue, and nothing
 is rejected. A call takes the gate before the instance lock, so a queued call cannot block a
 `destroy` or a `freeze`. Instance creation, tool listing and the control tool bypass it entirely.
+`inst.bulk()` bypasses it too, and so does any call made inside a call or a `bulk()` block on the
+same thread.
 
 Its default follows the process's CPU affinity, so it respects a container's limit rather than the
 host's core count.
@@ -497,26 +495,16 @@ host's core count.
 **The gate is unfair whenever it binds, and the default is not exempt.** It is a
 `threading.BoundedSemaphore`, and a semaphore is not a queue. A thread that releases a slot and
 immediately asks for another usually wins the race against the waiter that was just woken, because
-the waiter needs the GIL to make progress and the barging thread already has it. In the framework's
-own benchmark, with five threads calling and the gate at 1, 2 or 4, one three-second window served
-its worst-served session **once** while another session in that same window was served thousands of
-times: 12,874 at a gate of 1, and 5,351 and 4,011 at 2 and 4. At a gate size above the number of
-threads offered, so that the gate never binds, every session got an even share. Every gate size that
-binds behaves this way, and a server with 500 sessions and a gate of 16 is the ordinary case rather
-than an edge one.
+the waiter needs the GIL to make progress and the barging thread already has it. Under load, one
+session can be served once while another is served thousands of times. Every gate size that binds
+behaves this way.
 
 Nothing is dropped, so the promise that calls queue is kept to the letter. But a call that queues
 for seconds behind a thread barging in front of it is not the service that promise implies, and a
-run whose session is the unlucky one will time out. The fix is a gate that hands slots out in
-arrival order, not a different number.
+run whose session is the unlucky one will time out.
 
-What to do meanwhile, for a workload that is saturated and cares about the slowest session:
-`--concurrency 0` was the one setting measured that served every session evenly, and at 32 sessions
-it matched or beat the default on throughput while cutting the worst observed wait by an order of
-magnitude. It pays for that in median and 95th-percentile latency. The measurements, with the
-caveats they need — one machine, one afternoon, a closed loop with no think time — are in
-`bench/results/latest.md` in the Seahaven repository. They are not a service-level objective, they
-are not a capacity model, and no number from them should be quoted as a property of the framework.
+If a saturated workload cares about its slowest session, run with `--concurrency 0`. Without the
+gate every session gets an even share, and median and 95th-percentile latency go up.
 
 **The gate is not a serving feature.** It is process-wide and on by default in *any* process that
 calls a tool, including an in-process eval harness driving instances on threads. `serve` only gives
@@ -534,15 +522,16 @@ affinity, which is the operator's business. One world is not one *package*, thou
 adds other worlds serves their tools as part of its own surface, so a composite world is still one
 environment on the wire ([composition.md](composition.md)).
 
-**The idle reaper matters.** A held session costs its fixture copy on disk and about a megabyte of
-memory, and a client that drops without closing holds one for ever. An hour is long enough that no
-live eval is reaped and short enough that a crashed harness does not accumulate instances.
+**The idle reaper is off by default.** A session holds its fixture copy on disk and about a megabyte
+of memory until its connection ends. A dropped connection ends the session too, so a client that
+crashes leaves no instance behind. `--session-timeout N` turns the reaper on: it destroys the
+instance of a session that has been idle for `N` seconds. The reaper counts only `reset` and `step`
+as activity, so it can reap a client that is still connected, for example one that only reads
+`state`.
 
 **A disconnect is not an error in the log.** A session that ends normally leaves nothing on
 `uvicorn.error`, whatever client ended it: `SeahavenClient`, a stock `GenericEnvClient`, a raw
-socket, or a harness that simply dies. Seahaven carried a client-side close handshake and an ASGI
-middleware to get that under openenv 0.4.2, and carries neither now, because openenv 0.5 logs no
-error for a normal close.
+socket, or a harness that simply dies.
 
 **A dropped connection is a lost episode, so `SeahavenClient` waits longer before calling one
 dead.** A session is one connection holding one instance, and there is no resume: any disconnect
@@ -609,12 +598,6 @@ A client that has Seahaven installed can use `SeahavenClient` with typed observa
 
 ### The image
 
-**The `Dockerfile` does not build a working image today.** Its build step is `RUN uv sync --extra
-serve`, and the world's `serve` extra is `seahaven[serve]`, which resolves to the placeholder
-release described at the top of this page. The image builds, and the container cannot start: there
-is no `seahaven.openenv` in it. Until publication, an image has to get the framework from a checkout
-or a private index, which means editing that `RUN` line.
-
 The image serves `<package>.openenv_app:app` on port 8000, and answers its `HEALTHCHECK` on
 `/health`. The `app` key in `openenv.yaml` names the same app, because OpenEnv's Modal and Daytona
 providers start the server from that key rather than from the `Dockerfile`.
@@ -634,13 +617,10 @@ is empty. The one-line description is unaffected, since that is `World(descripti
 with the world rather than with the directory. Put the world's `README.md` beside the directory you
 named, or leave `fixtures_dir` alone and ship `fixtures/` where it was.
 
-Seahaven's own reference world is not published anywhere. That step is gated on a maintainer's
-sign-off and has not happened.
-
 ## Evaluating with Kiln
 
-[Kiln](https://kiln.tech) connects to a Seahaven world as an OpenEnv client, which is the whole
-integration: point it at a served world and it drives the sessions.
+[Kiln](https://kiln.tech) connects to a Seahaven world as an OpenEnv client. Point Kiln at a served
+world and it drives the sessions.
 
 Kiln is where the goal that Seahaven deliberately does not hold gets written down. Define a scenario
 against a world and a fixture, run it as an [eval](https://kiln.tech/features/evals) and grade the
@@ -664,8 +644,7 @@ document and no control tool.
 
 Two steps run a world in a client:
 
-1. `uv run --extra mcp seahaven mcp`, in the world's own directory ([from a checkout until
-   publication](#install-the-serve-extra)).
+1. `uv run --extra mcp seahaven mcp`, in the world's own directory.
 2. Give a client that same command. The `.mcp.json` below is the whole configuration:
 
 ```json

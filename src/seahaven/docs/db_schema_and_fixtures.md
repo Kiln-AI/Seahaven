@@ -77,10 +77,9 @@ A schema file may also seed static reference rows — currencies, plans, a looku
 ships with — and they are part of the schema in the sense that matters: every instance of the world
 starts with them. The connection those `INSERT`s run on carries the instance's clock and its seed,
 so a seeded row built from `randomblob()` replays like anything else a world writes, and one built
-from `CURRENT_TIMESTAMP` reads the instance's clock. The wall-clock rule below is unchanged and
-still refuses `CURRENT_TIMESTAMP` inside a `CREATE` — a column default, a trigger body — so that one
-timestamp format is written everywhere; what is sanctioned here is the `INSERT` the file runs
-itself. Rows that belong to one *scenario* are a fixture's job, not the schema's.
+from `CURRENT_TIMESTAMP` reads the instance's clock. The wall-clock rule below covers the objects a
+schema file creates, such as a column default or a trigger body. It does not cover the `INSERT`
+statements the file runs. Rows that belong to one *scenario* are a fixture's job, not the schema's.
 
 ### Three rules
 
@@ -96,11 +95,11 @@ key cannot be identified in a change-log record, so writes to a table without on
 the eval grading the run. A join table takes a composite key: `PRIMARY KEY (issue_id, label_id)`.
 
 **No expression reads the wall clock.** No `CURRENT_TIMESTAMP` default, no `datetime('now')` in a
-trigger, and nothing like them in a view, a generated column or a partial index. The problem is the
-text as much as the instant: SQLite writes `2026-06-01 09:00:00`, and the rest of the world writes
-`2026-06-01T09:00:00.000Z`. Two formats in one column make a comparison fail for a reason nobody
-finds quickly. Declare the column `NOT NULL` with no default, and pass the value in from
-`ctx.clock.iso()`.
+trigger, and nothing like them in a view, a generated column or a partial index. The tool that
+makes a row decides its time. A trigger that stamps `updated_at` overwrites the history a fixture
+generator writes, and `CURRENT_DATE` or `julianday('now')` writes a date or a number where every
+other timestamp is `2026-06-01T09:00:00.000Z`. Declare the column `NOT NULL` with no default, and
+pass the value in from `ctx.clock.iso()`.
 
 FTS5 virtual tables and their shadow tables are exempt from the first two rules, because a virtual
 table cannot be `STRICT` and does not declare a primary key. [authoring.md](authoring.md) covers
@@ -187,9 +186,9 @@ change it, and freeze the result under a new id.
 `@pytest.mark.seahaven(fixture="agency")`, `seahaven fixture fork agency ...`. The id is also the
 directory name, and it travels with the fixture, so it follows the same rule a world's name does: 1
 to 128 characters of letters, digits, space, `.`, `-` and `_`, with no leading or trailing space or
-dot, and no Windows device name. Anything else is refused with `not a fixture id`. A fixture frozen
-under an id this rule now refuses still appears in `world.fixtures()` but no longer opens. Rename
-its directory and its sidecar's `id` to reach it again.
+dot, and no Windows device name. Anything else is refused with `not a fixture id`. A fixture
+directory whose id breaks this rule appears in `world.fixtures()` and does not open. Rename its
+directory and its sidecar's `id` to reach it again.
 
 ## Building a fixture
 
@@ -323,8 +322,8 @@ loaded world fails with a message saying the fixture needs regenerating, and `se
 reports the same thing as `SH403` before you get that far.
 
 So: change the schema, delete every fixture directory, re-run the generator for each one in parent
-order, and commit the new bytes. Nothing migrates a fixture that has already shipped. Version 1 of
-Seahaven has no migration path at all, which is why the generator is committed.
+order, and commit the new bytes. Nothing migrates a fixture, which is why the generator is
+committed.
 
 An extension that brings its own `CREATE TABLE` text (see [extensions.md](extensions.md)) changes
 the schema hash too. That is a real cost of using one, and the extensions page says so.

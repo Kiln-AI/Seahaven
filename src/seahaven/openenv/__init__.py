@@ -71,11 +71,14 @@ __all__ = [
 # connection, and `seahaven serve --max_concurrent_envs` moves the number.
 DEFAULT_MAX_CONCURRENT_ENVS = 500
 
-# A held session costs its fixture copy on disk and about a megabyte of memory,
-# and a client that drops without closing holds one for ever. An hour idle is
-# long enough that no live eval is reaped and short enough that a crashed
-# harness does not accumulate; `--session-timeout 0` turns the reaper off.
-DEFAULT_SESSION_TIMEOUT = 3600.0
+# No reaper unless the operator asks for one with `--session-timeout N`. A
+# dropped client already leaves nothing behind: OpenEnv's `/ws` handler destroys
+# the session in its `finally` when the socket goes, uvicorn's ping closes a
+# half-open peer, and Seahaven refuses `openenv/session/create`, the only way to
+# hold a session without a socket. So every session the reaper could find has a
+# client still connected, and OpenEnv counts only `reset` and `step` frames as
+# activity -- a harness that is only reading `state` would lose its instance.
+DEFAULT_SESSION_TIMEOUT: float | None = None
 
 
 # OpenEnv's three plain-HTTP episode-control routes. Every one of their handlers
@@ -428,8 +431,9 @@ def _refuse_mcp_transport(served: FastAPI) -> None:
 
 # The built web console: one self-contained HTML file with no sibling assets
 # and no request on load, which is why serving it is a route and not a static
-# directory. It is built from `ui/` in the repository (`npm run build`) and
-# copied here, so it travels in the wheel like `docs/` and `cli/templates/` do.
+# directory. It is built from `tools/console/` in the repository (`npm run
+# build`) and copied here, so it travels in the wheel like `docs/` and
+# `cli/templates/` do.
 CONSOLE_PATH = "/console"
 CONSOLE_FILE = Path(__file__).parent / "console" / "index.html"
 

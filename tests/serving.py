@@ -13,8 +13,9 @@ that does not race with whatever takes the port between the scan and the bind.
 because a world's suite is a world author's suite: it runs with that directory
 as its rootdir and cannot import the framework's tests.
 
-Importing this module imports `openenv`, so every module that imports it does so
-below its own `importorskip`, never at the top of the file.
+`serving` imports `openenv` when it is called, so a module that uses it does so
+below its own `importorskip`. `serving_app` serves any ASGI app and needs only
+uvicorn and Starlette.
 """
 
 import threading
@@ -24,9 +25,8 @@ from contextlib import contextmanager
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI
+from starlette.types import ASGIApp
 
-from seahaven.openenv import app
 from seahaven.world import World
 
 START_TIMEOUT = 30.0
@@ -35,15 +35,23 @@ STOP_TIMEOUT = 30.0
 
 @contextmanager
 def serving(world: World, **options: Any) -> Iterator[str]:
-    """Serve a world on a free port for the block, and answer its base URL."""
+    """Serve a world's OpenEnv app on a free port for the block, and answer its base URL."""
+    from seahaven.openenv import app
+
     with serving_app(app(world, **options)) as url:
         yield url
 
 
 @contextmanager
-def serving_app(served: FastAPI) -> Iterator[str]:
-    """Serve an app that is already built, such as a scaffold's `openenv_app:app`."""
-    server = uvicorn.Server(uvicorn.Config(served, host="127.0.0.1", port=0, log_level="warning"))
+def serving_app(served: ASGIApp, **config: Any) -> Iterator[str]:
+    """Serve an ASGI app on a free port for the block, and answer its base URL.
+
+    `config` is passed to `uvicorn.Config`. The server has stopped, and run its
+    lifespan shutdown, when the block exits.
+    """
+    server = uvicorn.Server(
+        uvicorn.Config(served, host="127.0.0.1", port=0, log_level="warning", **config)
+    )
     thread = threading.Thread(target=server.run, name="test-uvicorn", daemon=True)
     thread.start()
     try:

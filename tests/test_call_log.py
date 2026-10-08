@@ -211,19 +211,43 @@ def test_an_argument_the_tool_refuses_is_reported_as_an_argument_error(tmp_path:
         assert len(instance.call_log()) == instance.call_count == 1
 
 
-def test_a_tool_that_mutates_its_arguments_does_not_alter_the_record(tmp_path: Path) -> None:
+def counting_world(tmp_path: Path) -> World:
     world = build_world(tmp_path)
 
     @world.tool
-    def consume(ctx: Ctx, tags: list[str]) -> int:
-        """Empty the list it was handed."""
-        count = len(tags)
-        tags.clear()
-        return count
+    def count(ctx: Ctx, tags: list[str]) -> int:
+        """Count the tags."""
+        return len(tags)
+
+    return world
+
+
+def test_a_caller_that_changes_its_list_after_the_call_does_not_alter_the_record(
+    tmp_path: Path,
+) -> None:
+    with counting_world(tmp_path).instance(None) as instance:
+        given = ["a", "b"]
+        assert instance.call("count", tags=given) == 2
+        given.append("later")
+
+        (record,) = instance.call_log()
+
+        assert record.arguments == {"tags": ["a", "b"]}
+
+
+def test_a_middleware_that_changes_an_argument_in_place_does_not_alter_the_record(
+    tmp_path: Path,
+) -> None:
+    """The caller's list, changed before validation copies it: the record is the call as made."""
+    world = counting_world(tmp_path)
+
+    @world.middleware
+    def extend(ctx: Ctx, call: Call, next_: Handler) -> object:
+        call.arguments["tags"].append("added")
+        return next_(ctx, call)
 
     with world.instance(None) as instance:
-        given = ["a", "b"]
-        instance.call("consume", tags=given)
+        assert instance.call("count", tags=["a", "b"]) == 3
 
         (record,) = instance.call_log()
 

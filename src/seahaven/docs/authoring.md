@@ -11,7 +11,7 @@ handler, middleware, startup hooks, the schema files, and the things that go wro
 | [What an MCP client reads](#what-an-mcp-client-reads) | The server name and the instruction string a world publishes |
 | [Writing a tool](#writing-a-tool) | Signatures, arguments, results, transactions, and what registration refuses |
 | [Errors](#errors) | This world's error shapes, the framework's own, and the error handler |
-| [Middleware](#middleware) | Wrapping every call |
+| [Middleware](#middleware) | What middleware is for, and how it runs |
 | [Instance startup](#instance-startup) | Setting an instance up before the first call |
 | [Adding another world](#adding-another-world) | The four authoring decisions composition asks of you |
 | [The schema files](#the-schema-files) | Where the SQL files go, and full-text search |
@@ -46,16 +46,6 @@ notes/
   tests/test_items.py
   tests/test_fixtures.py       # the fixture recipe above, run into a temporary directory
 ```
-
-**Before you run the `uv sync` that `seahaven new` prints as its next step:** while Seahaven is
-unpublished, that step does not do what it looks like. A scaffold depends on `seahaven~=0.0`, and
-that resolves to a placeholder release on PyPI which contains none of the framework. `uv sync`
-succeeds, and the world then fails at import with `ModuleNotFoundError: No module named
-'seahaven.world'`, raised by the scaffold's own `middleware/error_handler.py`, which says nothing
-about where the package came from. `seahaven check` does not even start, because the placeholder
-ships no console script. Install the framework from a checkout instead (`uv pip install -e
-/path/to/Seahaven`, with `[serve]` if the world will be served), or work in an environment that
-already has it. This paragraph disappears when Seahaven is published.
 
 Three rules about the layout are worth stating now.
 
@@ -206,25 +196,41 @@ JSON schema is what the tool list publishes. The model is **strict**:
 - every violation is reported at once, as a `seahaven.ArgumentError` carrying `violations`, so an
   agent can fix all of them in one turn.
 
-Argument types are the JSON types, `Literal`, and nested pydantic models. Two kinds are refused at
-registration, because strict validation could never satisfy them from a wire format: `datetime`,
-`date` and `time`, and any `Enum` subclass, anywhere inside the annotation. Use `str` with a pattern
-for a timestamp, and `Literal` for a closed set:
+An argument may be almost any type pydantic gives a JSON schema: the JSON types, `Literal`, an
+`Enum`, `datetime`, `UUID`, `Decimal`, `tuple`, `set`, a dataclass, a `TypedDict` or a nested
+pydantic model. [What registration refuses](#what-registration-refuses) lists the exceptions. An
+agent sends the JSON form that the schema publishes, such as a string for a `datetime` and an array
+for a `tuple`, and the tool receives the Python object. The strict rules above apply at every depth,
+except inside a type with a pydantic config of its own, described below.
+
+A call is validated in one of two modes. When every argument is plain JSON at every depth (`dict`,
+`list`, `str`, `int`, `float`, `bool` and `None`), the call is validated as JSON, which is the form
+the schema publishes. When any argument holds another Python object, the whole call is validated as
+Python, and each argument must then be the annotated type's own object. A `datetime` passed for a
+`str` is refused, and so is a list for a `tuple` beside a `UUID` object.
+
+A union whose members accept the same JSON string is ambiguous, and pydantic picks the member:
+`datetime | str` receives a timestamp as a `datetime`, and `str | datetime` receives it as a `str`.
+
+A nested pydantic model validates under its own config, not the tool's. So does a pydantic
+dataclass, and a type given `@with_config`. Set `strict=True` in it, or `strict=False` to accept lax
+input on purpose. Registration refuses such a type when it sets neither.
 
 ```py
+from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Status = Literal["backlog", "todo", "done"]
-Timestamp = Annotated[
-    str,
-    Field(
-        pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$",
-        description="A UTC timestamp with milliseconds, e.g. 2026-06-01T09:00:00.000Z.",
-    ),
-]
 Limit = Annotated[int, Field(ge=1, le=250, description="How many rows to return, 1 to 250.")]
+
+
+class Window(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    start: datetime
+    end: datetime
 ```
 
 Declare these once in a module of their own and import them everywhere, so that five tools that take
@@ -279,7 +285,8 @@ non-determinism this framework exists to prevent. The tool never sees the wire f
 
 ### Transactions
 
-By default **one call is one transaction**. Seahaven begins it before the tool runs, commits it when
+By default **one call is one transaction** (excluding
+[middleware](#middleware-technical-notes)). Seahaven begins it before the tool runs, commits it when
 the tool returns, and rolls it back if the tool raises. Nothing partial survives a tool that fails
 half way.
 
@@ -307,7 +314,9 @@ when it:
 - has no first parameter, or one that is not positional and either annotated `seahaven.Ctx` or left
   unannotated;
 - has an argument with no type annotation, a positional-only argument, `*args` or `**kwargs`;
-- has an argument annotated `datetime`, `date`, `time` or an `Enum` subclass, at any depth;
+- has an argument that holds, at any depth, a nested pydantic model, pydantic dataclass or
+  `@with_config` type that does not set `strict`, or a `Literal` of a value JSON cannot send, such
+  as a plain `Enum` member;
 - has an argument whose annotation exists only under `TYPE_CHECKING`, in which case the message
   names the symbol;
 - has an argument with a mutable default (`[]`, `{}`, `set()`);
@@ -424,10 +433,12 @@ def error_handler(ctx: seahaven.Ctx, call: seahaven.Call, next_: Handler) -> Any
     except seahaven.WorldBug:
         raise  # the author's, not the agent's. Loudly, and unchanged
     except Exception as error:
+        # A bug in world code. It stops here, so it is logged here.
+        _log.error("%s: unexpected error under %s", ctx.instance.id, call.name, exc_info=error)
         raise Internal() from error
 ```
 
-Edit it to match the product. Two rules are worth keeping.
+Edit it to match the product. Three rules are worth keeping.
 
 **Re-raise a `WorldBug` unchanged.** Turning it into a product error hides a bug from you and tells
 the agent a lie.
@@ -438,6 +449,12 @@ are SQL errors and "database error" would tell an agent nothing about the syntax
 Everywhere else a `DbError` means this world's own SQL was wrong, and the agent can do nothing with
 that.
 
+**Log a bug you turn into a product error.** Seahaven logs a traceback at ERROR only when an
+exception other than a `ToolError` escapes the middleware chain of an agent's call. A middleware
+that turns an exception into a result or a `ToolError` stops that line, so log the bug in that
+middleware, as the handler above does. Seahaven logs a `ToolError` raised from another exception
+with its traceback at DEBUG.
+
 A tool that lets SQLite refuse something it could have refused itself — a missing parent row, a
 duplicate unique key — turns a sentence the agent could have acted on into an internal error. Look
 the parent up first and raise the world's own `NOT_FOUND`. Keep the foreign key as the second lock
@@ -445,62 +462,54 @@ on the door.
 
 ## Middleware
 
-A middleware is anything callable as `(ctx, call, next_) -> result`. There is nothing to subclass;
-the shape is checked at registration. It may inspect or replace arguments, short-circuit, transform
-results, catch and re-raise errors, or time the call.
+A **middleware** is a function that wraps every tool call. It receives the call before the tool
+runs, decides whether and how to pass it on, and sees the result or the error on the way back. Use
+it for behaviour that applies to many tools, so that each tool does not repeat it.
 
-```python
-import logging
-from typing import Any
+A middleware is anything callable as `(ctx, call, next_) -> result`. It calls `next_(ctx, call)` to
+run the rest of the chain, and returns what it wants the caller to get. There is nothing to
+subclass; the shape is checked at registration.
 
-import seahaven
-
-world = seahaven.World(
-    name="notes",
-    version="1.0.0",
-    schema="CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL) STRICT;",
-    state_format="seahaven.state/1",
-)
-seen: list[str] = []
-
-
+```py
 @world.middleware
-def audit(ctx: seahaven.Ctx, call: seahaven.Call, next_: seahaven.world.Handler) -> Any:
-    """Record every call, then run the rest of the chain."""
-    seen.append(call.name)
-    return next_(ctx, call)
-
-
-@world.middleware
-def default_the_body(ctx: seahaven.Ctx, call: seahaven.Call, next_: seahaven.world.Handler) -> Any:
-    """Fill in an argument the agent left out, before validation sees it."""
-    if call.name == "add_note" and "body" not in call.arguments:
-        call = call.with_arguments(body="(empty)")
-    return next_(ctx, call)
-
-
-@world.tool
-def add_note(ctx: seahaven.Ctx, body: str) -> dict[str, object]:
-    """Write a note down."""
-    return {"id": ctx.ids.uuid(), "body": body}
-
-
-with world.instance() as inst:
-    assert inst.call("add_note")["body"] == "(empty)"
-    assert seen == ["add_note"]
+def hide_database_errors(ctx: seahaven.Ctx, call: seahaven.Call, next_: Handler) -> Any:
+    """Turn a database failure into this product's own error."""
+    try:
+        return next_(ctx, call)
+    except seahaven.DbError as error:
+        raise Internal() from error
 ```
 
-- **Order is registration order, outermost first.** The error handler is registered first in the
-  scaffold and stays outermost.
-- `call` is always `ctx.call`. A layer that rewrites arguments passes the new `Call` on, and the
-  chain hands the next layer a `ctx` whose `call` is that one, so the two cannot diverge.
-- `call.with_arguments(**changes)` merges over the existing arguments and returns a copy. A `Call`
-  is frozen.
-- Middleware runs for every tool call, including the helpers' and an extension's. It does **not**
-  run for `UnknownTool`, for a tool listing, for startup hooks, or for the control tool.
-- Arguments are raw until validation runs, which happens inside the chain. A layer that wants typed
-  arguments first calls `call.tool.validate(call.arguments)` itself. The model is built once at
+Common uses:
+
+- **Mapping errors.** The [error handler](#the-error-handler) is a middleware. It turns everything
+  a tool raises into one of this world's error shapes.
+- **Access control and quotas.** Check a permission or a rate limit, and raise the product's error
+  without calling `next_`.
+- **Rewriting arguments.** Fill in a default or rename a field, then pass a new `Call` on with
+  `call.with_arguments(...)`.
+- **Shaping results.** Change what the tool returned, or render an error as the product's own
+  response document, as the [XML-RPC extension](extensions.md) does.
+- **Logging and timing.**
+
+### Middleware technical notes
+
+- **Order.** Middleware runs in registration order, outermost first. The scaffold registers the
+  error handler first, so it stays outermost and sees every error. In a world that adds other
+  worlds, the host's middleware runs first ([composition.md](composition.md#middleware)).
+- **Arguments.** Validation runs after the middleware, so a middleware sees the arguments as sent.
+  Call `call.tool.validate(call.arguments)` for typed ones. The model is built once at
   registration, so that is cheap.
+- **`call` is always `ctx.call`.** A layer that rewrites arguments passes the new `Call` on, and
+  the chain hands the next layer a `ctx` whose `call` is that one, so the two cannot diverge.
+  `call.with_arguments(**changes)` merges over the existing arguments and returns a copy. A `Call`
+  is frozen.
+- **Transactions.** Middleware runs outside the tool's transaction, so its writes commit even when
+  the tool rolls back. Wrap `next_` in `ctx.db.transaction()` to make them commit or roll back
+  together.
+- **What it wraps.** Middleware runs for every tool call, including the helpers' and an
+  extension's. It does not run for `UnknownTool`, a tool listing, startup hooks or the control
+  tool.
 
 ## Instance startup
 

@@ -254,6 +254,30 @@ def test_an_unexpected_exception_becomes_internal(probe: Probe) -> None:
         assert isinstance(raised.value.__cause__, ValueError)
 
 
+def test_an_unexpected_exception_is_written_to_the_log_once_with_its_traceback(
+    probe: Probe, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Seahaven logs only what escapes the chain, and `INTERNAL` does not escape it as a bug.
+
+    So the handler's own line is the only ERROR record, and the only place the
+    author finds the bug.
+    """
+
+    def crash(ctx: seahaven.Ctx) -> None:
+        raise ValueError("a bug in world code")
+
+    world = probe(a_tool(crash, "crash"))
+    with caplog.at_level(logging.ERROR), world.instance(None, now=BLANK_NOW) as instance:
+        with pytest.raises(Internal):
+            instance.call("crash")
+        (record,) = caplog.records
+        assert record.name == "projecttracker.errors"
+        assert instance.id in record.getMessage()
+        assert "crash" in record.getMessage()
+        assert record.exc_info is not None
+        assert isinstance(record.exc_info[1], ValueError)
+
+
 def test_a_world_bug_is_re_raised_and_never_becomes_a_product_error(probe: Probe) -> None:
     """Turning a `WorldBug` into `INTERNAL` would hide the author's own mistake.
 

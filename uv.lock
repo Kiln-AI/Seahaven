@@ -1828,7 +1828,7 @@ wheels = [
 
 [[package]]
 name = "seahaven"
-version = "0.0.1"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "apsw" },

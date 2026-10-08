@@ -26,12 +26,15 @@ thread it likes. The lock is an `RLock` because a control tool is called with it
 already held and then asks the instance for something -- its control handle --
 that takes it again on the same thread.
 
-*The gate before the lock.* The concurrency gate bounds how many tool calls run
-at once across the process. It is taken before the instance lock, so a call
-queued behind it holds nothing and can never delay a `destroy` or a `freeze`. A
-call host code makes into an added world does not take it at all: the outermost
-call is already holding it, and one instance runs one call at a time however many
-nodes that call touches.
+*The gate before the lock, and never under it.* The concurrency gate bounds how
+many tool calls run at once across the process. A call takes it before the
+instance lock, so a call queued behind it holds nothing and can never delay a
+`destroy` or a `freeze`. The gate is re-entrant per thread: once a thread is
+inside a call or a `bulk()` block, nothing more it does takes the gate. That
+covers a nested call through a handle, an `inst.call(...)` inside `bulk()`, and a
+call on another instance from inside either, because by then the thread may hold
+an instance lock that a queued caller is waiting for. `bulk()`, instance creation
+and the control tool take no slot.
 
 *The manager's lock is never held while an instance lock is.* The registry is
 touched only in short moments that take nothing else.
@@ -55,7 +58,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Concatenate, Self, overload
 
-from seahaven.call import Call, arguments_of, name_of, serialise
+from seahaven.call import Call, Handler, arguments_of, name_of, serialise
 from seahaven.changes import (
     CallRecord,
     LogRecord,
@@ -72,7 +75,7 @@ from seahaven.composition import (
     Node,
     NodeKey,
     NodeReport,
-    canonical_tree,
+    hosts_first,
 )
 from seahaven.ctx import Ctx, InstanceInfo
 from seahaven.db import Db, build_blank, open_inspection, open_instance
@@ -130,7 +133,7 @@ def default_concurrency() -> int:
     large host from over-subscribing.
 
     **This is not the throughput optimum, and it was never measured to be.** The
-    sweep in `bench/results/latest.md` found no optimum above 1 on a build with
+    sweep in `tools/bench/results/latest.md` found no optimum above 1 on a build with
     the GIL: most of a call is Python, so a second runnable thread buys contention
     rather than parallelism, and `n = 1` ran 22% to 37% more calls a second than
     this default on every workload, cache state and offered load measured.
@@ -210,24 +213,36 @@ def concurrency() -> int:
     return current.size if current is not None else 0
 
 
+# Whether this thread is inside a `gate()` block, whether or not that block took
+# a slot. Per thread, not a ContextVar: Starlette's `run_in_threadpool` and
+# `asyncio.to_thread` copy context variables into the worker thread, and that
+# worker holds none of the locks the flag stands for.
+_gated = threading.local()
+
+
 @contextmanager
 def gate(*, bypass: bool = False) -> Iterator[None]:
     """Hold one of the gate's slots for the block, queueing for it if need be.
 
     Nothing is ever rejected: the gate bounds how many calls execute at once, not
-    how many are admitted.
+    how many are admitted. Re-entrant per thread: a block opened inside another
+    takes nothing, because by then the thread may hold an instance lock.
     """
-    # Read once: a `set_concurrency` between the acquire and the release must not
-    # let this call release a slot on a semaphore it never took.
-    semaphore = _gate
-    if bypass or semaphore is None:
+    if getattr(_gated, "active", False):
         yield
         return
-    semaphore.acquire()
+    # Read once: a `set_concurrency` between the acquire and the release must not
+    # let this call release a slot on a semaphore it never took.
+    semaphore = None if bypass else _gate
+    if semaphore is not None:
+        semaphore.acquire()
+    _gated.active = True
     try:
         yield
     finally:
-        semaphore.release()
+        _gated.active = False
+        if semaphore is not None:
+            semaphore.release()
 
 
 @dataclass
@@ -261,11 +276,12 @@ class NodeRuntime:
 
 @dataclass(frozen=True)
 class _Target:
-    """What a call resolved to: the name as it was asked for, and who owns it."""
+    """What a call resolved to: the name as it was asked for, who owns it, and its chain."""
 
     name: str
     tool: Tool
     node: Node
+    chain: Handler
 
 
 class Instance:
@@ -595,9 +611,11 @@ class Instance:
         validation and transaction boundaries for tens of thousands of rows. What
         is yielded is the root node's context, with no call attached and a live
         `ctx.worlds`, so an added world's store is reached through
-        `ctx.worlds.<name>.db`; nothing is disabled and nothing is wrapped. Every
-        node's transaction is committed on the way out, and all of them are rolled
-        back together if the block raised. Startup hooks do not run again.
+        `ctx.worlds.<name>.db`; nothing is disabled and nothing is wrapped. If the
+        block raises, every node's transaction is rolled back. Otherwise they
+        commit one at a time, the root last, and a commit that fails leaves the
+        nodes that committed before it with their rows. Startup hooks do not run
+        again.
         """
         return self._bulk()
 
@@ -632,11 +650,11 @@ class Instance:
             # A function names the entry, and the entry names the node: the two
             # ways in meet here, and everything below this line is one path.
             entry = composition.entry_for(tool)
-            return _Target(entry.name, entry.tool, entry.node)
+            return _Target(entry.name, entry.tool, entry.node, entry.chain)
         name = tool
         entry = composition.tools.get(name)
         if entry is not None:
-            return _Target(name, entry.tool, entry.node)
+            return _Target(name, entry.tool, entry.node, entry.chain)
         # Control tools are never contributed -- they are the framework's, not a
         # world's surface -- so the composite list cannot hold them and the root's
         # own registry is where they are. Every other name the root registers is
@@ -649,7 +667,8 @@ class Instance:
             # words: whether the name exists at all is not something a caller
             # gets to learn by calling it.
             raise UnknownTool(name)
-        return _Target(name, registered, composition.root)
+        # `control.dispatch` answers a control tool before any chain would run.
+        return _Target(name, registered, composition.root, composition.root.own_chain)
 
     def _dispatch(self, target: _Target, arguments: Mapping[str, Any]) -> Any:
         tool = target.tool
@@ -668,10 +687,16 @@ class Instance:
             # and a middleware short-circuit included: the harness's Nth call is
             # this instance's Nth (functional_spec.md §7).
             i = self._next_ordinal()
-            # The chain is read from the node here rather than held, so a
-            # middleware registered after this instance was made applies to it.
-            with self._recording(i), self._logging_call(target.name, arguments), in_call():
-                return target.node.agent_chain(ctx, call)
+            # The chain comes from this call's resolution, which reseals after a
+            # registration, so a middleware registered after this instance was
+            # made applies to it.
+            with (
+                self._recording(i),
+                self._logging_call(target.name, arguments),
+                self._logging_escape(target.name, target.node.path),
+                in_call(),
+            ):
+                return target.chain(ctx, call)
 
     def _next_ordinal(self) -> int:
         """The ordinal of the call about to run, counting from 0. The lock is held.
@@ -776,6 +801,52 @@ class Instance:
                 CallRecord(tool=name, arguments=given, error=error, tool_error=tool_error)
             )
 
+    @contextmanager
+    def _logging_escape(self, name: str, node: str) -> Iterator[None]:
+        """Put the traceback of an exception that escapes the agent's chain on record.
+
+        Logged here, where nothing is left to handle it, and not where it was
+        raised: a world's middleware may turn an exception into a result or a
+        `ToolError`, and an exception the world handled is not a failure. A call
+        through a handle is not this boundary, because the host's chain around
+        it may still handle what it raised, and a call made while another is
+        running on this thread leaves the record to the outer one, so that one
+        exception is logged once.
+
+        A `ToolError` is what the world chose to tell the agent. One converted
+        from another exception is logged at DEBUG, so that a bug a world turned
+        into `INTERNAL` without logging it can still be found.
+        """
+        if calling():
+            yield
+            return
+        try:
+            yield
+        except ToolError as error:
+            converted = _converted_from(error) if _log.isEnabledFor(logging.DEBUG) else None
+            if converted is not None:
+                _log.debug(
+                    "call %s on instance %s of world %s: %s converted from %s%s",
+                    name,
+                    self.id,
+                    self.world.name,
+                    error.code,
+                    type(converted).__name__,
+                    _where(node, internal=False),
+                    exc_info=error,
+                )
+            raise
+        except Exception:
+            _log.error(
+                "call %s on instance %s of world %s failed%s",
+                name,
+                self.id,
+                self.world.name,
+                _where(node, internal=False),
+                exc_info=True,
+            )
+            raise
+
     def _current_composition(self) -> Composition:
         """The world's tree, refusing one that has grown or lost a node since creation.
 
@@ -866,10 +937,18 @@ class Instance:
         # `_recording(None)`: authoring writes happen after creation and count,
         # but there is no call in flight for them to belong to. It is outside the
         # transactions, so it reads each changeset after they have all settled.
-        with self._held() as frame, self._recording(None), ExitStack() as stack:
-            # Every node's transaction open before the block runs and committed in
-            # sequence on the way out, so a bulk write that reaches two stores
-            # through `ctx.worlds` either lands in both or in neither.
+        # `gate(bypass=True)` marks the thread and takes no slot: HTTP requests run
+        # in here, and the gate does not apply to them (`docs/http_apis.md`).
+        with (
+            gate(bypass=True),
+            self._held() as frame,
+            self._recording(None),
+            ExitStack() as stack,
+        ):
+            # One transaction per node, because each node is its own file and SQLite
+            # cannot commit two files atomically. The stack commits them in reverse,
+            # the root last: a block that raises rolls every node back, but a commit
+            # that fails leaves the nodes before it committed.
             for runtime in self._runtime.values():
                 stack.enter_context(runtime.db.transaction())
             yield frame.ctx(self._root_key, None)
@@ -933,8 +1012,10 @@ class Instance:
     ) -> None:
         """The line for a call that raised, in the vocabulary an eval groups on.
 
-        A `ToolError` has a code; anything else has only its class name to give,
-        and `invoke` has already put the traceback on record.
+        A `ToolError` has a code; anything else has only its class name to give.
+        The traceback of an agent's call that failed is logged by
+        `_logging_escape`, and a call through a handle leaves it to the agent's
+        call around it.
         """
         outcome = error.code if isinstance(error, ToolError) else type(error).__name__
         self._log_call(name, started, outcome, node, internal=internal)
@@ -1511,14 +1592,15 @@ def _run_startup_hooks(composition: Composition, frame: Frame, keywords: Mapping
     is already open. A hook that raises rolls every one of them back, and creation
     removes the instance entirely.
 
-    Depth-first preorder over the canonical tree, so a node whose hooks seed a
-    child runs before it, and a node reached by two routes runs once.
+    Hosts first (`hosts_first`), so a world whose hooks seed a world it adds
+    runs before it -- every host of a shared node included -- and a node
+    reached by two routes runs once.
     """
     runtimes = frame.instance._runtime
     with ExitStack() as stack:
         for node in composition.nodes:
             stack.enter_context(runtimes[node.key].db.transaction())
-        for node in canonical_tree(composition.root):
+        for node in hosts_first(composition):
             ctx = frame.ctx(node.key, None)
             for hook in node.world.startup_hooks:
                 hook(ctx, **_hook_arguments(hook, node, keywords))
@@ -1565,6 +1647,20 @@ def in_call() -> Iterator[None]:
 def calling() -> bool:
     """Is this thread inside a tool call? What `World.instance` refuses on."""
     return getattr(_in_call, "active", False)
+
+
+def _converted_from(error: ToolError) -> BaseException | None:
+    """The first exception down `error`'s chain that is not a `ToolError`, if there is one.
+
+    The chain a traceback prints: the cause when there is one, else the context
+    unless `raise ... from None` suppressed it.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while isinstance(current, ToolError) and id(current) not in seen:
+        seen.add(id(current))
+        current = current.__cause__ if current.__suppress_context__ else current.__context__
+    return None if isinstance(current, ToolError) else current
 
 
 def _where(node: str | None, internal: bool) -> str:

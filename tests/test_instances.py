@@ -233,6 +233,19 @@ def test_an_instance_from_a_fixture_is_a_writable_copy_at_the_fixtures_clock(wor
     assert (world.fixtures_dir / fixture / STATE_NAME).stat().st_mode & 0o222 == 0
 
 
+def test_every_node_of_a_fixture_instance_opens_without_durability(tmp_path: Path) -> None:
+    """A fixture's copies are the instance's throwaway files: WAL, and never fsynced."""
+    host = composable_world("host", fixtures_dir=tmp_path / "fixtures", work_dir=tmp_path / "work")
+    host.add_world(composable_world("child"), name="child")
+    with host.instance(None, now=INSTANT_ISO, clock_mode="fixed") as origin:
+        origin.freeze("start", "Empty.")
+
+    with host.instance("start") as live, live.bulk() as ctx:
+        for db in (ctx.db, ctx.worlds.child.db):
+            assert db.conn.pragma("synchronous") == 0
+            assert db.conn.pragma("journal_mode") == "wal"
+
+
 @pytest.mark.parametrize("bad", ["", ".", "..", "sub/start", "/start", ".hidden"])
 def test_a_fixture_id_that_is_not_a_directory_name_is_refused(world: World, bad: str) -> None:
     """The id rule is applied before the filesystem is touched: an id cannot become a path."""
@@ -530,8 +543,11 @@ def test_every_call_logs_one_line_with_the_outcome(
     with pytest.raises(UnknownTool):
         instance.call("nope")
 
+    # The INFO lines: the crash's traceback is an ERROR record of its own.
     lines = [
-        record.getMessage() for record in caplog.records if record.name == "seahaven.instances"
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "seahaven.instances" and record.levelno == logging.INFO
     ]
     assert len(lines) == 4
     assert all(
@@ -541,6 +557,190 @@ def test_every_call_logs_one_line_with_the_outcome(
     assert ": boom in" in lines[1]
     assert ": ValueError in" in lines[2]
     assert ": unknown_tool in" in lines[3]
+
+
+def errors_logged(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+def debug_tracebacks(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and record.name == "seahaven.instances"
+    ]
+
+
+def test_an_exception_that_escapes_the_chain_is_logged_once_with_its_traceback(
+    instance: Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG), pytest.raises(ValueError) as raised:
+        instance.call("crash")
+
+    (record,) = errors_logged(caplog)
+    assert record.name == "seahaven.instances"
+    assert record.levelno == logging.ERROR
+    assert record.getMessage() == (
+        f"call crash on instance {instance.id} of world {instance.world.name} failed (node=main)"
+    )
+    assert record.exc_info is not None
+    assert record.exc_info[1] is raised.value
+
+
+def test_an_exception_a_middleware_answers_is_not_logged(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    @world.middleware
+    def forgiving(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        try:
+            return next_(ctx, call)
+        except ValueError as error:
+            return {"handled": str(error)}
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as live,
+    ):
+        assert live.call("crash") == {"handled": "a bug in world code"}
+
+    assert errors_logged(caplog) == []
+    assert debug_tracebacks(caplog) == []
+
+
+def test_an_exception_a_middleware_turns_into_a_tool_error_is_logged_at_debug(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Not a failure, since the world chose what the agent reads; still findable with DEBUG on."""
+
+    @world.middleware
+    def restating(ctx: Ctx, call: Call, next_: Handler) -> Any:
+        try:
+            return next_(ctx, call)
+        except ValueError as error:
+            raise Boom("something went wrong") from error
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as live,
+        pytest.raises(Boom) as raised,
+    ):
+        live.call("crash")
+
+    assert errors_logged(caplog) == []
+    (record,) = debug_tracebacks(caplog)
+    assert "call crash on instance" in record.getMessage()
+    assert "boom converted from ValueError (node=main)" in record.getMessage()
+    assert record.exc_info is not None
+    assert record.exc_info[1] is raised.value
+    assert isinstance(raised.value.__cause__, ValueError)
+
+
+def test_a_tool_error_with_nothing_behind_it_is_not_logged(
+    instance: Instance, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.DEBUG), pytest.raises(Boom):
+        instance.call("write_then_fail", sql="INSERT INTO notes VALUES ('n1', 'b', 0)")
+
+    assert errors_logged(caplog) == []
+    assert debug_tracebacks(caplog) == []
+
+
+def _from_cause() -> None:
+    try:
+        raise KeyError("n1")
+    except KeyError as error:
+        raise Boom("no such note") from error
+
+
+def _from_context() -> None:
+    try:
+        raise KeyError("n1")
+    except KeyError:
+        raise Boom("no such note")  # noqa: B904 -- the implicit context is the case
+
+
+def _from_none() -> None:
+    try:
+        raise KeyError("n1")
+    except KeyError:
+        raise Boom("no such note") from None
+
+
+def _through_a_tool_error() -> None:
+    try:
+        _from_cause()
+    except Boom as error:
+        raise Boom("restated") from error
+
+
+def _from_a_tool_error() -> None:
+    try:
+        raise Boom("first")
+    except Boom as error:
+        raise Boom("second") from error
+
+
+@pytest.mark.parametrize(
+    ("raise_it", "converted"),
+    [
+        (_from_cause, KeyError),
+        (_from_context, KeyError),
+        (_through_a_tool_error, KeyError),
+        (_from_none, None),
+        (_from_a_tool_error, None),
+    ],
+)
+def test_a_tool_error_is_converted_from_the_first_other_exception_its_traceback_shows(
+    raise_it: Callable[[], None], converted: type[BaseException] | None
+) -> None:
+    with pytest.raises(Boom) as raised:
+        raise_it()
+
+    found = instances._converted_from(raised.value)
+
+    assert (None if found is None else type(found)) is converted
+
+
+def test_a_tool_error_chained_to_itself_is_converted_from_nothing() -> None:
+    first, second = Boom("first"), Boom("second")
+    first.__cause__, second.__cause__ = second, first
+
+    assert instances._converted_from(first) is None
+
+
+def test_a_call_made_inside_another_leaves_the_log_to_the_outer_one(
+    tmp_path: Path, world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One exception, one ERROR line, whichever boundary it crosses first."""
+    outer_world = build_world(tmp_path / "outer", name="outer")
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as inner,
+        outer_world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as outer,
+    ):
+
+        @outer_world.tool
+        def passing(ctx: Ctx) -> None:
+            """Let the inner call's failure through."""
+            inner.call("crash")
+
+        @outer_world.tool
+        def catching(ctx: Ctx) -> dict[str, bool]:
+            """Answer in place of the inner call's failure."""
+            try:
+                inner.call("crash")
+            except ValueError:
+                return {"caught": True}
+            raise AssertionError("the inner call should have raised")
+
+        assert outer.call("catching") == {"caught": True}
+        assert errors_logged(caplog) == []
+
+        with pytest.raises(ValueError):
+            outer.call("passing")
+        (record,) = errors_logged(caplog)
+        assert record.getMessage().startswith(f"call passing on instance {outer.id} ")
 
 
 def test_nothing_works_on_a_destroyed_instance(world: World) -> None:
@@ -897,6 +1097,228 @@ def test_the_gate_is_released_after_a_call_that_raised(tmp_path: Path) -> None:
                 instance.call("crash")
 
         assert instance.call("now")["python"] == instance.clock.iso()
+
+
+class TimedGate(instances._Gate):
+    """A gate that fails the test rather than hang it when a thread queues too long.
+
+    A thread queued for the gate while it holds an instance lock waits for ever,
+    and so does the `destroy()` at the end of the test's `with world.instance()`.
+    """
+
+    def __init__(self, size: int = 1) -> None:
+        super().__init__(size)
+        self.taken = 0
+        self.contender_has_slot = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        if not super().acquire(timeout=WAIT):
+            raise AssertionError("queued for the gate while holding an instance lock")
+        self.taken += 1
+        if threading.current_thread().name == "contender":
+            self.contender_has_slot.set()
+        return True
+
+
+def timed_gate(monkeypatch: pytest.MonkeyPatch, size: int = 1) -> TimedGate:
+    installed = TimedGate(size)
+    monkeypatch.setattr(instances, "_gate", installed)
+    return installed
+
+
+def on_a_fresh_thread(body: Callable[[], Any], name: str | None = None) -> Caller:
+    """Start `body` on another thread, whose failure is the test's failure."""
+    caller = Caller(body)
+    if name is not None:
+        caller.name = name
+    caller.start()
+    return caller
+
+
+def note_ids(instance: Instance) -> list[str]:
+    return [row["id"] for row in instance.inspect().rows("SELECT id FROM notes ORDER BY id")]
+
+
+def register_holder(world: World) -> tuple[threading.Event, threading.Event]:
+    """A `hold` tool that keeps its gate slot until the test lets go."""
+    inside = threading.Event()
+    release = threading.Event()
+
+    @world.tool
+    def hold(ctx: Ctx) -> dict[str, bool]:
+        """Hold a slot of the gate until the test lets go."""
+        inside.set()
+        assert release.wait(WAIT)
+        return {"done": True}
+
+    return inside, release
+
+
+@pytest.mark.parametrize("target", ["same", "other"])
+def test_a_call_inside_bulk_does_not_queue_behind_a_caller_waiting_for_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    world = build_world(tmp_path)
+    gate = timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None) as y:
+        written = x if target == "same" else y
+
+        def author() -> None:
+            with x.bulk():
+                contender = on_a_fresh_thread(lambda: add(x, "contender"), name="contender")
+                # The contender holds the only slot and waits for the lock this block holds.
+                assert gate.contender_has_slot.wait(WAIT)
+                add(written, "author")
+            contender.finish()
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert "contender" in note_ids(x)
+        assert "author" in note_ids(written)
+
+
+def test_a_tool_calling_another_instance_does_not_wait_for_its_own_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    captured: dict[str, Instance] = {}
+
+    @world.tool
+    def relay(ctx: Ctx) -> dict[str, bool]:
+        """Write to another instance from inside a call."""
+        add(captured["y"], "relayed")
+        return {"done": True}
+
+    timed_gate(monkeypatch)
+    with world.instance(None) as x, world.instance(None) as y:
+        captured["y"] = y
+        result: dict[str, Any] = {}
+        on_a_fresh_thread(lambda: result.update(x.call("relay"))).finish(2 * WAIT)
+
+        assert result == {"done": True}
+        assert note_ids(y) == ["relayed"]
+
+
+def test_nested_bulk_blocks_take_no_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = build_world(tmp_path)
+    gate = timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None) as y:
+
+        def author() -> None:
+            with x.bulk():
+                add(x, "outer")
+                with x.bulk():
+                    add(x, "inner")
+                with y.bulk():
+                    add(y, "other")
+            assert gate.taken == 0
+            add(x, "after")
+            assert gate.taken == 1
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert note_ids(x) == ["after", "inner", "outer"]
+        assert note_ids(y) == ["other"]
+
+
+def test_bulk_that_raised_leaves_the_thread_gated_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    gate = timed_gate(monkeypatch)
+
+    with world.instance(None) as x:
+
+        def author() -> None:
+            with pytest.raises(Boom), x.bulk():
+                add(x, "rolled back")
+                raise Boom("the block failed")
+            assert gate.taken == 0
+            add(x, "after")
+            assert gate.taken == 1
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert note_ids(x) == ["after"]
+
+
+def test_bulk_does_not_wait_for_a_full_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    inside, release = register_holder(world)
+    timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None) as y:
+        holder = on_a_fresh_thread(lambda: x.call("hold"))
+        assert inside.wait(WAIT)
+
+        def author() -> None:
+            with y.bulk() as ctx:
+                ctx.db.execute("INSERT INTO notes VALUES ('bulk', 'a body', 0)")
+
+        started = time.perf_counter()
+        on_a_fresh_thread(author).finish()
+        assert time.perf_counter() - started < WAIT / 5
+
+        release.set()
+        holder.finish()
+        assert note_ids(y) == ["bulk"]
+
+
+def test_a_resize_inside_bulk_does_not_make_its_calls_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    inside, release = register_holder(world)
+    set_concurrency(0)
+
+    with world.instance(None) as x, world.instance(None) as y:
+
+        def author() -> None:
+            with x.bulk():
+                # A gate put in place after the block opened, and full.
+                timed_gate(monkeypatch)
+                holder = on_a_fresh_thread(lambda: y.call("hold"))
+                assert inside.wait(WAIT)
+                add(x, "author")
+            release.set()
+            holder.finish()
+
+        on_a_fresh_thread(author).finish(2 * WAIT)
+
+        assert note_ids(x) == ["author"]
+
+
+def test_a_control_tool_calling_its_instance_passes_a_full_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = build_world(tmp_path)
+    inside, release = register_holder(world)
+
+    def stamp(live: Instance, ctx: Ctx) -> dict[str, bool]:
+        """Write through the instance's own tools."""
+        add(live, "stamped")
+        return {"stamped": True}
+
+    world.tool(control_tool(stamp))
+    timed_gate(monkeypatch)
+
+    with world.instance(None) as x, world.instance(None, control_tools=True) as y:
+        holder = on_a_fresh_thread(lambda: x.call("hold"))
+        assert inside.wait(WAIT)
+
+        result: dict[str, Any] = {}
+        started = time.perf_counter()
+        on_a_fresh_thread(lambda: result.update(y.call("stamp"))).finish(2 * WAIT)
+        assert time.perf_counter() - started < WAIT / 5
+
+        release.set()
+        holder.finish()
+        assert result == {"stamped": True}
+        assert note_ids(y) == ["stamped"]
 
 
 def test_a_negative_concurrency_is_refused() -> None:

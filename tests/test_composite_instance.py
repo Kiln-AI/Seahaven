@@ -13,13 +13,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import apsw
 import emporium
 import pytest
 
 from seahaven.clock import Clock
 from seahaven.ctx import Ctx
 from seahaven.db import open_instance
-from seahaven.errors import WorldBug
+from seahaven.errors import DbError, WorldBug
 from seahaven.ids import BUILD_STREAM, CONTROL_STREAM, INSPECTION_STREAM, INSTANCE_STREAM, Ids
 from seahaven.instances import node_seed
 from seahaven.world import World
@@ -287,6 +288,49 @@ def test_a_node_two_hosts_reach_runs_its_hooks_once(tmp_path: Path) -> None:
     assert ran == ["host", "middle", "shared"]
 
 
+def test_a_shared_node_runs_after_every_world_that_adds_it(tmp_path: Path) -> None:
+    ran: list[str] = []
+    company = rooted("company", tmp_path)
+    payments, shop = composable_world("payments"), composable_world("shop")
+    shop.add_world(payments, name="payments")
+    company.add_world(payments, name="payments")
+    company.add_world(shop, name="shop", tool_prefix="s_")
+    for world in (company, payments, shop):
+        recording(world, ran)
+
+    with company.instance(None):
+        pass
+
+    assert ran == ["company", "shop", "payments"]
+
+
+def test_a_host_that_seeds_a_shared_node_seeds_it_composed_as_alone(tmp_path: Path) -> None:
+    """A shop's hook seeds its payments account the same whoever else adds that account."""
+    plans: list[str] = []
+    company = rooted("company", tmp_path)
+    shop = rooted("shop", tmp_path / "shop")
+    payments = composable_world("payments")
+
+    @shop.instance_startup
+    def open_account(ctx: Ctx) -> None:
+        ctx.worlds.payments.state["plan"] = "merchant"
+
+    @payments.instance_startup
+    def default_plan(ctx: Ctx) -> None:
+        plans.append(ctx.state.setdefault("plan", "free"))
+
+    shop.add_world(payments, name="payments")
+    company.add_world(payments, name="payments")
+    company.add_world(shop, name="shop", tool_prefix="s_")
+
+    with shop.instance(None):
+        pass
+    with company.instance(None):
+        pass
+
+    assert plans == ["merchant", "merchant"]
+
+
 def regional(world: World, seen: dict[str, str]) -> None:
     @world.instance_startup
     def note(ctx: Ctx, *, region: str = "us") -> None:
@@ -479,6 +523,30 @@ def test_a_bulk_block_that_raises_rolls_every_node_back(tmp_path: Path) -> None:
             ctx.worlds.child.db.execute("INSERT INTO child_rows VALUES ('a', 'child')")
             raise RuntimeError("changed my mind")
         assert (live.call("host_read"), live.call("child_read")) == ([], [])
+
+
+def test_a_bulk_commit_that_fails_keeps_the_nodes_committed_before_it(tmp_path: Path) -> None:
+    """SQLite cannot commit two files atomically: the child commits, then the root refuses."""
+    host = composable_world(
+        "host",
+        extra_schema="CREATE TABLE host_refs ("
+        " id TEXT PRIMARY KEY,"
+        " row_id TEXT NOT NULL REFERENCES host_rows(id) DEFERRABLE INITIALLY DEFERRED"
+        ") STRICT;",
+        fixtures_dir=tmp_path / "fixtures",
+        work_dir=tmp_path / "work",
+    )
+    host.add_world(composable_world("child"), name="child")
+    with host.instance(None) as live:
+        with pytest.raises(DbError) as raised, live.bulk() as ctx:
+            ctx.worlds.child.db.execute("INSERT INTO child_rows VALUES ('a', 'child')")
+            ctx.db.execute("INSERT INTO host_refs VALUES ('r', 'nobody')")
+        assert raised.value.sqlite_code == apsw.SQLITE_CONSTRAINT_FOREIGNKEY
+        assert live.inspect().rows("SELECT id FROM host_refs") == []
+        assert live.call("child_read") == ["child"]
+        assert [(record.world, record.table) for record in live.change_log()] == [
+            ("child", "child_rows")
+        ]
 
 
 # ---------------------------------------------------------- the committed tree

@@ -19,7 +19,7 @@ import payments
 import pytest
 import shop
 
-from seahaven.composition import attached_limit
+from seahaven.composition import attached_limit, canonical_tree, hosts_first
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
 from seahaven.world import World
@@ -104,6 +104,32 @@ def test_depth_beats_registration_order() -> None:
     host.add_world(leaf, name="direct")
     assert host.composition().by_key[leaf, None].path == "direct"
     assert host.composition().by_key[leaf, None].aliases == ("deep/under_deep/under_middle",)
+
+
+def test_hosts_first_is_the_canonical_preorder_without_sharing() -> None:
+    host, left, right, deep, deeper = (
+        make_world(n) for n in ("host", "left", "right", "deep", "deeper")
+    )
+    deep.add_world(deeper, name="deeper")
+    left.add_world(deep, name="deep")
+    host.add_world(left, name="left")
+    host.add_world(right, name="right")
+    composition = host.composition()
+    order = [node.path for node in hosts_first(composition)]
+    assert order == ["main", "left", "left/deep", "left/deep/deeper", "right"]
+    assert order == [node.path for node in canonical_tree(composition.root)]
+
+
+def test_hosts_first_walks_a_shared_node_after_its_last_host() -> None:
+    company, payments, shop = make_world("company"), make_world("payments"), make_world("shop")
+    shop.add_world(payments, name="payments")
+    company.add_world(payments, name="payments")
+    company.add_world(shop, name="shop")
+    assert [node.world.name for node in hosts_first(company.composition())] == [
+        "company",
+        "shop",
+        "payments",
+    ]
 
 
 def deep_diamond(depth: int, *tools: str) -> list[World]:
@@ -327,6 +353,29 @@ def test_by_fn_carries_every_entry_a_function_reaches() -> None:
     entries = host.composition().by_fn[fn]
     assert [entry.name for entry in entries] == ["ours_charge", "theirs_charge"]
     assert [entry.node.path for entry in entries] == ["ours", "theirs"]
+
+
+def shared_under_a_middle() -> World:
+    """`leaf` twice: through `middle` as `m_`, and straight from the host as `l_`."""
+    host, middle = make_world("host", "own"), make_world("middle")
+    leaf = make_world("leaf", "leaf_write", "leaf_read")
+    middle.add_world(leaf, name="leaf")
+    host.add_world(middle, name="middle", tool_prefix="m_")
+    host.add_world(leaf, name="leaf", tool_prefix="l_")
+    return host
+
+
+def test_each_entry_carries_the_chain_of_the_route_that_contributed_it() -> None:
+    tools = shared_under_a_middle().composition().tools
+    assert tools["m_leaf_write"].node is tools["l_leaf_write"].node
+    assert tools["m_leaf_write"].chain is not tools["l_leaf_write"].chain
+
+
+def test_entries_of_one_route_share_one_chain() -> None:
+    host = shared_under_a_middle()
+    tools = host.composition().tools
+    assert tools["m_leaf_write"].chain is tools["m_leaf_read"].chain
+    assert tools["own"].chain is host.chain
 
 
 # ------------------------------------------------------------- bound startup

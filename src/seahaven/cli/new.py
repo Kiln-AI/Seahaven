@@ -15,6 +15,7 @@ import argparse
 import keyword
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import seahaven
@@ -75,6 +76,14 @@ def render(name: str, target: Path) -> Path:
         raise CliError(
             f"{name!r} does not make a package name: {package!r} is not a Python identifier; "
             f"use letters, digits and underscores, starting with a letter"
+        )
+    # A world's package is imported by name, so one that shares a name with a
+    # module already on the path loses to it, and the scaffold fails its first
+    # `seahaven check` with an error about a module the author never wrote.
+    if package in sys.stdlib_module_names or package == "seahaven":
+        raise CliError(
+            f"{name!r} makes the package {package!r}, which is already the name of a module "
+            f"Python imports first; add a suffix, such as {package + '_world'!r}"
         )
     # The name reaches the rendered `world.py` verbatim, and `World(name=...)`
     # holds it to `names.why_not_a_name`. Refused here rather than there: a

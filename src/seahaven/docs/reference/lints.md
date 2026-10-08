@@ -88,14 +88,20 @@ composite key: `PRIMARY KEY (issue_id, label_id)`.
 ## SH103 — a wall-clock expression anywhere in the schema
 
 **Rule.** No `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `CURRENT_TIME`, `datetime('now')` or any relative
-of them, in a column default, a trigger body, a view, a generated column or a partial index. The
-whole schema is searched through `sqlite_master`, with comments and string literals excluded.
+of them, in a column default, a trigger body, a view, a generated column, a `CHECK` constraint, an
+index expression or a partial index. The whole schema is searched through `sqlite_master`, with
+comments and string literals excluded.
 
-**Why.** The problem is the text rather than the instant. An instance's clock overrides make a
-default in the schema read the instance's clock anyway, but what SQLite *writes* is `2026-06-01
-09:00:00`, and every other door of a world writes `2026-06-01T09:00:00.000Z`. One format across
-every door is the rule, and two formats in one column is a comparison that fails for a reason nobody
-will find quickly.
+**Why.** On Seahaven's own connections, `CURRENT_TIMESTAMP` and `datetime('now')` read the
+instance's clock and write canonical text. The rest of the family does not: `CURRENT_DATE`,
+`CURRENT_TIME`, `date('now')`, `julianday('now')` and `unixepoch('now')` write a date, a time or a
+number. A trigger that stamps a time also overwrites the timestamps a fixture generator writes in
+`inst.bulk()`. A schema object is part of the database file, so a connection Seahaven did not open,
+such as a grader reading `state.sqlite` with Python's `sqlite3`, evaluates it with SQLite's own
+functions. Those read the host's wall clock and write `2026-06-01 09:00:00`. In a generated column
+or an index, the time is read when the row is written, and the stored value does not move with the
+clock. A `CHECK` is tested only when the row is written. A timestamp that world code writes from
+`ctx.clock.iso()` has none of these problems.
 
 **Fix.** `write the timestamp from world code with ctx.clock.iso(), so every door of the world uses
 one format`. Make the column `NOT NULL` with no default and pass the value in.
@@ -196,7 +202,8 @@ and move on.
 **Why.** Two routes to one shared store each carry their own prefix and lists, which is two
 declarations rather than a collision. The result is an agent that sees `stripe_create_charge` and
 `billing_create_charge`, both writing to one account, with nothing in either listing saying so.
-Sometimes that is the client's real surface, which is why it is a warning.
+Each name also runs the middleware of its own route. Sometimes that is the client's real surface,
+which is why it is a warning.
 
 **Fix.** `give every route but one tool_allow_list=[] or a tool_block_list naming it, or accept that
 the agent sees one account twice`.
@@ -354,8 +361,9 @@ all find a world this way. A package that does not follow it works in process an
 the attribute it looked for, and `--world module:attr` is the override for a layout the convention
 misses.
 
-An import that fails for another reason is reported here too, with the exception's own last line.
-`check` never answers with a traceback.
+An import that fails for another reason is reported here too. The finding gives the exception's
+type and message at the file and line in the world's code that raised it, and the fix names that
+place. `python -c "import <package>"` prints the whole traceback; `check` never prints one.
 
 ## SH502 — a `Worlds` subclass annotates a name no `add_world` registered
 
