@@ -211,7 +211,7 @@ Runs the OpenEnv server for this world: one world, many sessions, one worker pro
 | `--max_concurrent_envs N` | `500` | how many sessions may be open at once |
 | `--concurrency N` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
 | `--session-timeout SECONDS` | off | seconds of idleness before a session is reaped; `0` turns the reaper off |
-| `--include-control-tools` | off | make each session's instance one that can call `controller_run_sql`; without the flag the name is an unknown tool. It is never listed either way, and it is deprecated in favour of the state document -- run Python with `-W default::DeprecationWarning` to see the warning |
+| `--include-control-tools` | off | make each session's instance one that can call the control tools: `controller_advance_clock`, which moves the clock forward ([../serving_and_openenv.md](../serving_and_openenv.md#moving-the-clock)), and `controller_run_sql`, which is deprecated in favour of the state document -- run Python with `-W default::DeprecationWarning` to see its warning. Without the flag their names are unknown tools, and they are never listed either way |
 | `--no-console` | off | do not serve the web console at `/console`; the address is otherwise printed when the server starts |
 
 ```sh

@@ -120,11 +120,11 @@ a NUL, an accent, a non-Latin script. A **fixture id** follows the same rule, an
 | `world.add_world(other, *, name=None, store=None, tool_prefix=None, tool_allow_list=None, tool_block_list=None, startup=None)` | add another world: its tools join this world's surface, its store becomes a node of every instance. Call it; there is nothing to decorate |
 | `world.state_format(name)` | register a state format of this world's own, as a decorator. The name is `<family>/<major>` and may not begin with `seahaven.` |
 | `world.resolve_state_format(name)` | the formatter a name answers to: a built-in, or one this world registered. Asked of the root of an instance and of nothing else |
-| `world.instance(fixture=None, *, seed=None, now=None, clock_mode=None, state_format=None, control_tools=False, startup=None, setup_sql=None)` | make an instance; a context manager. `now` is where the clock starts, no earlier than the fixture's `now`. `clock_mode` is how the clock moves, `None` for `world.default_clock_mode`. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tool callable on the instance. `startup` is the world's own keywords, passed to the startup hooks that name them. `setup_sql` is SQL run on the new instance before the startup hooks; see [`setup_sql`](#setup_sql) |
+| `world.instance(fixture=None, *, seed=None, now=None, clock_mode=None, state_format=None, control_tools=False, startup=None, setup_sql=None)` | make an instance; a context manager. `now` is where the clock starts, no earlier than the fixture's `now`. `clock_mode` is how the clock moves, `None` for `world.default_clock_mode`. `state_format` answers in another of this world's formats, in place of the pin. `control_tools=True` makes the framework's own control tools callable on the instance. `startup` is the world's own keywords, passed to the startup hooks that name them. `setup_sql` is SQL run on the new instance before the startup hooks; see [`setup_sql`](#setup_sql) |
 | `world.fixtures()` | every fixture in the fixtures directory, as a list sorted by id. A world with no fixtures directory has none, which is not an error |
 | `copy.copy(world)` | this world with the same registrations and its own instances: set `fixtures_dir` on the copy to freeze somewhere else without moving the imported world's |
 | `world.tools` | the registry, in registration order. Read-only, and this world's **own** tools: the composite surface an agent sees is `inst.tools()`, or `world.composition().tools` |
-| `world.tools_by_fn` | the registry by the function each tool was built from, multi-valued because one function may be registered as two tools. This world's own tools only, contributed or not. The control tool is not in it |
+| `world.tools_by_fn` | the registry by the function each tool was built from, multi-valued because one function may be registered as two tools. This world's own tools only, contributed or not. Control tools are not in it |
 | `world.middlewares` | the middleware, outermost first |
 | `world.startup_hooks` | the hooks, in registration order |
 | `world.accepted_startup_kwargs` | every startup keyword some hook names |
@@ -183,21 +183,24 @@ Made by `world.instance(...)`, never by hand. A context manager; leaving the blo
 | `inst.state(format=None)` | the state document as a plain dict: the envelope, and `state` from this instance's format. `format` answers in another of the world's formats instead. Refused inside `bulk()` or a tool call |
 | `inst.composition()` | what this instance is running against: one `NodeReport` per store, root first |
 | `inst.freeze(id, description)` | mint a fixture from the current state; returns the `Fixture`. Refuses inside `bulk()` |
+| `inst.advance_clock(by=None, *, to=None)` | move the clock forward by a `timedelta`, or to an instant in either form `now=` takes, and answer the new reading as canonical text. Refused under `wall`, for an instant earlier than the reading, and inside `bulk()`, a tool call or a state formatter. See [../clock.md](../clock.md#moving-the-clock-forward) |
 | `inst.bulk()` | a context manager yielding the root node's `Ctx`, with one transaction per node, for loading rows fast. See [composition.md](../composition.md#one-instance-many-stores) for a composite |
 | `inst.destroy()` | close everything and remove the working directory. Idempotent, and waits for a call in flight |
 | `inst.id`, `inst.fixture`, `inst.seed` | the instance id, the fixture id (or `None`), the derived seed bytes |
 | `inst.state_format` | the format `inst.state()` answers in, fixed for the instance's life |
 | `inst.setup_sql` | the `setup_sql` the instance was created with, as given, or `None` |
-| `inst.control_tools` | whether the framework's own control tool is callable on this instance, fixed for the instance's life |
+| `inst.control_tools` | whether the framework's own control tools are callable on this instance, fixed for the instance's life |
 | `inst.clock`, `inst.world`, `inst.state_path` | the clock, the world, and the instance's own database file |
 
 The tool name is positional-only, so a world may have a tool argument called `name`.
 
-The framework's own control tool is registered on every world and callable only on an instance made
-with `control_tools=True`. On every other instance its name raises `UnknownTool`, in the same words
-a name the world does not have raises, and no instance lists it either way. The tool is deprecated:
-read `inst.state()` instead. Over a server, `serve --include-control-tools` is what makes each
-session's instance one that can call it, and [cli.md](cli.md) names the tool.
+The framework's own control tools are registered on every world and callable only on an instance
+made with `control_tools=True`. On every other instance their names raise `UnknownTool`, in the same
+words a name the world does not have raises, and no instance lists them either way.
+`controller_advance_clock` is `inst.advance_clock(...)` for a harness over a server. The other
+control tool is deprecated: read `inst.state()` instead. Over a server,
+`serve --include-control-tools` is what makes each session's instance one that can call them, and
+[cli.md](cli.md) names them.
 
 ### `setup_sql`
 
@@ -315,7 +318,8 @@ one object. Each call to `now()` or `iso()` is one reading, and reading never mo
 | `running` | the start instant plus the time elapsed since the instance was made, on a monotonic clock |
 | `wall` | the host's current UTC time |
 
-Every reading is truncated to milliseconds. [../clock.md](../clock.md) says what the
+Under every mode but `wall`, the reading also adds how far `inst.advance_clock(...)` has moved the
+clock forward. Every reading is truncated to milliseconds. [../clock.md](../clock.md) says what the
 start instant is and which modes replay.
 
 `Clock(datetime)` built directly is a `fixed` clock at that instant, which is also the way to render
@@ -328,8 +332,9 @@ Every connection overrides SQLite's `current_timestamp`, `current_date`, `curren
 to return the clock's reading, so SQL sees the same time world code does. One SQL statement takes
 one reading, and a trigger it fires shares that reading. Two rare cases take another statement's
 reading: a statement whose text starts with a `-- ` comment, and a statement whose rows are read
-while another statement runs on the same connection. Neither happens under `fixed`, and under `tick`
-only on `inst.inspect()` and the control tool. Under `running` and `wall`, either can happen on any
+while another statement runs on the same connection. Under `fixed`, neither happens until the clock
+is advanced. Under `tick`, and under `fixed` after an advance, they happen only on `inst.inspect()`
+and the deprecated SQL control tool. Under `running` and `wall`, either can happen on any
 connection. The overrides are registered as innocuous, so schema objects may reference them. What
 they return compares and sorts correctly against the canonical text a world stores.
 
@@ -383,7 +388,7 @@ class Tool:
 ```
 
 `from_function` is what a tool factory builds its tool with, whether that factory is one of
-Seahaven's helpers or an extension's. `control` is Seahaven's own flag for its control tool and
+Seahaven's helpers or an extension's. `control` is Seahaven's own flag for its control tools and
 cannot be set through it.
 
 `validate` is strict in one of two modes, chosen for the whole call. Arguments that are plain JSON

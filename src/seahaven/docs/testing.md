@@ -51,7 +51,7 @@ def test_a_report_is_the_same_every_time(instance: seahaven.Instance) -> None: .
 | `fixture="agency", clock_mode="tick"` | a clock that moves one second per call, so timestamps are exact ([clock.md](clock.md)) |
 | `fixture="agency", seed=7` | a fixed seed, so ids repeat |
 | `fixture="agency", startup={"user_id": "u_12"}` | a startup keyword of this world's, passed to its hooks |
-| `fixture=None, control_tools=True` | an instance the framework's own control tool is callable on |
+| `fixture=None, control_tools=True` | an instance the framework's own control tools are callable on |
 
 Everything but `fixture` is passed straight through to `world.instance(...)`, so `seed`, `now`,
 `clock_mode` and the `startup` keywords your world accepts work exactly as they do in process. A

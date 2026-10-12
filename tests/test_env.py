@@ -22,7 +22,7 @@ import pytest
 import seahaven
 from seahaven.ctx import Ctx
 from seahaven.errors import SeahavenError, ToolError, WorldBug
-from seahaven.world import World
+from seahaven.world import CONTROL_TOOL_NAMES, World
 from tests.conftest import INSTANT, INSTANT_ISO, build_world
 
 # The subpackage and not `openenv`: what this module imports is
@@ -411,7 +411,7 @@ def test_list_tools_never_lists_a_control_tool(world: World) -> None:
         env = SeahavenEnv(world, include_control_tools=include)
         env.reset()
         names = [tool.name for tool in listing(env).tools]
-        assert "controller_run_sql" not in names
+        assert not CONTROL_TOOL_NAMES & set(names)
         assert "rows" in names
 
 
@@ -632,6 +632,59 @@ def test_the_flag_does_not_reach_a_tool_the_world_does_not_have(world: World, na
         "message": f"unknown tool: {name}",
         "details": {"name": name},
     }
+
+
+def test_controller_advance_clock_moves_the_sessions_clock(world: World) -> None:
+    env = SeahavenEnv(world, include_control_tools=True)
+    env.reset(now=INSTANT_ISO, clock_mode="tick")
+
+    moved = call(env, "controller_advance_clock", seconds=60)
+    assert moved.result == {"now": "2024-03-05T12:01:00.123Z", "clock_mode": "tick"}
+    assert call(env, "now").result == {
+        "python": "2024-03-05T12:01:01.123Z",
+        "sql": "2024-03-05T12:01:01.123Z",
+    }
+    assert call(env, "controller_advance_clock", to="2024-03-06T00:00:00Z").result == {
+        "now": "2024-03-06T00:00:00.000Z",
+        "clock_mode": "tick",
+    }
+    state = env.state
+    assert (state.now, state.call_count) == ("2024-03-06T00:00:00.000Z", 1)
+
+
+@pytest.mark.parametrize(
+    ("reset", "arguments", "message"),
+    [
+        ({"clock_mode": "wall"}, {"seconds": 60}, "a wall clock reads the host's time"),
+        ({"now": INSTANT_ISO}, {"to": "2020-01-01T00:00:00Z"}, "is earlier than"),
+        ({"now": INSTANT_ISO}, {}, "takes exactly one of seconds and to"),
+    ],
+    ids=["wall", "earlier", "neither"],
+)
+def test_a_refused_advance_reaches_the_harness_as_a_tool_error(
+    world: World, reset: dict[str, Any], arguments: dict[str, Any], message: str
+) -> None:
+    """Not the error frame a `WorldBug` earns, which would say only "internal error"."""
+    env = SeahavenEnv(world, include_control_tools=True)
+    env.reset(**reset)
+
+    observation = call(env, "controller_advance_clock", **arguments)
+
+    assert observation.seahaven_error is not None
+    assert observation.seahaven_error["code"] == "clock_not_advanced"
+    assert message in observation.seahaven_error["message"]
+    assert wire_error(observation) == ("execution_error", observation.seahaven_error["message"])
+
+
+def test_controller_advance_clock_is_unknown_without_the_flag(env: SeahavenEnv) -> None:
+    env.reset(now=INSTANT_ISO, clock_mode="fixed")
+
+    assert call(env, "controller_advance_clock", seconds=60).seahaven_error == {
+        "code": "unknown_tool",
+        "message": "unknown tool: controller_advance_clock",
+        "details": {"name": "controller_advance_clock"},
+    }
+    assert env.state.now == INSTANT_ISO
 
 
 # --- step: what is not a tool error ---------------------------------------

@@ -23,7 +23,7 @@ A world that copies a product's HTTP API can also serve that API as a test serve
 |---|---|
 | [Running the server](#running-the-server) | Installing the extra, the app file, the command and its options |
 | [The web console](#the-web-console) | The page at `/console`, and what it does |
-| [Sessions and instances](#sessions-and-instances) | What a connection holds, and what `reset` does |
+| [Sessions and instances](#sessions-and-instances) | What a connection holds, what `reset` does, and moving the clock |
 | [Driving a world from Python](#driving-a-world-from-python) | `SeahavenClient`, synchronous and asynchronous |
 | [Calls, results and errors](#calls-results-and-errors) | What comes back from a tool call |
 | [Grading a run](#grading-a-run) | The state document over the wire, and choosing its format |
@@ -82,7 +82,7 @@ seahaven serve --host 0.0.0.0 --port 9000
 | `--max_concurrent_envs` | `500` | how many sessions may be open at once. Over capacity, OpenEnv answers `CAPACITY_REACHED` and closes the connection |
 | `--concurrency` | `min(cpus, 16)` | how many tool calls run at once; `0` for no gate |
 | `--session-timeout` | off | seconds of idleness before a session is reaped; `0` turns the reaper off. See [the idle reaper](#running-it-in-production) |
-| `--include-control-tools` | off | make each session's instance one that can call the deprecated control tool; without the flag the name is an unknown tool. [reference/cli.md](reference/cli.md) names it |
+| `--include-control-tools` | off | make each session's instance one that can call the control tools, such as `controller_advance_clock` ([Moving the clock](#moving-the-clock)); without the flag their names are unknown tools. [reference/cli.md](reference/cli.md) names them |
 | `--no-console` | off | do not serve the web console at `/console` |
 | `--world module:attr` | the convention | which world to serve |
 
@@ -142,9 +142,9 @@ The list above is every key that changes what a reset does. A key outside the li
 the session is touched: the error names the stray keys and the keys `reset` does take, the session
 keeps the instance it already had, and it can reset again. A reset whose keys are all known but
 whose instance then fails to build leaves the session fresh instead, as above. One key outside the
-list is accepted and then ignored rather than refused: `control_tools`, because the control tool is
-the operator's to enable with `--include-control-tools` and a client sending the key must not turn
-it on. A startup keyword goes inside `startup`; a message that sends one at the top level is
+list is accepted and then ignored rather than refused: `control_tools`, because the control tools
+are the operator's to enable with `--include-control-tools` and a client sending the key must not
+turn them on. A startup keyword goes inside `startup`; a message that sends one at the top level is
 refused rather than delivered:
 
 ```jsonc
@@ -169,6 +169,24 @@ every observation.
 
 Listing the tools does not need a `reset`. The tool list belongs to the world rather than to the
 episode, so a client may ask for it before it starts.
+
+### Moving the clock
+
+`reset` sets where the clock starts. To move it forward during an episode, start the server with
+`--include-control-tools` and call the control tool `controller_advance_clock` with one of two
+arguments: `seconds`, how far to move the clock, or `to`, the instant to move it to, in any form
+`now` takes. It answers the new reading and the clock's mode. It is never in the tool list, so an
+agent does not see it.
+
+```py
+env.reset(fixture="small_startup", clock_mode="tick")
+observation = env.call("controller_advance_clock", seconds=3600)
+print(observation.result)  # {'now': '2026-06-01T10:00:00.000Z', 'clock_mode': 'tick'}
+```
+
+It follows the rules of `inst.advance_clock(...)` ([clock.md](clock.md#moving-the-clock-forward)).
+A refusal, such as a `to` earlier than the clock's reading, is a tool error with the code
+`clock_not_advanced`.
 
 ## Driving a world from Python
 
@@ -496,7 +514,7 @@ observation too, and raises only on a framework or protocol failure.
 
 The gate bounds how many tool calls run at once. It never bounds admission: calls queue, and nothing
 is rejected. A call takes the gate before the instance lock, so a queued call cannot block a
-`destroy` or a `freeze`. Instance creation, tool listing and the control tool bypass it entirely.
+`destroy` or a `freeze`. Instance creation, tool listing and the control tools bypass it entirely.
 `inst.bulk()` bypasses it too, and so does any call made inside a call or a `bulk()` block on the
 same thread.
 

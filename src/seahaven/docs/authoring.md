@@ -308,8 +308,8 @@ All of it happens at import, with a message naming the tool and the parameter. A
 when it:
 
 - duplicates another tool's name;
-- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or the control tool that
-  [reference/cli.md](reference/cli.md) names;
+- is named `reset`, `step`, `state` or `close` (OpenEnv reserves those), or has the name of a
+  control tool ([reference/cli.md](reference/cli.md) names them);
 - is an `async def`, a generator, or an async generator;
 - has no first parameter, or one that is not positional and either annotated `seahaven.Ctx` or left
   unannotated;
@@ -509,7 +509,7 @@ Common uses:
   together.
 - **What it wraps.** Middleware runs for every tool call, including the helpers' and an
   extension's. It does not run for `UnknownTool`, a tool listing, startup hooks or the control
-  tool.
+  tools.
 
 ## Instance startup
 

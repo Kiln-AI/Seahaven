@@ -1,11 +1,12 @@
 """An instance's clock, and the SQLite date and time functions that read it.
 
 The clock has a mode, chosen when the instance is made and kept for its life:
-`fixed` reads the start instant for ever, `tick` adds a second per call,
-`running` adds the real time elapsed since the clock was made, and `wall` reads
-the host's clock. Every reading is computed when it is asked for, so one `Clock`
-object shared by reference is the single source of time for every door of an
-instance.
+`fixed` reads the start instant, `tick` adds a second per call, `running` adds
+the real time elapsed since the clock was made, and `wall` reads the host's
+clock. Every mode but `wall` also adds however far the instance has advanced it
+(`Instance.advance_clock`). Every reading is computed when it is asked for, so
+one `Clock` object shared by reference is the single source of time for every
+door of an instance.
 
 Nothing inside a world may read the wall clock directly, and SQL is the door
 that is easy to forget: `CURRENT_TIMESTAMP` and friends are parsed as
@@ -46,6 +47,7 @@ type ClockMode = Literal["fixed", "tick", "running", "wall"]
 CLOCK_MODES: tuple[ClockMode, ...] = ("fixed", "tick", "running", "wall")
 DEFAULT_CLOCK_MODE: ClockMode = "running"
 TICK = timedelta(seconds=1)
+_MILLISECOND = timedelta(milliseconds=1)
 
 # The `id` the per-statement trace is registered under. APSW keeps one trace per
 # id on a connection, so another trace added under a different id leaves this one
@@ -146,16 +148,20 @@ class Clock:
 
     The framework makes one when it creates an instance, in the instance's mode,
     and every connection and context of the instance reads that one object.
-    `Clock(datetime)` built directly is a `fixed` clock at that instant, which is
-    also the way to render a datetime as canonical text. Building a `Clock` does
-    not choose or change any instance's mode: that is the `clock_mode` reset
-    option, and `World(default_clock_mode=...)` for the world's default.
+    World code reads it and cannot move it; a harness moves an instance's clock
+    forward with `inst.advance_clock(...)`. `Clock(datetime)` built directly is a
+    `fixed` clock at that instant, which is also the way to render a datetime as
+    canonical text. Building a `Clock` does not choose or change any instance's
+    mode: that is the `clock_mode` reset option, and
+    `World(default_clock_mode=...)` for the world's default.
     """
 
     def __init__(self, now: datetime, mode: ClockMode = "fixed") -> None:
         self._start = _truncated(now)
         self._mode = check_clock_mode(mode)
         self._calls = 0
+        # How far the instance has moved the clock forward, in whole milliseconds.
+        self._advanced = timedelta()
         self._origin_ns = _monotonic_ns()
 
     @classmethod
@@ -180,12 +186,12 @@ class Clock:
         """The current reading. Reading the clock never moves it."""
         match self._mode:
             case "fixed":
-                return self._start
+                return self._start + self._advanced
             case "tick":
-                return self._start + self._calls * TICK
+                return self._start + self._advanced + self._calls * TICK
             case "running":
                 elapsed_ms = (_monotonic_ns() - self._origin_ns) // 1_000_000
-                return self._start + timedelta(milliseconds=elapsed_ms)
+                return self._start + self._advanced + timedelta(milliseconds=elapsed_ms)
             case "wall":
                 return _truncated(_wall_now())
 
@@ -197,6 +203,14 @@ class Clock:
     def _call_started(self) -> None:
         """Count a call. The instance calls this as a call takes its ordinal."""
         self._calls += 1
+
+    def _advance(self, by: timedelta) -> None:
+        """Move the reading forward by `by`, cut to whole milliseconds.
+
+        The instance calls this from `advance_clock`, which has already refused
+        a `wall` clock and a negative `by`.
+        """
+        self._advanced += by // _MILLISECOND * _MILLISECOND
 
     def __repr__(self) -> str:
         return f"Clock({self.iso()}, {self._mode})"

@@ -772,6 +772,26 @@ def test_a_reset_that_asks_for_control_tools_over_the_wire_does_not_get_them(
         }
 
 
+def test_controller_advance_clock_moves_the_clock_over_the_wire(world: World) -> None:
+    with (
+        serving(world, include_control_tools=True) as url,
+        SeahavenClient(base_url=url) as env,
+    ):
+        env.reset(now=INSTANT_ISO, clock_mode="fixed")
+        assert "controller_advance_clock" not in [tool["name"] for tool in env.list_tools()]
+
+        moved = env.call("controller_advance_clock", seconds=3600)
+        assert moved.result == {"now": "2024-03-05T13:00:00.123Z", "clock_mode": "fixed"}
+        assert env.call("now").result == {
+            "python": "2024-03-05T13:00:00.123Z",
+            "sql": "2024-03-05T13:00:00.123Z",
+        }
+        refused = env.call("controller_advance_clock", to=INSTANT_ISO)
+        assert refused.seahaven_error is not None
+        assert refused.seahaven_error["code"] == "clock_not_advanced"
+        assert env.state().now == "2024-03-05T13:00:00.123Z"
+
+
 def test_the_control_tool_is_unknown_without_the_flag(world: World) -> None:
     with serving(world) as url, SeahavenClient(base_url=url) as env:
         env.reset()

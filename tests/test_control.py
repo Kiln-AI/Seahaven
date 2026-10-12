@@ -1,9 +1,9 @@
-"""The framework's own tool, driven the way an eval drives it.
+"""The framework's own tools, driven the way an eval drives them.
 
 Everything here goes through `Instance.call`, because that is the whole of the
 control path: the generic machinery (validation, serialisation, the bypasses) is
-pinned in `test_instances.py` against a stand-in control tool, and what these
-tests are about is the real one.
+pinned in `test_instances.py` against a stand-in control tool, and these tests
+are about the real ones.
 
 `controller_run_sql` is deprecated, so every call of it warns. The module filter
 below silences the calls that are here for another reason; the two tests about
@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,11 @@ import pytest
 from seahaven import control, sandbox
 from seahaven.call import Call, Handler
 from seahaven.ctx import Ctx
-from seahaven.errors import ArgumentError, DbError, UnknownTool, WorldBug
+from seahaven.errors import ArgumentError, DbError, ToolError, ToolErrorType, UnknownTool, WorldBug
 from seahaven.instances import Instance
-from seahaven.world import World
-from tests.conftest import WAIT, Caller, build_world
+from seahaven.world import CONTROL_TOOL_NAMES, World
+from tests.conftest import INSTANT_ISO, WAIT, Caller, build_world
+from tests.test_instances import after
 
 pytestmark = pytest.mark.filterwarnings("ignore:controller_run_sql is deprecated")
 
@@ -103,11 +105,11 @@ def test_asking_for_control_tools_makes_the_tool_callable(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("asked", [True, False])
 def test_neither_instance_lists_a_control_tool(tmp_path: Path, asked: bool) -> None:
-    """The flag makes the tool callable, never advertised."""
+    """The flag makes the tools callable, never advertised."""
     world: World = build_world(tmp_path, SCHEMA)
 
     with world.instance(None, control_tools=asked) as instance:
-        assert "controller_run_sql" not in {tool["name"] for tool in instance.tools()}
+        assert not CONTROL_TOOL_NAMES & {tool["name"] for tool in instance.tools()}
 
 
 def test_it_reads_a_table_the_framework_knows_nothing_about(instance: Instance) -> None:
@@ -524,3 +526,105 @@ def test_a_control_read_answers_while_another_thread_reads_the_inspection_handle
 
     assert done.stdout.split() == ["finished"], done.stderr
     assert done.returncode == 0
+
+
+# ------------------------------------------------------------ controller_advance_clock
+
+
+def advance(instance: Instance, **arguments: Any) -> dict[str, str]:
+    """One call of the control tool that moves the clock."""
+    return instance.call("controller_advance_clock", **arguments)
+
+
+def test_controller_advance_clock_moves_the_clock_by_seconds_or_to_an_instant(
+    control_instance: Instance,
+) -> None:
+    assert advance(control_instance, seconds=90) == {"now": after(90), "clock_mode": "fixed"}
+    assert advance(control_instance, seconds=0.5)["now"] == after(90.5)
+    assert advance(control_instance, to=after(3600)) == {"now": after(3600), "clock_mode": "fixed"}
+
+    assert control_instance.call("now") == {"python": after(3600), "sql": after(3600)}
+
+
+def test_controller_advance_clock_is_not_a_call(tmp_path: Path) -> None:
+    world: World = build_world(tmp_path)
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="tick", control_tools=True) as instance:
+        assert advance(instance, seconds=60) == {"now": after(60), "clock_mode": "tick"}
+
+        assert instance.call_count == 0
+        assert instance.call_log() == []
+        assert instance.call("now")["sql"] == after(61)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({}, "controller_advance_clock takes exactly one of seconds and to"),
+        (
+            {"seconds": 1, "to": after(1)},
+            "controller_advance_clock takes exactly one of seconds and to",
+        ),
+        (
+            {"to": after(-1)},
+            f"to={after(-1)} is earlier than {INSTANT_ISO}, the clock's reading: the clock only "
+            "moves forward",
+        ),
+        ({"to": "tomorrow"}, "not a timestamp: 'tomorrow'"),
+        ({"seconds": 3e11}, "the clock cannot move past the year 9999"),
+        ({"seconds": 1e300}, "the clock cannot move past the year 9999"),
+    ],
+    ids=["neither", "both", "earlier", "not-a-timestamp", "past-9999", "past-a-timedelta"],
+)
+def test_a_refused_advance_is_a_tool_error_in_the_callers_own_words(
+    control_instance: Instance, arguments: dict[str, Any], message: str
+) -> None:
+    """A tool error and not a `WorldBug`, which an OpenEnv harness would only see as internal."""
+    with pytest.raises(ToolError) as raised:
+        advance(control_instance, **arguments)
+
+    assert raised.value.to_dict() == {
+        "code": "clock_not_advanced",
+        "message": message,
+        "details": None,
+    }
+    assert type(raised.value).error_type is ToolErrorType.EXECUTION_ERROR
+    assert control_instance.clock.iso() == INSTANT_ISO
+
+
+def test_a_wall_clock_refuses_an_advance_as_a_tool_error(tmp_path: Path) -> None:
+    world: World = build_world(tmp_path)
+
+    with (
+        world.instance(None, clock_mode="wall", control_tools=True) as instance,
+        pytest.raises(ToolError, match="a wall clock reads the host's time") as raised,
+    ):
+        advance(instance, seconds=60)
+
+    assert raised.value.code == "clock_not_advanced"
+
+
+@pytest.mark.parametrize("seconds", [-1, float("inf"), float("nan"), "60"])
+def test_seconds_that_are_not_a_distance_forward_are_an_argument_error(
+    control_instance: Instance, seconds: Any
+) -> None:
+    with pytest.raises(ArgumentError, match="seconds"):
+        advance(control_instance, seconds=seconds)
+
+    assert control_instance.clock.iso() == INSTANT_ISO
+
+
+def test_controller_advance_clock_is_not_deprecated(control_instance: Instance) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        advance(control_instance, seconds=1)
+
+
+def test_controller_advance_clock_is_unknown_without_control_tools(tmp_path: Path) -> None:
+    world: World = build_world(tmp_path)
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
+        with pytest.raises(UnknownTool, match="unknown tool: controller_advance_clock"):
+            advance(instance, seconds=60)
+
+        assert instance.clock.iso() == INSTANT_ISO

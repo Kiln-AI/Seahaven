@@ -295,7 +295,7 @@ def open_inspection(
     """Open a second, read-only view of an instance for looking at its state.
 
     `stream` names which read-only door this is -- `INSPECTION_STREAM` for the
-    handle a caller reads state through, `CONTROL_STREAM` for the control tool's
+    handle a caller reads state through, `CONTROL_STREAM` for `controller_run_sql`'s
     own -- so that two doors onto one instance do not hand out the same random
     values. See `ids.register_random_functions`. One door is one stream whatever
     it is attached to: a composite instance's read-only handles each draw from a
