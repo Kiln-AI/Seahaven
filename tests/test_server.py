@@ -13,11 +13,13 @@ and the claim that it is is worth a test rather than a paragraph.
 
 import asyncio
 import copy
+import http.client
 import json
 import logging
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator, MutableMapping
 from contextlib import ExitStack, contextmanager
@@ -48,6 +50,7 @@ pytest.importorskip(
 from fastapi import WebSocket
 from fastapi.routing import APIWebSocketRoute
 from openenv import GenericEnvClient
+from openenv.cli._validation import validate_running_environment
 from openenv.core.env_server.http_server import HTTPEnvServer
 from openenv.core.env_server.mcp_types import (
     CallToolAction,
@@ -1279,6 +1282,9 @@ def test_the_world_is_whole_with_the_web_interface_on(
         # the mode where a browser is most likely to be the thing asking.
         with urllib.request.urlopen(url + "/console") as console:
             assert console.status == 200
+        # `/` is OpenEnv's in this mode, and Seahaven's redirect does not take
+        # it over.
+        assert _redirect(url + "/") == (307, "/web/")
         env.reset()
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
@@ -1313,6 +1319,26 @@ def test_the_console_is_served_from_the_same_origin_as_the_socket(world: World) 
     assert b"<script" in page and b"src=" not in page.split(b"<script")[1].split(b">")[0]
     assert schema[0] == 200, schema
     assert "/console" not in schema[1]["paths"]
+
+
+def test_the_bare_address_redirects_to_the_console(world: World) -> None:
+    """`GET /` sends a browser to `/console`, and OpenEnv's own checks still pass.
+
+    The bare address is the one uvicorn prints as it starts, so it is the one an
+    operator opens. The redirect is kept out of the OpenAPI schema like the
+    console, and the runtime validator `openenv validate --url` runs still
+    passes the server.
+    """
+    with serving(world) as url:
+        redirect = _redirect(url + "/")
+        with urllib.request.urlopen(url + "/") as followed:
+            landed, content_type = followed.url, followed.headers.get_content_type()
+        schema = _request(url + "/openapi.json")
+        report = validate_running_environment(url)
+    assert redirect == (307, "/console")
+    assert (landed, content_type) == (url + "/console", "text/html")
+    assert "/" not in schema[1]["paths"]
+    assert report["passed"], report["criteria"]
 
 
 def test_an_install_without_the_built_page_says_the_console_is_not_enabled(
@@ -1351,6 +1377,7 @@ def test_no_console_leaves_the_route_off_and_the_protocol_alone(world: World) ->
     """
     with serving(world, console=False) as url, SeahavenClient(base_url=url) as env:
         assert _request(url + "/console")[0] == 404
+        assert _request(url + "/")[0] == 404
         env.reset()
         assert env.call("rows", sql="SELECT 1 AS n").result == [{"n": 1}]
 
@@ -1693,6 +1720,18 @@ def _request(url: str, *, method: str = "GET", data: bytes | None = None) -> tup
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as refused:
         return refused.code, json.loads(refused.read())
+
+
+def _redirect(url: str) -> tuple[int, str | None]:
+    """Answer the status and `Location` of a `GET`, without following it as urllib would."""
+    parts = urllib.parse.urlsplit(url)
+    connection = http.client.HTTPConnection(parts.netloc)
+    try:
+        connection.request("GET", parts.path)
+        response = connection.getresponse()
+        return response.status, response.getheader("location")
+    finally:
+        connection.close()
 
 
 def _freeze(world: World, fixture_id: str = "start") -> str:
