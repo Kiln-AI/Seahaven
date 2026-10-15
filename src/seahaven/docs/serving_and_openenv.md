@@ -96,8 +96,8 @@ second frame with an environment that has never seen its first.
 
 ## The web console
 
-A served world also has a web console, at `/console`. `seahaven serve` prints its address as it
-starts:
+A served world also has a web console, at `/console`, and the server's root address `/` redirects
+to it. `seahaven serve` prints the console's address as it starts:
 
 ```
 Starting. Web console will be available at http://127.0.0.1:8000/console

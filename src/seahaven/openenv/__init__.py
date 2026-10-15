@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from openenv.core.env_server.http_server import create_app
 from openenv.core.env_server.mcp_types import (
@@ -447,7 +447,7 @@ CONSOLE_MISSING = """<!doctype html>
 
 
 def _serve_console(served: FastAPI) -> None:
-    """Add `GET /console`, the web console, on the same origin as `/ws`.
+    """Add `GET /console`, the web console, on the same origin as `/ws`, and send `GET /` to it.
 
     Same origin is the point. The socket works from anywhere, but `/schema` and
     `/metadata` are plain HTTP and OpenEnv registers no CORS middleware, so a
@@ -457,6 +457,12 @@ def _serve_console(served: FastAPI) -> None:
     The route is kept out of the OpenAPI schema. `openenv push` decides what
     kind of environment an app is by reading path names, and a path it does not
     know is one more thing for that check to have an opinion about.
+
+    `GET /` redirects to the console, because the bare address is the one
+    uvicorn prints as it starts. It is kept out of the schema for the same
+    reason, and nothing in OpenEnv reads `/`: its validator and its container
+    providers probe `/health`, and `AutoEnv` falls back to `/` only when
+    `/health` does not answer 200.
     """
 
     # Annotated `Response` and not the union of the two returned: FastAPI builds
@@ -468,6 +474,17 @@ def _serve_console(served: FastAPI) -> None:
         if not CONSOLE_FILE.is_file():
             return HTMLResponse(CONSOLE_MISSING, status_code=501)
         return FileResponse(CONSOLE_FILE, media_type="text/html")
+
+    # With `ENABLE_WEB_INTERFACE=true`, which `openenv push` writes into a
+    # Space's Dockerfile, OpenEnv has already registered its own `GET /` to
+    # `/web/`. Starlette answers with the first route that matches, so that
+    # redirect stays OpenEnv's and this one applies only where `/` is free.
+    # 307, Starlette's default, and not a permanent redirect: a browser caches
+    # a 301 or 308, and would keep sending `/` to a console that a later
+    # `--no-console` took away.
+    @served.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        return RedirectResponse(CONSOLE_PATH)
 
 
 SCHEMAS_PATH = "/seahaven/schemas"
