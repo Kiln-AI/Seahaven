@@ -268,6 +268,5 @@ turns a log into the net difference an episode made.
 ## What Seahaven does not do
 
 Seahaven does not put a time limit on a tool call, filter or project tools per instance, mock a
-tool's response, move a clock forward, or generate data for you. It contains agent-written SQL and
-nothing else. None of these is planned. If your eval needs one, build it into the harness around the
-world.
+tool's response, or generate data for you. It contains agent-written SQL and nothing else. None of
+these is planned. If your eval needs one, build it into the harness around the world.

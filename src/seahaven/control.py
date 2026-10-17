@@ -93,8 +93,8 @@ def controller_advance_clock(
 
     Give exactly one. `to` is a timestamp in any form `reset` takes for `now`.
     Answers the clock's new reading as `now`, and its mode as `clock_mode`. A
-    refusal is a tool error coded `clock_not_advanced`: a `to` earlier than the
-    clock's reading, a `wall` clock, or both arguments or neither.
+    refusal, such as a `to` earlier than the clock's reading, a `wall` clock, or
+    both arguments or neither, is a tool error coded `clock_not_advanced`.
     """
     # Refused here rather than by `advance_clock`, whose refusal names its own
     # `by=`: the caller sent `seconds`.
