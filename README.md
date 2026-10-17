@@ -68,8 +68,7 @@ Seahaven handles the hard parts: parallel instances, reproducibility, serving, a
 
 - **[Built for Coding Agents](#build-worlds-with-your-coding-agent):** Docs optimized for agents
   authoring worlds. `seahaven check` tells an agent the exact fix for every mistake.
-- **[Just Python](src/seahaven/docs/authoring.md#writing-a-tool):** Tools are just functions.
-  Tests use pytest. Your agent already knows how to write and test Seahaven worlds.
+- **[Just Python](src/seahaven/docs/authoring.md#writing-a-tool):** Tools are functions, tests use pytest. Your agent already knows how to write and test Seahaven worlds.
 
 ## Seahaven vs. Real Systems and Mocks
 
