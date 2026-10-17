@@ -51,8 +51,9 @@ def add_parser(subcommands: argparse._SubParsersAction[argparse.ArgumentParser])
     parser.add_argument(
         "--include-control-tools",
         action="store_true",
-        help="make the control tool callable in each session; without the flag its name is "
-        "an unknown tool, and it is never listed either way",
+        help="make the control tools, such as controller_advance_clock, callable in each "
+        "session; without the flag their names are unknown tools, and they are never listed "
+        "either way",
     )
     parser.add_argument(
         "--no-console",

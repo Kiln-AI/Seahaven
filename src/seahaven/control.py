@@ -1,10 +1,10 @@
-"""The framework's own tool: what an eval asks an instance, not what an agent does.
+"""The framework's own tools: what an eval does to an instance, not what an agent does.
 
-`controller_run_sql` is registered on every world, is never in its tool list, and
+Each control tool is registered on every world, is never in its tool list, and
 is dispatched straight from `Instance.call` -- around the middleware chain, the
 world's error handler, the per-call transaction and the concurrency gate. An eval
-asking what an instance holds wants the real answer and the real message, and it
-must not have to wait behind the agent's queue to get one.
+driving an instance wants the real answer and the real message, and it must not
+have to wait behind the agent's queue to get one.
 
 Registration is not permission. Only an instance made with
 `world.instance(..., control_tools=True)` can call one; on every other instance
@@ -12,23 +12,27 @@ the name answers `UnknownTool`, in the words any name the world does not have
 earns. The registration is what lets `World._add` keep refusing a world that
 tries to register the name itself.
 
-It is deprecated: `inst.state()` is what an eval reads now, and every call
-through here warns. It is a thin wrapper -- a read-only handle on the instance is
-what it reads through -- and it writes no SQL of its own. It covers a composite
-instance's every node without a line here that knows it, because the handle
-carries each added node attached under its own schema.
+`controller_advance_clock` is `Instance.advance_clock` for a harness at the other
+end of the OpenEnv wire, where nothing else reaches one session's instance: a
+`reset` only sets where the clock starts.
+
+`controller_run_sql` is deprecated: `inst.state()` is what an eval reads now, and
+every call of it warns. It is a thin wrapper -- a read-only handle on the
+instance is what it reads through -- and it writes no SQL of its own. It covers a
+composite instance's every node without a line here that knows it, because the
+handle carries each added node attached under its own schema.
 
 A control call takes the instance lock like any call, so it never interleaves
 with a step on the same instance, and it asks the instance for what it needs with
 that lock already held, which is why the lock is an `RLock`.
 
-The handle it reads through is the instance's control handle and not the
-`inspect()` one an eval holds. Same file, same read-only opener, different
-connection: `sandbox.run_statement` borrows connection-level state -- the
-authorizer, the value limit -- for the length of a statement, and `inspect()`
-reads do not take the instance lock, so a control read on that connection would
-be a second thread changing it under a cursor that is stepping. See
-`Instance._control_db`.
+The handle `controller_run_sql` reads through is the instance's control handle
+and not the `inspect()` one an eval holds. Same file, same read-only opener,
+different connection: `sandbox.run_statement` borrows connection-level state --
+the authorizer, the value limit -- for the length of a statement, and
+`inspect()` reads do not take the instance lock, so a control read on that
+connection would be a second thread changing it under a cursor that is
+stepping. See `Instance._control_db`.
 """
 
 import dataclasses
@@ -37,27 +41,39 @@ import inspect
 import os
 import warnings
 from collections.abc import Callable
+from datetime import timedelta
 from types import FunctionType
-from typing import Any
+from typing import Annotated, Any
 
 import apsw
+from pydantic import Field
 
 from seahaven import sandbox
 from seahaven.call import serialise
 from seahaven.ctx import Ctx
 from seahaven.db import SqlValue
-from seahaven.errors import DbError, WorldBug
+from seahaven.errors import DbError, ToolError, WorldBug
 from seahaven.helpers.run_sql import showing_sqlite_text, to_result
 from seahaven.instances import Instance
 from seahaven.sandbox import Authorizer
 from seahaven.tool import Tool
 
-__all__ = ["DEPRECATED", "TOOLS", "controller_run_sql", "dispatch"]
+__all__ = [
+    "CLOCK_NOT_ADVANCED",
+    "DEPRECATED",
+    "TOOLS",
+    "controller_advance_clock",
+    "controller_run_sql",
+    "dispatch",
+]
 
 # The control tools whose calls warn. `functional_spec.md` §11 keeps
 # `controller_run_sql` working and schedules no removal for it; `state()` is what
 # replaced it.
 DEPRECATED = frozenset({"controller_run_sql"})
+
+# The code of every refusal `controller_advance_clock` answers.
+CLOCK_NOT_ADVANCED = "clock_not_advanced"
 
 # Every frame inside the framework, so that `warnings.warn` walks past all of
 # them and reports the caller's own line. A `stacklevel` cannot do this: a
@@ -65,6 +81,44 @@ DEPRECATED = frozenset({"controller_run_sql"})
 # layer over the wire, and by calling `dispatch` directly, which are three
 # different depths.
 _FRAMEWORK = (os.path.dirname(os.path.abspath(__file__)) + os.sep,)
+
+
+def controller_advance_clock(
+    instance: Instance,
+    ctx: Ctx,
+    seconds: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = None,
+    to: str | None = None,
+) -> dict[str, str]:
+    """Move the instance's clock forward, by `seconds` or to the instant `to`.
+
+    Give exactly one. `to` is a timestamp in any form `reset` takes for `now`.
+    Answers the clock's new reading as `now`, and its mode as `clock_mode`. A
+    refusal, such as a `to` earlier than the clock's reading, a `wall` clock, or
+    both arguments or neither, is a tool error coded `clock_not_advanced`.
+    """
+    # Refused here rather than by `advance_clock`, whose refusal names its own
+    # `by=`: the caller sent `seconds`.
+    if (seconds is None) == (to is None):
+        raise ToolError(
+            CLOCK_NOT_ADVANCED, "controller_advance_clock takes exactly one of seconds and to"
+        )
+    try:
+        reading = instance.advance_clock(None if seconds is None else _duration(seconds), to=to)
+    except WorldBug as error:
+        # A `WorldBug` reaches an OpenEnv harness as "internal error" and nothing
+        # more (`SeahavenEnv._call`), and every refusal here is the harness's to
+        # read and act on.
+        raise ToolError(CLOCK_NOT_ADVANCED, str(error)) from error
+    return {"now": reading, "clock_mode": instance.clock.mode}
+
+
+def _duration(seconds: float) -> timedelta:
+    try:
+        return timedelta(seconds=seconds)
+    except OverflowError:
+        # More than a `timedelta` holds is further than any clock can move, and
+        # `advance_clock` refuses that in its own words.
+        return timedelta.max
 
 
 def controller_run_sql(
@@ -219,6 +273,9 @@ def _control_tool(fn: FunctionType) -> Tool:
     return dataclasses.replace(tool, fn=fn, control=True)
 
 
-# Registered on every `World` at construction. Built once, at import: it carries
-# no world and no instance, so one tool serves every world in the process.
-TOOLS: tuple[Tool, ...] = (_control_tool(controller_run_sql),)
+# Registered on every `World` at construction. Built once, at import: they carry
+# no world and no instance, so one of each serves every world in the process.
+TOOLS: tuple[Tool, ...] = (
+    _control_tool(controller_run_sql),
+    _control_tool(controller_advance_clock),
+)

@@ -17,6 +17,7 @@ from urllib.parse import unquote
 import pytest
 
 import seahaven
+from seahaven import control
 from seahaven.cli.docs import docs_path
 
 # The layout, as `index.md` gives it. `components/pytest_and_docs.md` §2 wrote
@@ -236,11 +237,10 @@ def test_the_lint_packages_own_table_agrees_with_the_reference() -> None:
 
 # `functional_spec.md` §11: `controller_run_sql` is deprecated and leaves the docs
 # but for the one line of `reference/cli.md` that documents the flag it is behind.
-# The prefix is what to search for, because it is how every control tool is
-# spelled, and the exception is one line rather than a whole page, so that the
-# deprecation line cannot quietly grow a worked example.
-_CONTROL_PREFIX = "controller_"
-_CONTROL_PAGE = "reference/cli.md"
+# The exception is one line rather than a whole page, so that the deprecation line
+# cannot quietly grow a worked example. A control tool that is not deprecated is
+# documented like anything else.
+_DEPRECATED_CONTROL_PAGE = "reference/cli.md"
 
 # `Instance.changes()` was removed with the change log. A page that still calls it
 # is an example that raises `AttributeError` for whoever pastes it, and no fence
@@ -249,13 +249,16 @@ _REMOVED_CALL = "changes()"
 
 
 @pytest.mark.parametrize("page", PAGES)
-def test_no_page_names_a_control_tool_but_the_cli_reference(page: str) -> None:
+@pytest.mark.parametrize("tool", sorted(control.DEPRECATED))
+def test_no_page_names_a_deprecated_control_tool_but_the_cli_reference(
+    page: str, tool: str
+) -> None:
     text = (DOCS / page).read_text(encoding="utf-8")
-    naming = [line for line in text.splitlines() if _CONTROL_PREFIX in line]
-    if page != _CONTROL_PAGE:
-        assert not naming, f"{page} names a control tool: {naming}"
+    naming = [line for line in text.splitlines() if tool in line]
+    if page != _DEPRECATED_CONTROL_PAGE:
+        assert not naming, f"{page} names {tool}: {naming}"
     else:
-        assert len(naming) == 1, f"{page} names a control tool on {len(naming)} lines, not one"
+        assert len(naming) == 1, f"{page} names {tool} on {len(naming)} lines, not one"
 
 
 @pytest.mark.parametrize("page", PAGES)

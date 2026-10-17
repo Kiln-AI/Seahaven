@@ -2630,3 +2630,244 @@ def test_every_node_of_a_composite_reads_one_clock(tmp_path: Path) -> None:
         with instance.bulk() as ctx:
             assert {sql_now(ctx.db), sql_now(ctx.worlds.child.db)} == {after(2)}
         assert sql_now(instance.inspect()) == after(2)
+
+
+# ---------------------------------------------------------------- advancing the clock
+
+
+def test_advance_clock_moves_a_fixed_clock_for_every_reader(tmp_path: Path) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
+        assert instance.advance_clock(timedelta(minutes=5)) == after(300)
+
+        assert instance.clock.iso() == after(300)
+        assert instance.call("now") == {"python": after(300), "sql": after(300)}
+        assert sql_now(instance.inspect()) == after(300)
+        assert instance.state()["now"] == after(300)
+
+
+@pytest.mark.parametrize(
+    "to",
+    [after(90), "2024-03-05T14:01:30.123+02:00", INSTANT + timedelta(seconds=90)],
+    ids=["canonical", "offset", "datetime"],
+)
+def test_advance_clock_to_moves_the_clock_to_that_instant(
+    tmp_path: Path, to: str | datetime
+) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
+        assert instance.advance_clock(to=to) == after(90)
+        assert instance.call("now")["sql"] == after(90)
+
+
+def test_advance_clock_by_nothing_or_to_the_reading_leaves_the_clock_where_it_is(
+    instance: Instance,
+) -> None:
+    assert instance.advance_clock(timedelta()) == INSTANT_ISO
+    assert instance.advance_clock(to=INSTANT_ISO) == INSTANT_ISO
+
+
+def test_advance_clock_cuts_the_distance_to_the_millisecond(instance: Instance) -> None:
+    assert instance.advance_clock(timedelta(microseconds=1_999)) == after(0.001)
+    assert sql_now(instance.inspect()) == after(0.001)
+
+
+def test_an_advance_is_not_a_call_and_tick_counts_on_from_it(tmp_path: Path) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="tick") as instance:
+        instance.call("now")
+
+        assert instance.advance_clock(timedelta(minutes=1)) == after(61)
+        assert instance.call_count == 1
+        assert [record.tool for record in instance.call_log()] == ["now"]
+        assert instance.call("now") == {"python": after(62), "sql": after(62)}
+
+
+def test_a_running_clock_runs_on_from_an_advance(tmp_path: Path, monotonic: list[int]) -> None:
+    with build_world(tmp_path).instance(None, now=INSTANT_ISO, clock_mode="running") as instance:
+        monotonic[0] += 1_500_000_000
+        assert instance.advance_clock(timedelta(minutes=1)) == after(61.5)
+        assert instance.advance_clock(to=after(120)) == after(120)
+
+        monotonic[0] += 2_000_000_000
+        assert instance.call("now") == {"python": after(122), "sql": after(122)}
+
+
+def test_every_node_of_a_composite_reads_the_advanced_clock(tmp_path: Path) -> None:
+    host = build_world(tmp_path)
+    child = composable_world("child")
+
+    @child.tool(name="child_now")
+    def child_now(ctx: Ctx) -> dict[str, str]:
+        """The instance's clock, as the added world reads it."""
+        return {"python": ctx.clock.iso(), "sql": sql_now(ctx.db)}
+
+    host.add_world(child, name="child")
+
+    with host.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
+        instance.advance_clock(timedelta(hours=1))
+
+        assert instance.call("child_now") == {"python": after(3600), "sql": after(3600)}
+        with instance.bulk() as ctx:
+            assert {sql_now(ctx.db), sql_now(ctx.worlds.child.db)} == {after(3600)}
+        assert sql_now(instance.inspect()) == after(3600)
+
+
+def test_freeze_after_an_advance_records_the_advanced_reading(world: World) -> None:
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as origin:
+        origin.advance_clock(timedelta(days=3))
+        fixture = origin.freeze("later", "Three days in.")
+
+    assert fixture.now == after(3 * 86400)
+    with world.instance("later", clock_mode="fixed") as forked:
+        assert forked.clock.iso() == after(3 * 86400)
+
+
+def test_advance_clock_refuses_a_wall_clock(tmp_path: Path, wall: list[datetime]) -> None:
+    with build_world(tmp_path).instance(None, clock_mode="wall") as instance:
+        with pytest.raises(WorldBug, match="a wall clock reads the host's time"):
+            instance.advance_clock(timedelta(minutes=5))
+
+        assert instance.clock.iso() == "2031-12-25T06:30:00.500Z"
+
+
+@pytest.mark.parametrize(
+    ("by", "to", "refusal"),
+    [
+        (timedelta(seconds=-1), None, "by= must not be negative"),
+        (None, after(-0.001), rf"to={after(-0.001)} is earlier than {INSTANT_ISO}"),
+    ],
+    ids=["by", "to"],
+)
+def test_advance_clock_only_moves_forward(
+    instance: Instance, by: timedelta | None, to: str | None, refusal: str
+) -> None:
+    with pytest.raises(WorldBug, match=refusal):
+        instance.advance_clock(by, to=to)
+
+    assert instance.clock.iso() == INSTANT_ISO
+
+
+@pytest.mark.parametrize(
+    ("by", "to"),
+    [(None, None), (timedelta(seconds=1), after(1))],
+    ids=["neither", "both"],
+)
+def test_advance_clock_takes_exactly_one_of_by_and_to(
+    instance: Instance, by: timedelta | None, to: str | None
+) -> None:
+    with pytest.raises(WorldBug, match="exactly one of by= and to="):
+        instance.advance_clock(by, to=to)
+
+    assert instance.clock.iso() == INSTANT_ISO
+
+
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        ({"by": 60}, "by= takes a timedelta, such as timedelta\\(minutes=5\\), not int"),
+        ({"to": 1_717_232_400}, "to= takes a timestamp, as text or as a datetime, not int"),
+        ({"to": "tomorrow"}, "not a timestamp: 'tomorrow'"),
+        ({"to": datetime(2025, 1, 1)}, "a clock instant must be timezone-aware"),
+    ],
+    ids=["by-number", "to-number", "to-text", "to-naive"],
+)
+def test_advance_clock_refuses_an_argument_that_is_not_a_distance_or_an_instant(
+    instance: Instance, arguments: dict[str, Any], refusal: str
+) -> None:
+    with pytest.raises(WorldBug, match=refusal):
+        instance.advance_clock(**arguments)
+
+
+def test_advance_clock_refuses_to_move_past_the_last_instant_a_clock_reads(
+    instance: Instance,
+) -> None:
+    with pytest.raises(WorldBug, match="the clock cannot move past the year 9999"):
+        instance.advance_clock(timedelta.max)
+
+    assert instance.clock.iso() == INSTANT_ISO
+
+
+@pytest.mark.parametrize("transaction", [True, False], ids=["transaction", "no-transaction"])
+def test_advance_clock_is_refused_inside_a_tool_call(tmp_path: Path, transaction: bool) -> None:
+    """A tool that runs without a transaction is still inside a call."""
+    world = build_world(tmp_path)
+    held: dict[str, Instance] = {}
+
+    @world.tool(transaction=transaction)
+    def move_time(ctx: Ctx) -> str:
+        """Move the clock from inside a call."""
+        return held["instance"].advance_clock(timedelta(minutes=5))
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
+        held["instance"] = instance
+
+        with pytest.raises(WorldBug, match="cannot run inside a tool call"):
+            instance.call("move_time")
+
+        assert instance.clock.iso() == INSTANT_ISO
+
+
+def test_advance_clock_is_refused_inside_bulk(instance: Instance) -> None:
+    with instance.bulk(), pytest.raises(WorldBug, match="cannot run inside bulk"):
+        instance.advance_clock(timedelta(minutes=5))
+
+    assert instance.clock.iso() == INSTANT_ISO
+
+
+def test_advance_clock_is_refused_inside_a_state_formatter(tmp_path: Path) -> None:
+    world = build_world(tmp_path)
+    held: dict[str, Instance] = {}
+
+    @world.state_format("acme.moving/1")
+    def moving(world: World, instance: Instance | None) -> dict[str, Any]:
+        """Move the clock from inside a read."""
+        held["instance"].advance_clock(timedelta(minutes=5))
+        return {}
+
+    with world.instance(
+        None, now=INSTANT_ISO, clock_mode="fixed", state_format="acme.moving/1"
+    ) as instance:
+        held["instance"] = instance
+
+        with pytest.raises(WorldBug, match="never writes to it"):
+            instance.state()
+
+        assert instance.clock.iso() == INSTANT_ISO
+
+
+def test_advance_clock_on_a_destroyed_instance_is_refused(world: World) -> None:
+    instance = world.instance(None, clock_mode="fixed")
+    instance.destroy()
+
+    with pytest.raises(WorldBug, match="has been destroyed"):
+        instance.advance_clock(timedelta(minutes=5))
+
+
+def test_advance_clock_waits_for_a_call_in_flight(tmp_path: Path) -> None:
+    """The clock moves between calls, never during one."""
+    world = build_world(tmp_path)
+    inside = threading.Event()
+    finish = threading.Event()
+
+    @world.tool
+    def slow(ctx: Ctx) -> list[str]:
+        """Read the clock, hold the instance lock until the test lets go, and read it again."""
+        first = ctx.clock.iso()
+        inside.set()
+        assert finish.wait(WAIT)
+        return [first, ctx.clock.iso()]
+
+    with world.instance(None, now=INSTANT_ISO, clock_mode="fixed") as instance:
+        readings: list[list[str]] = []
+        caller = Caller(lambda: readings.append(instance.call("slow")))
+        caller.start()
+        assert inside.wait(WAIT)
+
+        mover = Caller(lambda: instance.advance_clock(timedelta(minutes=5)))
+        mover.start()
+        mover.join(0.2)
+        assert mover.is_alive(), "the advance should be waiting for the lock"
+
+        finish.set()
+        caller.finish()
+        mover.finish()
+        assert readings == [[INSTANT_ISO, INSTANT_ISO]]
+        assert instance.clock.iso() == after(300)

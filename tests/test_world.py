@@ -15,6 +15,7 @@ from typing import IO, Any
 import pytest
 
 import seahaven
+from seahaven import control
 from seahaven.call import Call, Handler
 from seahaven.composition import epoch
 from seahaven.ctx import Ctx
@@ -611,9 +612,10 @@ def test_the_environment_verbs_are_not_tool_names(world: World, name: str) -> No
         world.tool(echo, name=name)
 
 
-def test_a_control_tool_name_is_not_a_tool_name(world: World) -> None:
+@pytest.mark.parametrize("name", sorted(CONTROL_TOOL_NAMES))
+def test_a_control_tool_name_is_not_a_tool_name(world: World, name: str) -> None:
     with pytest.raises(WorldBug, match="control tool"):
-        world.tool(echo, name="controller_run_sql")
+        world.tool(echo, name=name)
 
 
 def test_a_tool_from_a_factory_is_registered_as_it_is(world: World) -> None:
@@ -816,9 +818,13 @@ def test_a_startup_hook_takes_the_context_and_nothing_else_positionally(world: W
             world.instance_startup(hook)
 
 
-def test_every_world_carries_the_one_control_tool(world: World) -> None:
+def test_every_world_carries_the_control_tools(world: World) -> None:
     """Registered at construction, flagged, and none of the world's own doing."""
-    assert [name for name, tool in world.tools.items() if tool.control] == ["controller_run_sql"]
+    assert [name for name, tool in world.tools.items() if tool.control] == [
+        "controller_run_sql",
+        "controller_advance_clock",
+    ]
+    assert {tool.name for tool in control.TOOLS} == CONTROL_TOOL_NAMES
     assert registered(world) == []
 
 

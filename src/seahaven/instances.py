@@ -18,13 +18,14 @@ moment more.
 Three rules hold the concurrency together.
 
 *One lock per instance.* `call`, `change_log`, `call_log`, `state`, `freeze`,
-`bulk`, `destroy`, a nested call through a handle and the opens inside
-`inspect()` and `_control_db()` take it, so calls into one instance serialise and
-a destroy waits for the call in flight. Reads through the `inspect()` handle
-afterwards do not take it: that handle is the caller's, to read from whatever
-thread it likes. The lock is an `RLock` because a control tool is called with it
-already held and then asks the instance for something -- its control handle --
-that takes it again on the same thread.
+`advance_clock`, `bulk`, `destroy`, a nested call through a handle and the opens
+inside `inspect()` and `_control_db()` take it, so calls into one instance
+serialise and a destroy waits for the call in flight. Reads through the
+`inspect()` handle afterwards do not take it: that handle is the caller's, to
+read from whatever thread it likes. The lock is an `RLock` because a control
+tool is called with it already held and then asks the instance for something --
+its control handle, or `advance_clock` -- that takes it again on the same
+thread.
 
 *The gate before the lock, and never under it.* The concurrency gate bounds how
 many tool calls run at once across the process. A call takes it before the
@@ -34,7 +35,7 @@ inside a call or a `bulk()` block, nothing more it does takes the gate. That
 covers a nested call through a handle, an `inst.call(...)` inside `bulk()`, and a
 call on another instance from inside either, because by then the thread may hold
 an instance lock that a queued caller is waiting for. `bulk()`, instance creation
-and the control tool take no slot.
+and the control tools take no slot.
 
 *The manager's lock is never held while an instance lock is.* The registry is
 touched only in short moments that take nothing else.
@@ -54,7 +55,7 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, closing, contextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Concatenate, Self, overload
 
@@ -124,6 +125,9 @@ _POSIX_WORK_ROOT = (
 )
 
 _log = logging.getLogger(__name__)
+
+# The last instant a `datetime` can hold, and so the furthest a clock can be advanced to.
+_LATEST_INSTANT = datetime.max.replace(tzinfo=UTC)
 
 
 def default_concurrency() -> int:
@@ -607,6 +611,58 @@ class Instance:
                 )
             return freeze(self, id, description, fixtures_dir=self.world.fixtures_dir)
 
+    def advance_clock(
+        self, by: timedelta | None = None, *, to: str | datetime | None = None
+    ) -> str:
+        """Move this instance's clock forward, and answer its new reading as canonical text.
+
+        `by` is how far to move it, and `to` is the instant to move it to, in
+        either form `now=` takes; pass exactly one. The clock keeps its mode
+        and moves on from the new reading, so `tick` still adds a second per
+        call and `running` still runs. Every node, `inspect()` and the next
+        `freeze` read the moved clock. An advance is not a call: it takes no
+        ordinal, does not tick, and is not in the call log.
+
+        Forward only, for the reason a `now=` earlier than a fixture's is
+        refused: rows already written are dated by the clock. Refused under
+        `wall`, whose reading is the host's, and inside a tool call, `bulk()` or
+        a state formatter, because the clock moves between calls and never
+        during one.
+        """
+        self._refuse_if_formatting()
+        request = _advance_request(by, to)
+        if calling():
+            raise WorldBug(
+                "advance_clock cannot run inside a tool call: world code reads the clock and "
+                "never moves it. Advance it between calls"
+            )
+        with self._held():
+            # Any node, as in `freeze`: `bulk()` opens a transaction on every one.
+            if any(runtime.db.in_transaction for runtime in self._runtime.values()):
+                raise WorldBug(
+                    "advance_clock cannot run inside bulk(): leave the bulk() block first, and "
+                    "advance the clock between blocks"
+                )
+            if self.clock.mode == "wall":
+                raise WorldBug(
+                    "a wall clock reads the host's time and cannot be advanced; make the "
+                    "instance with clock_mode 'fixed', 'tick' or 'running' to move its clock"
+                )
+            current = self.clock.now()
+            if isinstance(request, datetime):
+                if request < current:
+                    raise WorldBug(
+                        f"to={Clock(request).iso()} is earlier than {Clock(current).iso()}, the "
+                        "clock's reading: the clock only moves forward"
+                    )
+                step = request - current
+            else:
+                step = request
+            if step > _LATEST_INSTANT - current:
+                raise WorldBug(f"the clock cannot move past the year {_LATEST_INSTANT.year}")
+            self.clock._advance(step)
+            return self.clock.iso()
+
     def bulk(self) -> AbstractContextManager[Ctx[Any]]:
         """Write straight into the instance, under its lock and one transaction per node.
 
@@ -872,7 +928,7 @@ class Instance:
         return composition
 
     def _control_db(self) -> Db:
-        """A second read-only handle, opened once, for the control tool alone.
+        """A second read-only handle, opened once, for `controller_run_sql` alone.
 
         Not the `inspect()` handle, though it is opened the same way. A control
         read runs through `sandbox.run_statement`, which sets the connection's
@@ -883,7 +939,7 @@ class Instance:
         and one that takes the interpreter with it, because the thread waiting on
         the connection is holding the GIL.
 
-        Reached only from the control tool, which `Instance.call` runs with the
+        Reached only from `controller_run_sql`, which `Instance.call` runs with the
         instance lock held, so this connection has one statement on it at a time
         and the state `run_statement` borrows is state nobody else can see.
         """
@@ -988,7 +1044,7 @@ class Instance:
 
         No session outlives a call -- each one is opened and closed inside
         `_recording` -- so what is left here is a connection per node. Both
-        read-only handles, the caller's from `inspect()` and the control tool's
+        read-only handles, the caller's from `inspect()` and `controller_run_sql`'s
         own, may never have been opened.
         """
         for handle in (self._inspection, self._control):
@@ -1420,6 +1476,30 @@ class InstanceManager:
 
 def _clock_from(now: str | datetime, mode: ClockMode) -> Clock:
     return Clock.from_iso(now, mode) if isinstance(now, str) else Clock(now, mode)
+
+
+def _advance_request(by: object, to: object) -> timedelta | datetime:
+    """What an `advance_clock` asks for: how far to move, or the instant to move to.
+
+    Exactly one of a `timedelta` that is not negative and an instant in either
+    form `now=` takes, which comes back as an aware UTC datetime cut to the
+    clock's precision.
+    """
+    if (by is None) == (to is None):
+        raise WorldBug("advance_clock takes exactly one of by= and to=")
+    if to is not None:
+        if not isinstance(to, str | datetime):
+            raise WorldBug(
+                f"to= takes a timestamp, as text or as a datetime, not {type(to).__name__}"
+            )
+        return _clock_from(to, "fixed").now()
+    if not isinstance(by, timedelta):
+        raise WorldBug(
+            f"by= takes a timedelta, such as timedelta(minutes=5), not {type(by).__name__}"
+        )
+    if by < timedelta():
+        raise WorldBug("by= must not be negative: the clock only moves forward")
+    return by
 
 
 def _check_not_before_fixture(fixture: Fixture, now: str | datetime) -> None:

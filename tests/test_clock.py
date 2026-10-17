@@ -393,6 +393,52 @@ def test_clocks_compare_by_identity() -> None:
     assert Clock(INSTANT) != Clock(INSTANT)
 
 
+# ----------------------------------------------------------------- advancing
+
+FIVE_MINUTES = timedelta(minutes=5)
+
+
+def test_an_advance_moves_a_fixed_clock_and_the_advances_add_up() -> None:
+    fixed = Clock(INSTANT)
+
+    fixed._advance(FIVE_MINUTES)
+    assert fixed.now() == INSTANT + FIVE_MINUTES
+    fixed._advance(timedelta(hours=1))
+    assert fixed.iso() == "2024-03-05T13:05:00.123Z"
+
+
+def test_an_advance_moves_a_tick_clock_and_it_goes_on_counting_calls() -> None:
+    tick = Clock(INSTANT, "tick")
+    tick._call_started()
+
+    tick._advance(FIVE_MINUTES)
+    assert tick.now() == INSTANT + FIVE_MINUTES + timedelta(seconds=1)
+    tick._call_started()
+    assert tick.now() == INSTANT + FIVE_MINUTES + timedelta(seconds=2)
+
+
+def test_an_advance_moves_a_running_clock_and_it_goes_on_running(monotonic: list[int]) -> None:
+    running = Clock(INSTANT, "running")
+    monotonic[0] += 1_500_000_000
+
+    running._advance(FIVE_MINUTES)
+    assert running.now() == INSTANT + FIVE_MINUTES + timedelta(seconds=1.5)
+    monotonic[0] += 1_000_000_000
+    assert running.now() == INSTANT + FIVE_MINUTES + timedelta(seconds=2.5)
+
+
+@pytest.mark.parametrize("mode", ["fixed", "tick", "running"])
+def test_an_advance_is_cut_to_the_millisecond_a_reading_shows(
+    mode: ClockMode, monotonic: list[int]
+) -> None:
+    clock = Clock(INSTANT, mode)
+
+    clock._advance(timedelta(microseconds=1_999))
+
+    assert clock.now() == INSTANT + timedelta(milliseconds=1)
+    assert clock.iso() == "2024-03-05T12:00:00.124Z"
+
+
 # ------------------------------------------------- one reading per SQL statement
 
 

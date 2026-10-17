@@ -2,7 +2,8 @@
 
 Every instance has a clock of its own, and everything in the world reads it: world code through
 `ctx.clock`, and SQL through SQLite's own date and time functions. This page explains how the clock
-starts, the four modes that say how it moves, and what they mean for the timestamps a world writes.
+starts, the four modes that say how it moves, how a harness moves it forward, and what that means
+for the timestamps a world writes.
 
 ## Modes
 
@@ -12,10 +13,13 @@ how the clock moves from there:
 
 | Mode | What the clock reads | Replays |
 |---|---|---|
-| `fixed` | The start instant, for the instance's whole life | Yes |
+| `fixed` | The start instant | Yes |
 | `tick` | The start instant plus one second per tool call dispatched so far | Yes |
 | `running` | The start instant plus the real time elapsed since the instance was created | No |
 | `wall` | The host's current UTC time. The start instant is not used | No |
+
+Under every mode but `wall`, a harness can also move the clock forward. See
+[Moving the clock forward](#moving-the-clock-forward).
 
 ## Choosing a mode
 
@@ -97,6 +101,35 @@ with world.instance("small_startup", now="2026-06-04T09:00:00.000Z", clock_mode=
 
 A `now=` earlier than the fixture's `now` is refused. The fixture's rows are dated by its clock, so
 an earlier start would give the instance rows created in its future.
+
+## Moving the clock forward
+
+A harness can move an instance's clock forward between calls, so that a retry window or a due date
+arrives without waiting for it. `inst.advance_clock(by)` moves the clock by a `timedelta`, and
+`inst.advance_clock(to=...)` moves it to an instant, in either form `now=` takes. Both answer the
+new reading:
+
+```python
+from datetime import timedelta
+
+import projecttracker
+
+world = projecttracker.world
+
+with world.instance("small_startup", clock_mode="tick") as inst:
+    assert inst.advance_clock(timedelta(days=2)) == "2026-06-03T09:00:00.000Z"
+    inst.call("list_teams")
+    assert inst.clock.iso() == "2026-06-03T09:00:01.000Z"
+    assert inst.advance_clock(to="2026-06-04T09:00:00.000Z") == "2026-06-04T09:00:00.000Z"
+```
+
+The clock keeps its mode and goes on from the new reading: `tick` still adds a second per call, and
+`running` still runs. An advance is not a call, so it does not tick and is not in the call log.
+The clock only moves forward, and a `wall` clock cannot be moved. World code reads the clock and
+cannot move it.
+
+Over a server, a harness calls the `controller_advance_clock` control tool instead. See
+[serving_and_openenv.md](serving_and_openenv.md#moving-the-clock).
 
 ## Timestamps are not a complete order
 

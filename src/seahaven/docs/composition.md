@@ -171,8 +171,8 @@ observes**, so a host that cares orders its `add_world` calls to match the clien
 Three rules fall out of that:
 
 - After filtering and prefixing, every name must be unique across the whole tree, and must not be
-  one of the reserved names (`reset`, `step`, `state`, `close`, and the control tool). A
-  collision is a seal error, never resolved silently.
+  one of the reserved names (`reset`, `step`, `state`, `close`, and the names of the control
+  tools). A collision is a seal error, never resolved silently.
 - A prefixed name must still be a valid tool name (`^[A-Za-z0-9_-]{1,128}$`), so a `tool_prefix` of
   `"payments."` is refused rather than published.
 - Control tools are never contributed. Every world registers them, but a call by that name resolves
