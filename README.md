@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="200" height="168" alt="seahaven logo" src="https://github.com/user-attachments/assets/79e3b5cd-3522-48ae-b5a6-ba356da4ee00" />
+  <img width="200" alt="seahaven logo" src="https://github.com/user-attachments/assets/e4e72b99-1883-4c98-8a51-6945010eb8d1" />
 </p>
 <h3 align="center">
   Synthetic world framework for agent evals and RL.
