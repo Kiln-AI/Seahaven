@@ -187,12 +187,16 @@ class SeahavenClient(EnvClient[CallToolAction | ListToolsAction, Observation, Se
         # tool call's observation is the `SeahavenObservation` and this is the
         # verb that promises one.
         action = CallToolAction(tool_name=tool, arguments=arguments)
+        # As `_step_async` does: after a dropped socket, a reconnect would land
+        # on a new session that was never reset.
+        self._raise_if_session_lost()
         response = await self._send_and_receive(
             {"type": "step", "data": self._step_payload(action)}
         )
         return SeahavenObservation.model_validate(response.get("data", {}).get("observation", {}))
 
     async def _list_tools_async(self) -> list[dict[str, Any]]:
+        self._raise_if_session_lost()
         response = await self._send_and_receive(
             {"type": "step", "data": ListToolsAction().model_dump()}
         )

@@ -274,7 +274,7 @@ export type EnvSchema = {
   action?: JsonSchema
   observation?: JsonSchema
   state?: JsonSchema
-  /** The reset message. Only `GET /seahaven/schemas` answers it; see `fetchSchema`. */
+  /** The reset message. OpenEnv publishes it from 0.11.0; an older server leaves it out. */
   reset?: JsonSchema
 }
 
@@ -305,17 +305,14 @@ export async function fetchJson<T>(root: string, path: string): Promise<T | null
 }
 
 /**
- * The environment's models: `GET /schema`, plus the reset message when the server publishes one.
+ * The environment's models: `GET /schema`, with the reset message when the server publishes one.
  *
- * Seahaven-specific code in an otherwise generic console. `GET /seahaven/schemas` answers what
- * `/schema` answers plus a `reset` key, which OpenEnv does not publish. Any other environment
- * answers 404 there, and the console falls back to `/schema` and the reset JSON box. If OpenEnv
- * accepts `reset` in `/schema`, this becomes a plain `/schema` read.
+ * A `reset` that is not an object schema is dropped, so the dialog offers the JSON box instead.
  */
 export async function fetchSchema(root: string): Promise<EnvSchema | null> {
-  const extended = await fetchJson<EnvSchema>(root, "seahaven/schemas")
-  if (extended && isObjectSchema(extended.reset)) return extended
-  return fetchJson<EnvSchema>(root, "schema")
+  const schema = await fetchJson<EnvSchema>(root, "schema")
+  if (schema && !isObjectSchema(schema.reset)) delete schema.reset
+  return schema
 }
 
 function isObjectSchema(value: unknown): value is JsonSchema {

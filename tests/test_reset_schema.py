@@ -1,4 +1,4 @@
-"""`GET /seahaven/schemas`: `/schema` plus the JSON schema of the reset message.
+"""`reset` on `GET /schema`: the JSON schema of the reset message.
 
 The route is driven through a real server where the transport is what is being
 claimed, and the model is asked for its schema directly where a server adds
@@ -6,10 +6,12 @@ nothing. A world whose startup hooks the schema cannot describe fails `app()`,
 so those tests call `app()` and nothing more.
 """
 
-import asyncio
 import copy
 import inspect
 import json
+import logging
+import re
+import threading
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -21,6 +23,7 @@ from pydantic import Field
 import projecttracker
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
+from seahaven.fixtures import SIDECAR_NAME
 from seahaven.world import World
 from tests.conftest import build_world, composable_world
 
@@ -37,14 +40,14 @@ from openenv.core.env_server.types import SchemaResponse
 
 import seahaven.openenv
 from seahaven.openenv import (
-    SCHEMAS_PATH,
+    UPSTREAM_SCHEMA_PATH,
     SeahavenClient,
     SeahavenEnv,
     SeahavenResetRequest,
-    _serve_schemas,
+    _schema_off_the_loop,
     app,
 )
-from tests.serving import serving
+from tests.serving import serving, serving_app
 
 
 def _get(url: str) -> Any:
@@ -73,12 +76,13 @@ def _fixture_ids(schema: dict[str, Any]) -> list[str] | None:
 
 def test_the_reference_world_publishes_its_reset_message() -> None:
     with serving(projecttracker.world) as url:
-        extended = _get(url + SCHEMAS_PATH)
-        plain = _get(url + "/schema")
+        published = _get(url + UPSTREAM_SCHEMA_PATH)
 
-    assert sorted(extended) == ["action", "observation", "reset", "state"]
-    assert {key: extended[key] for key in plain} == plain
-    reset = extended["reset"]
+    assert sorted(published) == ["action", "observation", "reset", "reset_observation", "state"]
+    # A reset answers no tool call, so its answer is OpenEnv's plain model.
+    assert published["reset_observation"]["title"] == "Observation"
+    assert published["observation"]["title"] == "SeahavenObservation"
+    reset = published["reset"]
     assert reset["title"] == "SeahavenResetRequest"
     assert reset["additionalProperties"] is False
     # In the order the console lays its form out: fixture and startup first,
@@ -107,24 +111,12 @@ def test_the_reference_world_publishes_its_reset_message() -> None:
     assert startup["additionalProperties"] is False
 
 
-def test_the_route_is_not_in_the_openapi_schema() -> None:
-    with serving(projecttracker.world) as url:
-        paths = _get(url + "/openapi.json")["paths"]
-    assert "/schema" in paths
-    assert SCHEMAS_PATH not in paths
-
-
-def test_the_route_is_served_without_the_console(world: World) -> None:
-    with serving(world, console=False) as url:
-        assert "reset" in _get(url + SCHEMAS_PATH)
-
-
 def test_a_fixture_frozen_while_serving_appears_on_the_next_request(world: World) -> None:
     with serving(world) as url:
-        assert _fixture_ids(_get(url + SCHEMAS_PATH)["reset"]) is None
+        assert _fixture_ids(_get(url + UPSTREAM_SCHEMA_PATH)["reset"]) is None
         with world.instance(None) as instance:
             instance.freeze("start", "Empty.")
-        assert _fixture_ids(_get(url + SCHEMAS_PATH)["reset"]) == ["start"]
+        assert _fixture_ids(_get(url + UPSTREAM_SCHEMA_PATH)["reset"]) == ["start"]
 
 
 def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
@@ -137,7 +129,7 @@ def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
         user_id = instance.inspect().rows("SELECT id FROM users ORDER BY id LIMIT 1")[0]["id"]
 
     with serving(world) as url:
-        schema = _get(url + SCHEMAS_PATH)["reset"]
+        schema = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
         fixture = _fixture_ids(schema)[0]  # ty: ignore[not-subscriptable]
         message = {"fixture": fixture, "seed": 7, "startup": {"user_id": user_id}}
         jsonschema.validate(message, schema)
@@ -151,25 +143,64 @@ def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
     assert state.startup == {"user_id": user_id}
 
 
-def test_a_missing_upstream_schema_route_fails_the_build() -> None:
+def test_an_unreadable_fixture_publishes_fixture_as_any_string_and_logs_why(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    with world.instance(None) as instance:
+        instance.freeze("start", "Empty.")
+    sidecar = next(world.fixtures_dir.glob(f"*/{SIDECAR_NAME}"))
+    sidecar.write_text(re.sub(r"format_version: \d+", "format_version: 0", sidecar.read_text()))
+
+    with caplog.at_level(logging.ERROR, logger="seahaven.openenv.env"), serving(world) as url:
+        first = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
+        second = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
+    assert first == second
+    assert first["properties"]["fixture"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    logged = [r.getMessage() for r in caplog.records if "cannot list fixtures" in r.getMessage()]
+    assert len(logged) == 1, "a problem that does not change is logged once"
+    assert "format_version is 0" in logged[0]
+
+
+def test_schema_reads_the_fixtures_off_the_event_loop() -> None:
+    """Upstream's handler runs in a worker thread, where reading the disk blocks no session."""
     served = FastAPI()
-    with pytest.raises(RuntimeError, match="/schema"):
-        _serve_schemas(served, SeahavenResetRequest)
+    threads: list[str] = []
 
-
-def test_a_sync_upstream_handler_is_extended_too(world: World) -> None:
-    served = FastAPI()
-
-    def get_schemas() -> SchemaResponse:
+    async def get_schemas() -> SchemaResponse:
+        threads.append(threading.current_thread().name)
         return SchemaResponse(action={}, observation={}, state={})
 
     served.router.routes.append(APIRoute("/schema", get_schemas, methods=["GET"]))
-    _serve_schemas(served, SeahavenResetRequest.for_world(world))
+    _schema_off_the_loop(served)
+    with serving_app(served) as url:
+        assert _get(url + UPSTREAM_SCHEMA_PATH) == {"action": {}, "observation": {}, "state": {}}
+    assert threads
+    assert threads[0] != "test-uvicorn", "upstream's handler ran on the event loop's thread"
 
-    route = next(r for r in served.router.routes if getattr(r, "path", None) == SCHEMAS_PATH)
-    answer = asyncio.run(route.endpoint())  # ty: ignore[unresolved-attribute]
-    assert answer.action == {}
-    assert answer.reset["title"] == "SeahavenResetRequest"
+
+def test_a_missing_upstream_schema_route_fails_the_build() -> None:
+    served = FastAPI()
+    with pytest.raises(RuntimeError, match="/schema"):
+        _schema_off_the_loop(served)
+
+
+def test_a_sync_upstream_handler_is_served_too(world: World) -> None:
+    served = FastAPI()
+    upstream = SchemaResponse(
+        action={"title": "A"},
+        observation={"title": "O"},
+        state={"title": "S"},
+        reset=SeahavenResetRequest.for_world(world).model_json_schema(),
+        reset_observation={"title": "R"},
+    )
+
+    def get_schemas() -> SchemaResponse:
+        return upstream
+
+    served.router.routes.append(APIRoute("/schema", get_schemas, methods=["GET"]))
+    _schema_off_the_loop(served)
+    with serving_app(served) as url:
+        assert _get(url + UPSTREAM_SCHEMA_PATH) == upstream.model_dump()
 
 
 # --- fixtures and formats -------------------------------------------------------
@@ -409,4 +440,4 @@ def test_the_startup_properties_are_the_accepted_startup_kwargs() -> None:
 
 
 def test_the_models_are_exported() -> None:
-    assert {"SeahavenResetRequest", "SeahavenSchemaResponse"} <= set(seahaven.openenv.__all__)
+    assert "SeahavenResetRequest" in seahaven.openenv.__all__

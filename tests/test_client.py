@@ -25,6 +25,7 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
+from openenv.core.env_client import SessionLostError
 from openenv.core.env_server.mcp_types import (
     CallToolAction,
     ListToolsAction,
@@ -324,6 +325,27 @@ def test_the_client_drives_a_world_asynchronously(world: World) -> None:
             assert observation.result == [{"n": 1}]
             state = await env.state()
             assert state.now == INSTANT_ISO
+
+    with serving(world) as url:
+        asyncio.run(drive(url))
+
+
+@pytest.mark.parametrize("verb", ["call", "list_tools"])
+def test_a_verb_after_a_dropped_socket_says_to_reset_again(world: World, verb: str) -> None:
+    """Not a reconnect onto a new session that was never reset, which answers a world bug."""
+
+    async def drive(url: str) -> None:
+        async with SeahavenClient(base_url=url) as env:
+            await env.reset()
+            assert env._ws is not None
+            await env._ws.close()
+            send = (lambda: env.call("rows", sql="SELECT 1")) if verb == "call" else env.list_tools
+            with pytest.raises(SessionLostError, match="Call reset"):
+                await send()
+            with pytest.raises(SessionLostError):
+                await send()
+            await env.reset()
+            await send()
 
     with serving(world) as url:
         asyncio.run(drive(url))

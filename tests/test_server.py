@@ -313,7 +313,7 @@ def test_upstreams_tool_client_reads_an_error_as_data_and_raises_legibly(world: 
     """The client Seahaven used to break: `step` parses, `call_tool` raises in words.
 
     `MCPToolClient.call_tool` raises on any non-null `error`, conformant or not
-    (`mcp_client.py` lines 538-542 in openenv 0.5.0). What the shape fixes is
+    (`MCPToolClient.call_tool` in openenv 0.13.0). What the shape fixes is
     which failure: a `RuntimeError` naming the message and the type, rather than
     a pydantic `ValidationError` three fields deep in the parse. That parse is
     `MCPClientBase._parse_result`, whose `ToolError(**obs_data["error"])` is the
@@ -863,7 +863,7 @@ def test_the_http_episode_routes_refuse_rather_than_answer_a_throwaway_environme
             assert refusal["details"]["use_instead"] == "/ws"
             assert refusal["details"]["upstream"]["regression"] == "86a222d"
             assert refusal["details"]["upstream"]["package"] == (
-                "openenv >=0.5.0,<0.6 (verified against 0.5.0)"
+                "openenv >=0.13.0,<0.14 (verified against 0.13.0)"
             )
             assert "/ws" in refusal["message"]
             assert "SeahavenClient" in refusal["message"]
@@ -923,7 +923,7 @@ def test_refusing_the_episode_routes_leaves_the_rest_of_the_http_surface_alone(
         assert metadata[1]["name"] == world.name
         schema = _request(url + "/schema")
         assert schema[0] == 200
-        assert sorted(schema[1]) == ["action", "observation", "state"]
+        assert sorted(schema[1]) == ["action", "observation", "reset", "reset_observation", "state"]
 
 
 def test_a_websocket_session_is_untouched_by_the_refusal(world: World) -> None:
@@ -1633,7 +1633,7 @@ def test_a_session_that_ends_normally_leaves_nothing_in_the_error_log(world: Wor
     0.4.2, whose `/ws` handler closed the connection in a `finally` guarded by
     `except RuntimeError` and so logged `ERROR: Exception in ASGI application`
     for every normal close. openenv 0.5.0 catches `WebSocketDisconnect` there as
-    well (`http_server.py` lines 1290 and 1767), both workarounds are gone, and
+    well (`websocket_endpoint` and `mcp_websocket_endpoint`), both workarounds are gone, and
     this test is what says upstream really does hold the line now.
     """
     with _watched(world) as (url, records), SeahavenClient(base_url=url) as env:
