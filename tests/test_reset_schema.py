@@ -40,12 +40,11 @@ from openenv.core.env_server.types import SchemaResponse
 
 import seahaven.openenv
 from seahaven.openenv import (
-    SCHEMAS_PATH,
     UPSTREAM_SCHEMA_PATH,
     SeahavenClient,
     SeahavenEnv,
     SeahavenResetRequest,
-    _serve_schemas,
+    _schema_off_the_loop,
     app,
 )
 from tests.serving import serving, serving_app
@@ -55,12 +54,6 @@ def _get(url: str) -> Any:
     with urllib.request.urlopen(url) as response:
         assert response.status == 200
         return json.loads(response.read())
-
-
-def _get_with_headers(url: str) -> tuple[Any, dict[str, str]]:
-    with urllib.request.urlopen(url) as response:
-        assert response.status == 200
-        return json.loads(response.read()), dict(response.headers)
 
 
 def _reset_schema(world: World) -> dict[str, Any]:
@@ -178,52 +171,20 @@ def test_schema_reads_the_fixtures_off_the_event_loop() -> None:
         return SchemaResponse(action={}, observation={}, state={})
 
     served.router.routes.append(APIRoute("/schema", get_schemas, methods=["GET"]))
-    _serve_schemas(served)
+    _schema_off_the_loop(served)
     with serving_app(served) as url:
         assert _get(url + UPSTREAM_SCHEMA_PATH) == {"action": {}, "observation": {}, "state": {}}
     assert threads
     assert threads[0] != "test-uvicorn", "upstream's handler ran on the event loop's thread"
 
 
-# --- the deprecated alias --------------------------------------------------------
-
-
-def test_the_deprecated_route_answers_what_schema_answers_and_says_it_is_deprecated(
-    world: World, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level(logging.WARNING, logger="seahaven.openenv"), serving(world) as url:
-        published = _get(url + UPSTREAM_SCHEMA_PATH)
-        aliased, headers = _get_with_headers(url + SCHEMAS_PATH)
-        _get(url + SCHEMAS_PATH)
-    assert aliased == published
-    # RFC 9745: a structured-field date, here 2026-11-17T00:00:00Z.
-    assert headers["deprecation"] == "@1794873600"
-    assert headers["link"] == '</schema>; rel="successor-version"'
-    logged = [r.getMessage() for r in caplog.records if r.name == "seahaven.openenv"]
-    assert len(logged) == 1, "one User-Agent is logged once"
-    assert "GET /seahaven/schemas is deprecated: read GET /schema instead" in logged[0]
-    assert "Python-urllib" in logged[0]
-
-
-def test_the_deprecated_route_is_not_in_the_openapi_schema() -> None:
-    with serving(projecttracker.world) as url:
-        paths = _get(url + "/openapi.json")["paths"]
-    assert UPSTREAM_SCHEMA_PATH in paths
-    assert SCHEMAS_PATH not in paths
-
-
-def test_the_deprecated_route_is_served_without_the_console(world: World) -> None:
-    with serving(world, console=False) as url:
-        assert "reset" in _get(url + SCHEMAS_PATH)
-
-
 def test_a_missing_upstream_schema_route_fails_the_build() -> None:
     served = FastAPI()
     with pytest.raises(RuntimeError, match="/schema"):
-        _serve_schemas(served)
+        _schema_off_the_loop(served)
 
 
-def test_a_sync_upstream_handler_is_served_and_aliased_too(world: World) -> None:
+def test_a_sync_upstream_handler_is_served_too(world: World) -> None:
     served = FastAPI()
     upstream = SchemaResponse(
         action={"title": "A"},
@@ -237,19 +198,9 @@ def test_a_sync_upstream_handler_is_served_and_aliased_too(world: World) -> None
         return upstream
 
     served.router.routes.append(APIRoute("/schema", get_schemas, methods=["GET"]))
-    _serve_schemas(served)
+    _schema_off_the_loop(served)
     with serving_app(served) as url:
         assert _get(url + UPSTREAM_SCHEMA_PATH) == upstream.model_dump()
-        assert _get(url + SCHEMAS_PATH) == upstream.model_dump()
-
-
-def test_the_deprecated_response_model_warns_when_imported() -> None:
-    with pytest.warns(DeprecationWarning, match="SeahavenSchemaResponse is deprecated"):
-        from seahaven.openenv import SeahavenSchemaResponse
-    assert SeahavenSchemaResponse.model_fields["reset"].is_required()
-    with pytest.warns(DeprecationWarning, match="SeahavenSchemaResponse is deprecated"):
-        assert seahaven.openenv.env.SeahavenSchemaResponse is SeahavenSchemaResponse
-    assert "SeahavenSchemaResponse" not in seahaven.openenv.__all__
 
 
 # --- fixtures and formats -------------------------------------------------------

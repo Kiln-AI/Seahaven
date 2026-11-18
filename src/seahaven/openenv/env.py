@@ -47,7 +47,6 @@ from openenv.core.env_server.types import (
     EnvironmentMetadata,
     Observation,
     ResetRequest,
-    SchemaResponse,
     State,
 )
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -463,17 +462,6 @@ class SeahavenResetRequest(ResetRequest):
                 Field(default=None, description=base["startup"].description),
             ),
         )
-
-
-class _SeahavenSchemaResponse(SchemaResponse):
-    """The answer of the deprecated `GET /seahaven/schemas`: `GET /schema` with `reset` required.
-
-    Deprecated with that route, and reached as `SeahavenSchemaResponse` through
-    `__getattr__`. Read `SchemaResponse` from `GET /schema`, which has published
-    `reset` since openenv 0.11.0.
-    """
-
-    reset: dict[str, Any] = Field(description="JSON schema for the reset message")
 
 
 class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
@@ -1017,14 +1005,3 @@ def _unschemable_keyword(fields: dict[str, tuple[Any, Any]], config: ConfigDict)
         except Exception:
             return name
     return None
-
-
-def __getattr__(name: str) -> Any:
-    if name == "SeahavenSchemaResponse":
-        warnings.warn(
-            "SeahavenSchemaResponse is deprecated: read openenv's SchemaResponse from GET /schema",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _SeahavenSchemaResponse
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -495,8 +495,6 @@ base `State`. The `reset` document lists the world's fixture ids, its state form
 keywords its startup hooks take. The server reads the fixture ids again on each request, so a
 fixture frozen while the server runs appears on the next one.
 
-`GET /seahaven/schemas` answers the same object and is deprecated. Read `GET /schema` instead.
-
 ### Reading an error from your own client
 
 Every frame a Seahaven world sends validates against OpenEnv's own

@@ -19,9 +19,7 @@ app, mounted at `/`, which is the shape a hub expects.
 import asyncio
 import inspect
 import json
-import logging
-import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, NoReturn
@@ -49,7 +47,6 @@ from seahaven.openenv.env import (
     SeahavenResetRequest,
     SeahavenState,
     WorldRef,
-    _SeahavenSchemaResponse,
 )
 from seahaven.world import World
 
@@ -491,22 +488,7 @@ def _serve_console(served: FastAPI) -> None:
         return RedirectResponse(CONSOLE_PATH)
 
 
-SCHEMAS_PATH = "/seahaven/schemas"
 UPSTREAM_SCHEMA_PATH = "/schema"
-
-_log = logging.getLogger(__name__)
-
-# RFC 9745 and RFC 8288: the two headers an HTTP client can read a deprecation
-# from without parsing the body. `Deprecation` is a structured-field date, the
-# moment the route was deprecated: 2026-11-17T00:00:00Z.
-_SCHEMAS_DEPRECATION_HEADERS = {
-    "Deprecation": "@1794873600",
-    "Link": f'<{UPSTREAM_SCHEMA_PATH}>; rel="successor-version"',
-}
-
-# How many distinct User-Agents the deprecated route logs before it stops, so a
-# client that varies its User-Agent cannot grow the set for ever.
-_SCHEMAS_LOGGED_AGENTS = 64
 
 
 def _run_to_completion(handler: Callable[[], Any]) -> Any:
@@ -515,14 +497,13 @@ def _run_to_completion(handler: Callable[[], Any]) -> Any:
     return asyncio.run(result) if inspect.iscoroutine(result) else result
 
 
-def _schema_off_the_loop(served: FastAPI) -> Callable[[], Awaitable[SchemaResponse]]:
+def _schema_off_the_loop(served: FastAPI) -> None:
     """Replace upstream's `GET /schema` with one that runs it in a worker thread.
 
     Upstream's handler is an `async def` that calls `reset_cls.model_json_schema()`
     directly, and that call reads every fixture sidecar from disk. On the event
     loop, that read would stall every `/ws` session for as long as it takes.
     The body is upstream's own, so the route answers exactly what upstream would.
-    Returns the new handler.
     """
     found = next(
         (
@@ -536,8 +517,8 @@ def _schema_off_the_loop(served: FastAPI) -> Callable[[], Awaitable[SchemaRespon
     )
     if found is None:
         raise RuntimeError(
-            f"OpenEnv's app has no GET {UPSTREAM_SCHEMA_PATH} route, which Seahaven serves and "
-            f"GET {SCHEMAS_PATH} aliases; the installed openenv is not one Seahaven supports"
+            f"OpenEnv's app has no GET {UPSTREAM_SCHEMA_PATH} route, which Seahaven serves; the "
+            f"installed openenv is not one Seahaven supports"
         )
     index, route = found
     upstream = route.endpoint
@@ -556,50 +537,6 @@ def _schema_off_the_loop(served: FastAPI) -> Callable[[], Awaitable[SchemaRespon
         response_model=route.response_model,
         responses=route.responses,
     )
-    return schema
-
-
-def _serve_schemas(served: FastAPI) -> None:
-    """Move `GET /schema` off the event loop and add `GET /seahaven/schemas`, its deprecated alias.
-
-    The alias predates `reset` on `/schema` (openenv 0.11.0, `reset_cls`), and
-    is kept so that a client written against it keeps working. It answers what
-    `/schema` answers, from the same handler, so the two cannot disagree. Each
-    response carries the deprecation headers, and the server logs a warning for
-    the first request from each User-Agent.
-
-    Kept out of the OpenAPI schema for the reason `/console` is: `openenv push`
-    classifies an app by its path names.
-    """
-    schema = _schema_off_the_loop(served)
-    logged: set[str] = set()
-
-    @served.get(SCHEMAS_PATH, include_in_schema=False, response_model=_SeahavenSchemaResponse)
-    async def schemas(request: Request, response: Response) -> _SeahavenSchemaResponse:
-        agent = request.headers.get("user-agent", "")
-        if agent not in logged and len(logged) < _SCHEMAS_LOGGED_AGENTS:
-            logged.add(agent)
-            _log.warning(
-                "GET %s is deprecated: read GET %s instead (client %s, User-Agent %r)",
-                SCHEMAS_PATH,
-                UPSTREAM_SCHEMA_PATH,
-                request.client.host if request.client else "unknown",
-                agent,
-            )
-        response.headers.update(_SCHEMAS_DEPRECATION_HEADERS)
-        base = await schema()
-        return _SeahavenSchemaResponse.model_validate(base.model_dump())
-
-
-def __getattr__(name: str) -> Any:
-    if name == "SeahavenSchemaResponse":
-        warnings.warn(
-            "SeahavenSchemaResponse is deprecated: read openenv's SchemaResponse from GET /schema",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _SeahavenSchemaResponse
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def app(
@@ -637,8 +574,6 @@ def app(
     startup keywords. It runs in a worker thread, because reading the fixture ids
     reads the disk. A startup hook that schema cannot describe makes this
     function raise a `WorldBug`, so a server with one does not start.
-    `GET /seahaven/schemas` is a deprecated alias of `GET /schema`, served
-    whatever `console` says.
 
     `session_timeout` is seconds of inactivity before OpenEnv reaps a session,
     or `None` for no reaper. It is passed as part of a `ConcurrencyConfig`
@@ -690,7 +625,7 @@ def app(
     )
     _refuse_http_episode_control(served)
     _refuse_mcp_transport(served)
-    _serve_schemas(served)
+    _schema_off_the_loop(served)
     if console:
         _serve_console(served)
     return served
