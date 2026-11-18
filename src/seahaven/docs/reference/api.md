@@ -63,6 +63,7 @@ class World:
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
+        setup_sql_notes: str | None = None,
     ) -> None: ...
     def add_world(
         self,
@@ -99,6 +100,10 @@ project root, found by walking up from the constructing module to the directory 
 instance copies are kept; the default is a per-process directory under the system temp directory,
 which is swept of previous processes' leftovers, and a directory you name is used exactly as given
 and never swept. `untracked_tables` names tables the change log's sessions do not attach.
+`setup_sql_notes` is text an OpenEnv server adds to the reset schema's `setup_sql` description,
+after Seahaven's own sentence
+([db_schema_and_fixtures.md](../db_schema_and_fixtures.md#telling-an-agent-how-to-write-setup-sql)).
+A world that gives none, or gives a blank string, publishes Seahaven's sentence alone.
 
 A `World` whose schema does not execute cannot be constructed: the schema is built in memory to
 compute the schema hash, and SQLite's own message is reported.

@@ -9,7 +9,7 @@ runs on, the schema that shapes it, and the fixtures that hold the starting stat
 | [The schema](#the-schema) | Where the tables are declared, the three rules, and the schema hash |
 | [What a fixture is](#what-a-fixture-is) | The directory, the sidecar file, and the rules that keep a fixture trustworthy |
 | [Building a fixture](#building-a-fixture) | Blank instances, bulk loading, and the commands |
-| [Adjusting a fixture per episode](#adjusting-a-fixture-per-episode) | `setup_sql`, and when a fixture or a startup hook is the better tool |
+| [Adjusting a fixture per episode](#adjusting-a-fixture-per-episode) | `setup_sql`, when a fixture or a startup hook is the better tool, and notes for an agent writing it |
 | [The generator is committed](#the-generator-is-committed) | Why the script that builds a fixture ships beside it |
 | [Writing a description](#writing-a-description) | The one field written for a person |
 | [When the schema changes](#when-the-schema-changes) | Regenerating every fixture, and why nothing migrates |
@@ -301,6 +301,31 @@ Choose the tool by what the change is:
 | a new fixture | many evals start from the same state, or the change is large. Freeze it once, as above |
 | `setup_sql` | one eval needs a small change to the rows of a fixture |
 | a startup hook | the setup needs the world's own logic or `ctx.state`, such as who the agent acts as ([authoring.md](authoring.md#instance-startup)) |
+
+### Telling an agent how to write setup SQL
+
+An agent that prepares an episode over OpenEnv sees the world's API, not its tables. It learns how
+to write `setup_sql` from the argument's description in the reset schema. When the tables differ
+from what the API shows, for example a table with another name or a row that needs a companion row
+in a second table, write that down in `World(setup_sql_notes=...)`. An OpenEnv server adds the notes
+to the `setup_sql` description, after Seahaven's own sentence:
+
+```py
+world = seahaven.World(
+    name="tracker",
+    version="1.0.0",
+    schema=SCHEMA,
+    state_format="seahaven.state/1",
+    setup_sql_notes=(
+        "The API's issues are stored in `tickets`, and its users in `people`. "
+        "Every ticket needs a row in `ticket_index` with the same `id`."
+    ),
+)
+```
+
+Write the notes for an agent that has never read the schema. Name the tables, the columns that
+differ from the API, and the rows that have to be written together. Leave out what the API already
+shows.
 
 ## The generator is committed
 

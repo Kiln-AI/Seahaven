@@ -132,6 +132,7 @@ class World:
         fixtures_dir: Path | str | None = None,
         work_dir: Path | str | None = None,
         untracked_tables: Sequence[str] = (),
+        setup_sql_notes: str | None = None,
     ) -> None:
         _check_name(name)
         # Required, and spelled with a default so that leaving it out is this
@@ -187,6 +188,11 @@ class World:
         # directory given here is the caller's and is never swept.
         self.work_dir = Path(work_dir) if work_dir is not None else None
         self.untracked_tables = tuple(untracked_tables)
+        # Appended to the reset schema's `setup_sql` description, after the
+        # framework's own sentence. An agent writing setup SQL sees the API, not the
+        # tables, so a world whose storage differs from its API says how here.
+        # `None`, or a blank string, publishes the framework's sentence alone.
+        self.setup_sql_notes = setup_sql_notes
         self._tools: dict[str, Tool] = {}
         # The registry inverted, for `ctx.worlds.<name>.call(fn)`. Multi-valued
         # because one function may be registered as two tools -- a factory called

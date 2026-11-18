@@ -432,6 +432,23 @@ def test_the_description_is_kept_as_given_and_carried_by_a_copy(tmp_path: Path) 
     )
 
 
+def test_the_setup_sql_notes_are_kept_as_given_and_carried_by_a_copy(tmp_path: Path) -> None:
+    world = World(
+        "w",
+        "1.0.0",
+        SCHEMA,
+        fixtures_dir=tmp_path,
+        state_format=PIN,
+        setup_sql_notes="  Users are stored in `people`.  ",
+    )
+
+    assert world.setup_sql_notes == "  Users are stored in `people`.  "
+    assert copy.copy(world).setup_sql_notes == "  Users are stored in `people`.  "
+    assert (
+        World("w", "1.0.0", SCHEMA, fixtures_dir=tmp_path, state_format=PIN).setup_sql_notes is None
+    )
+
+
 def test_the_mcp_server_instructions_are_kept_as_given_and_carried_by_a_copy(
     tmp_path: Path,
 ) -> None:

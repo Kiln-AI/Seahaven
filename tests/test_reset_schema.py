@@ -212,6 +212,24 @@ def test_a_world_with_no_described_fixtures_keeps_the_plain_description(world: W
     assert description == SeahavenResetRequest.model_fields["fixture"].description
 
 
+def test_a_worlds_setup_sql_notes_follow_the_framework_sentence(tmp_path: Path) -> None:
+    notes = "  Issues are stored in `tickets`.\nEach ticket needs a `ticket_index` row.\n"
+    world = build_world(tmp_path, setup_sql_notes=notes)
+    with serving(world) as url:
+        description = _get(url + SCHEMAS_PATH)["reset"]["properties"]["setup_sql"]["description"]
+    base = SeahavenResetRequest.model_fields["setup_sql"].description
+    assert description == f"{base}\n\n{notes.strip()}"
+
+
+@pytest.mark.parametrize("notes", [None, "", " \n "])
+def test_a_world_with_no_setup_sql_notes_keeps_the_plain_description(
+    tmp_path: Path, notes: str | None
+) -> None:
+    world = build_world(tmp_path, setup_sql_notes=notes)
+    description = _reset_schema(world)["properties"]["setup_sql"]["description"]
+    assert description == SeahavenResetRequest.model_fields["setup_sql"].description
+
+
 def test_registered_state_formats_follow_the_built_ins(world: World) -> None:
     @world.state_format("notes.summary/1")
     def summary(world: World, instance: Any) -> dict[str, Any]:

@@ -409,7 +409,7 @@ class SeahavenResetRequest(ResetRequest):
 
     @classmethod
     def for_world(cls, world: World) -> type[SeahavenResetRequest]:
-        """This model narrowed to one world: its fixtures, its formats, its startup keywords.
+        """This model narrowed to one world: its fixtures, formats, startup keywords, setup notes.
 
         The fixture ids and descriptions are read from the fixtures directory on
         every `model_json_schema()`, so a fixture frozen while a server runs is
@@ -460,7 +460,21 @@ class SeahavenResetRequest(ResetRequest):
                 _startup_model(world) | None,
                 Field(default=None, description=base["startup"].description),
             ),
+            setup_sql=(
+                str | None,
+                Field(
+                    default=None,
+                    description=_with_notes(base["setup_sql"].description, world.setup_sql_notes),
+                ),
+            ),
         )
+
+
+def _with_notes(description: str | None, notes: str | None) -> str | None:
+    """`description` followed by the world's own `notes`, or alone when they are blank."""
+    if notes is None or not notes.strip():
+        return description
+    return f"{description}\n\n{notes.strip()}"
 
 
 def _indent_continuation(text: str) -> str:
