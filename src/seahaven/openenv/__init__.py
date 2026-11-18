@@ -16,9 +16,12 @@ That file, `openenv_app.py`, is the whole of a world's server. One world per
 app, mounted at `/`, which is the shape a hub expects.
 """
 
+import asyncio
 import inspect
 import json
+import logging
 import warnings
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, NoReturn
@@ -33,7 +36,8 @@ from openenv.core.env_server.mcp_types import (
     ListToolsAction,
     ListToolsObservation,
 )
-from openenv.core.env_server.types import ConcurrencyConfig
+from openenv.core.env_server.types import ConcurrencyConfig, Observation, SchemaResponse
+from starlette.concurrency import run_in_threadpool
 
 from seahaven.openenv.client import SeahavenClient
 from seahaven.openenv.env import (
@@ -43,9 +47,9 @@ from seahaven.openenv.env import (
     SeahavenEnv,
     SeahavenObservation,
     SeahavenResetRequest,
-    SeahavenSchemaResponse,
     SeahavenState,
     WorldRef,
+    _SeahavenSchemaResponse,
 )
 from seahaven.world import World
 
@@ -60,7 +64,6 @@ __all__ = [
     "SeahavenEnv",
     "SeahavenObservation",
     "SeahavenResetRequest",
-    "SeahavenSchemaResponse",
     "SeahavenState",
     "WorldRef",
     "app",
@@ -83,8 +86,8 @@ DEFAULT_SESSION_TIMEOUT: float | None = None
 
 # OpenEnv's three plain-HTTP episode-control routes. Every one of their handlers
 # builds an `Environment` from the factory, uses it and closes it in a `finally`
-# before answering -- `http_server.py` lines 691/712 (`/reset`), 726/750
-# (`/step`) and 1382/1386 (`/state`) in openenv 0.5.0 -- so each request runs
+# before answering -- `reset_handler`, `step_handler` and `get_state_handler` in
+# `http_server.py`, still so in openenv 0.13.0 -- so each request runs
 # against its own throwaway environment and none of the three observes another.
 # The answers are well-formed, 200, and meaningless. `/metadata` builds one the
 # same way and is deliberately not in this set: metadata is the world's and not
@@ -132,7 +135,7 @@ def _http_episode_control_message(route: str) -> str:
         "HTTP request and closes it again before replying, so this route would have answered "
         "from an environment that has never seen your reset, never ran your steps, and is about "
         "to be thrown away -- with a 200 and a plausible body. That is an upstream defect in "
-        "openenv 0.5.x, not a Seahaven limitation and not something a world can fix from its own "
+        "OpenEnv, not a Seahaven limitation and not something a world can fix from its own "
         "side: every /reset, /step and /state handler in openenv/core/env_server/http_server.py "
         "builds an Environment from the factory and closes it in a finally, a regression "
         "introduced in OpenEnv commit 86a222d. Drive the episode over the WebSocket transport at "
@@ -216,7 +219,7 @@ def _refuse_http_episode_control(served: FastAPI) -> None:
 
 # OpenEnv's `/mcp`, on both transports: a `POST` route and a websocket route at
 # the same path. Every method on both is refused. `mcp_handler`
-# (`http_server.py:753` in openenv 0.5.0) dispatches exactly four --
+# (`http_server.py`, openenv 0.13.0) dispatches exactly four --
 # `openenv/session/create`, `openenv/session/close`, `tools/list` and
 # `tools/call` -- and none of the four is usable here. `tools/list` answers a
 # full tool list that no caller can then use; `tools/call` answers `reset first`
@@ -396,7 +399,8 @@ def _refusing_mcp_websocket(route: APIWebSocketRoute) -> APIWebSocketRoute:
         # application` traceback for a connection that ended in the one way this
         # handler always ends it. Upstream guards the same two on the `ws /mcp`
         # handler this one replaces, and on the `/ws` handler it still owns --
-        # `http_server.py` lines 1290 and 1767 in openenv 0.5.0.
+        # `mcp_websocket_endpoint` and `websocket_endpoint` in `http_server.py`,
+        # openenv 0.13.0.
         frame = json.dumps(_mcp_refusal_frame(raw), ensure_ascii=False)
         with suppress(WebSocketDisconnect, RuntimeError):
             await websocket.send_text(frame)
@@ -490,54 +494,112 @@ def _serve_console(served: FastAPI) -> None:
 SCHEMAS_PATH = "/seahaven/schemas"
 UPSTREAM_SCHEMA_PATH = "/schema"
 
+_log = logging.getLogger(__name__)
+
 # RFC 9745 and RFC 8288: the two headers an HTTP client can read a deprecation
-# from without parsing the body.
+# from without parsing the body. `Deprecation` is a structured-field date, the
+# moment the route was deprecated: 2026-11-17T00:00:00Z.
 _SCHEMAS_DEPRECATION_HEADERS = {
-    "Deprecation": "true",
+    "Deprecation": "@1794873600",
     "Link": f'<{UPSTREAM_SCHEMA_PATH}>; rel="successor-version"',
 }
 
+# How many distinct User-Agents the deprecated route logs before it stops, so a
+# client that varies its User-Agent cannot grow the set for ever.
+_SCHEMAS_LOGGED_AGENTS = 64
 
-def _serve_schemas(served: FastAPI) -> None:
-    """Add `GET /seahaven/schemas`, a deprecated alias of upstream's `GET /schema`.
 
-    The route predates `reset` on `/schema` (openenv 0.11.0, `reset_cls`), and is
-    kept so that a client written against it keeps working. It answers exactly
-    what upstream's handler answers, from that handler, so the two cannot
-    disagree. Every request warns in the server's process and carries the
-    deprecation headers.
+def _run_to_completion(handler: Callable[[], Any]) -> Any:
+    """Call a route handler from a worker thread, running it to the end if it is a coroutine."""
+    result = handler()
+    return asyncio.run(result) if inspect.iscoroutine(result) else result
 
-    Kept out of the OpenAPI schema for the reason `/console` is: `openenv push`
-    classifies an app by its path names.
+
+def _schema_off_the_loop(served: FastAPI) -> Callable[[], Awaitable[SchemaResponse]]:
+    """Replace upstream's `GET /schema` with one that runs it in a worker thread.
+
+    Upstream's handler is an `async def` that calls `reset_cls.model_json_schema()`
+    directly, and that call reads every fixture sidecar from disk. On the event
+    loop, that read would stall every `/ws` session for as long as it takes.
+    The body is upstream's own, so the route answers exactly what upstream would.
+    Returns the new handler.
     """
-    upstream = next(
+    found = next(
         (
-            route.endpoint
-            for route in served.router.routes
+            (index, route)
+            for index, route in enumerate(served.router.routes)
             if isinstance(route, APIRoute)
             and route.path == UPSTREAM_SCHEMA_PATH
             and "GET" in (route.methods or set())
         ),
         None,
     )
-    if upstream is None:
+    if found is None:
         raise RuntimeError(
-            f"OpenEnv's app has no GET {UPSTREAM_SCHEMA_PATH} route, which "
+            f"OpenEnv's app has no GET {UPSTREAM_SCHEMA_PATH} route, which Seahaven serves and "
             f"GET {SCHEMAS_PATH} aliases; the installed openenv is not one Seahaven supports"
         )
+    index, route = found
+    upstream = route.endpoint
 
-    @served.get(SCHEMAS_PATH, include_in_schema=False, response_model=SeahavenSchemaResponse)
-    async def schemas(response: Response) -> SeahavenSchemaResponse:
-        warnings.warn(
-            f"GET {SCHEMAS_PATH} is deprecated: read GET {UPSTREAM_SCHEMA_PATH} instead",
-            DeprecationWarning,
-            stacklevel=1,
-        )
+    async def schema() -> SchemaResponse:
+        return await run_in_threadpool(_run_to_completion, upstream)
+
+    served.router.routes[index] = APIRoute(
+        route.path,
+        schema,
+        methods=sorted(route.methods or {"GET"}),
+        name=route.name,
+        tags=route.tags,
+        summary=route.summary,
+        description=route.description,
+        response_model=route.response_model,
+        responses=route.responses,
+    )
+    return schema
+
+
+def _serve_schemas(served: FastAPI) -> None:
+    """Move `GET /schema` off the event loop and add `GET /seahaven/schemas`, its deprecated alias.
+
+    The alias predates `reset` on `/schema` (openenv 0.11.0, `reset_cls`), and
+    is kept so that a client written against it keeps working. It answers what
+    `/schema` answers, from the same handler, so the two cannot disagree. Each
+    response carries the deprecation headers, and the server logs a warning for
+    the first request from each User-Agent.
+
+    Kept out of the OpenAPI schema for the reason `/console` is: `openenv push`
+    classifies an app by its path names.
+    """
+    schema = _schema_off_the_loop(served)
+    logged: set[str] = set()
+
+    @served.get(SCHEMAS_PATH, include_in_schema=False, response_model=_SeahavenSchemaResponse)
+    async def schemas(request: Request, response: Response) -> _SeahavenSchemaResponse:
+        agent = request.headers.get("user-agent", "")
+        if agent not in logged and len(logged) < _SCHEMAS_LOGGED_AGENTS:
+            logged.add(agent)
+            _log.warning(
+                "GET %s is deprecated: read GET %s instead (client %s, User-Agent %r)",
+                SCHEMAS_PATH,
+                UPSTREAM_SCHEMA_PATH,
+                request.client.host if request.client else "unknown",
+                agent,
+            )
         response.headers.update(_SCHEMAS_DEPRECATION_HEADERS)
-        base = upstream()
-        if inspect.isawaitable(base):
-            base = await base
-        return SeahavenSchemaResponse.model_validate(base.model_dump())
+        base = await schema()
+        return _SeahavenSchemaResponse.model_validate(base.model_dump())
+
+
+def __getattr__(name: str) -> Any:
+    if name == "SeahavenSchemaResponse":
+        warnings.warn(
+            "SeahavenSchemaResponse is deprecated: read openenv's SchemaResponse from GET /schema",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return _SeahavenSchemaResponse
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def app(
@@ -572,7 +634,8 @@ def app(
 
     `GET /schema` publishes `reset`, the JSON schema of the reset message for
     this world: its fixture ids, read on every request, its state formats and its
-    startup keywords. A startup hook that schema cannot describe makes this
+    startup keywords. It runs in a worker thread, because reading the fixture ids
+    reads the disk. A startup hook that schema cannot describe makes this
     function raise a `WorldBug`, so a server with one does not start.
     `GET /seahaven/schemas` is a deprecated alias of `GET /schema`, served
     whatever `console` says.
@@ -584,17 +647,12 @@ def app(
     is the factory's own `__name__`, which here is `_factory` and not the world.
     """
 
-    # A plain `def` and never a `functools.partial`.
-    # `WebInterfaceManager.__init__` builds the environment only when
-    # `inspect.isclass` or `inspect.isfunction` says the factory is one
-    # (`web_interface.py` lines 249-254 in openenv 0.4.2), and both answer
-    # `False` for a partial, which is then stored unbuilt -- `/web/reset`,
-    # `/web/step` and `/web/state` then read an environment attribute off the
-    # factory object itself. `load_environment_metadata` has the same gate.
-    # `ENABLE_WEB_INTERFACE=true` -- what `openenv push` writes into a Space's
-    # Dockerfile -- is where it shows.
+    # A plain `def`, which every openenv release builds. openenv 0.4.2's
+    # `WebInterfaceManager` stored a `functools.partial` unbuilt, which broke
+    # `/web/*` under `ENABLE_WEB_INTERFACE=true` -- what `openenv push` writes
+    # into a Space's Dockerfile.
     # A plain function costs one environment at app-creation time:
-    # `_validate_concurrency_safety` (`http_server.py` lines 276-305) reads
+    # `_validate_concurrency_safety` (`http_server.py`, openenv 0.13.0) reads
     # `SUPPORTS_CONCURRENT_SESSIONS` off the class when it can unwrap one from
     # the factory and builds and closes an environment when it cannot, so
     # `SeahavenEnv.__init__` has to stay free of side effects.
@@ -621,6 +679,10 @@ def app(
         # reset message with its own `ResetRequest`, and `SeahavenEnv.reset`
         # does the refusing.
         reset_cls=reset_cls,
+        # Upstream defaults this to `observation_cls`, and a reset answers no
+        # tool call: `SeahavenEnv.reset` returns a plain `Observation` with its
+        # keys in `metadata`.
+        reset_observation_cls=Observation,
         concurrency_config=ConcurrencyConfig(
             max_concurrent_envs=max_concurrent_envs,
             session_timeout=session_timeout,

@@ -13,7 +13,8 @@
  *   - `GET /schema` and `GET /metadata` answer, and **no CORS headers are set**,
  *     because the real server sets none either.
  *   - `GET /schema` includes a `reset` schema shaped like Seahaven's; `--plain`
- *     leaves it out, as an OpenEnv server older than 0.11.0 does.
+ *     publishes OpenEnv's default `ResetRequest` instead, as an environment
+ *     that declares no reset model does.
  *   - `/reset`, `/step` and `/state` over HTTP answer 501, as Seahaven's do.
  *   - the built console is served at `/console`, on this same origin.
  *
@@ -296,6 +297,13 @@ const RESET_SCHEMA = {
       description:
         "Where the instance's clock starts, as an ISO-8601 instant, e.g. 2024-03-05T12:00:00Z.",
     },
+    clock_mode: {
+      anyOf: [{ type: "string", enum: ["fixed", "tick", "running", "wall"] }, { type: "null" }],
+      default: null,
+      title: "Clock Mode",
+      description:
+        "How the instance's clock moves: fixed, tick, running or wall. Null uses the world's default.",
+    },
     state_format: {
       anyOf: [{ type: "string", enum: ["seahaven.state+calls/1", "seahaven.state/1"] }, { type: "null" }],
       default: null,
@@ -314,6 +322,30 @@ const RESET_SCHEMA = {
       title: "Episode Id",
       description: "Custom episode identifier",
     },
+  },
+}
+
+// What OpenEnv 0.11 and later publish for an environment that declares no
+// reset model: `ResetRequest`, which takes keys it does not list.
+const DEFAULT_RESET_SCHEMA = {
+  title: "ResetRequest",
+  type: "object",
+  additionalProperties: true,
+  description: "Request model for environment reset.",
+  properties: {
+    seed: RESET_SCHEMA.properties.seed,
+    episode_id: RESET_SCHEMA.properties.episode_id,
+  },
+}
+
+// A reset answers OpenEnv's plain `Observation`, with its facts in `metadata`.
+const RESET_OBSERVATION_SCHEMA = {
+  title: "Observation",
+  type: "object",
+  properties: {
+    done: { type: "boolean", default: false, title: "Done" },
+    reward: { anyOf: [{ type: "number" }, { type: "null" }], default: null, title: "Reward" },
+    metadata: { type: "object", additionalProperties: true, title: "Metadata" },
   },
 }
 
@@ -510,8 +542,11 @@ const server = createServer((request, response) => {
     case "/health":
       return json(response, 200, { status: "healthy" })
     case "/schema":
-      if (PLAIN) return json(response, 200, SCHEMA)
-      return json(response, 200, { ...SCHEMA, reset: RESET_SCHEMA })
+      return json(response, 200, {
+        ...SCHEMA,
+        reset: PLAIN ? DEFAULT_RESET_SCHEMA : RESET_SCHEMA,
+        reset_observation: RESET_OBSERVATION_SCHEMA,
+      })
     case "/metadata":
       return json(response, 200, METADATA)
     case "/reset":

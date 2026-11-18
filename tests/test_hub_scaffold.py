@@ -90,6 +90,21 @@ def test_openenv_validate_reports_only_the_missing_validation_block(published: P
     ]
 
 
+def test_openenv_validate_at_its_default_level_fails_nothing_else(published: Path) -> None:
+    """The level `openenv validate` runs bare, without the image build a test cannot do.
+
+    The checks that need the image are skipped, so this guards every runtime or
+    semantic check that can fail a scaffold without one.
+    """
+    report = run_validation(published, skip_build=True)
+    failed = [
+        (result.check_id, result.evidence)
+        for result in report.results
+        if result.status is CheckStatus.FAIL
+    ]
+    assert failed == [("static.manifest", [NO_VALIDATION_BLOCK])]
+
+
 def test_the_scaffold_has_the_structure_openenv_push_requires(published: Path) -> None:
     """Raises on a missing required file; the one warning is for a directory of eval output."""
     assert validate_env_structure(published) == ["Recommended directory missing: outputs/"]

@@ -6,10 +6,12 @@ nothing. A world whose startup hooks the schema cannot describe fails `app()`,
 so those tests call `app()` and nothing more.
 """
 
-import asyncio
 import copy
 import inspect
 import json
+import logging
+import re
+import threading
 import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -21,6 +23,7 @@ from pydantic import Field
 import projecttracker
 from seahaven.ctx import Ctx
 from seahaven.errors import WorldBug
+from seahaven.fixtures import SIDECAR_NAME
 from seahaven.world import World
 from tests.conftest import build_world, composable_world
 
@@ -31,7 +34,7 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from openenv.core.env_server.types import SchemaResponse
 
@@ -45,7 +48,7 @@ from seahaven.openenv import (
     _serve_schemas,
     app,
 )
-from tests.serving import serving
+from tests.serving import serving, serving_app
 
 
 def _get(url: str) -> Any:
@@ -83,7 +86,9 @@ def test_the_reference_world_publishes_its_reset_message() -> None:
         published = _get(url + UPSTREAM_SCHEMA_PATH)
 
     assert sorted(published) == ["action", "observation", "reset", "reset_observation", "state"]
-    assert published["reset_observation"] == published["observation"]
+    # A reset answers no tool call, so its answer is OpenEnv's plain model.
+    assert published["reset_observation"]["title"] == "Observation"
+    assert published["observation"]["title"] == "SeahavenObservation"
     reset = published["reset"]
     assert reset["title"] == "SeahavenResetRequest"
     assert reset["additionalProperties"] is False
@@ -145,27 +150,59 @@ def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
     assert state.startup == {"user_id": user_id}
 
 
+def test_an_unreadable_fixture_publishes_fixture_as_any_string_and_logs_why(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    with world.instance(None) as instance:
+        instance.freeze("start", "Empty.")
+    sidecar = next(world.fixtures_dir.glob(f"*/{SIDECAR_NAME}"))
+    sidecar.write_text(re.sub(r"format_version: \d+", "format_version: 0", sidecar.read_text()))
+
+    with caplog.at_level(logging.ERROR, logger="seahaven.openenv.env"), serving(world) as url:
+        first = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
+        second = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
+    assert first == second
+    assert first["properties"]["fixture"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    logged = [r.getMessage() for r in caplog.records if "cannot list fixtures" in r.getMessage()]
+    assert len(logged) == 1, "a problem that does not change is logged once"
+    assert "format_version is 0" in logged[0]
+
+
+def test_schema_reads_the_fixtures_off_the_event_loop() -> None:
+    """Upstream's handler runs in a worker thread, where reading the disk blocks no session."""
+    served = FastAPI()
+    threads: list[str] = []
+
+    async def get_schemas() -> SchemaResponse:
+        threads.append(threading.current_thread().name)
+        return SchemaResponse(action={}, observation={}, state={})
+
+    served.router.routes.append(APIRoute("/schema", get_schemas, methods=["GET"]))
+    _serve_schemas(served)
+    with serving_app(served) as url:
+        assert _get(url + UPSTREAM_SCHEMA_PATH) == {"action": {}, "observation": {}, "state": {}}
+    assert threads
+    assert threads[0] != "test-uvicorn", "upstream's handler ran on the event loop's thread"
+
+
 # --- the deprecated alias --------------------------------------------------------
 
 
-@pytest.mark.filterwarnings("ignore:GET /seahaven/schemas is deprecated:DeprecationWarning")
 def test_the_deprecated_route_answers_what_schema_answers_and_says_it_is_deprecated(
-    world: World,
+    world: World, caplog: pytest.LogCaptureFixture
 ) -> None:
-    with serving(world) as url:
+    with caplog.at_level(logging.WARNING, logger="seahaven.openenv"), serving(world) as url:
         published = _get(url + UPSTREAM_SCHEMA_PATH)
         aliased, headers = _get_with_headers(url + SCHEMAS_PATH)
+        _get(url + SCHEMAS_PATH)
     assert aliased == published
-    assert headers["deprecation"] == "true"
+    # RFC 9745: a structured-field date, here 2026-11-17T00:00:00Z.
+    assert headers["deprecation"] == "@1794873600"
     assert headers["link"] == '</schema>; rel="successor-version"'
-
-
-def test_the_deprecated_route_warns_in_the_servers_process(world: World) -> None:
-    served = app(world)
-    route = next(r for r in served.router.routes if getattr(r, "path", None) == SCHEMAS_PATH)
-    with pytest.warns(DeprecationWarning, match=r"/seahaven/schemas is deprecated.*GET /schema"):
-        answer = asyncio.run(route.endpoint(Response()))  # ty: ignore[unresolved-attribute]
-    assert answer.reset["title"] == "SeahavenResetRequest"
+    logged = [r.getMessage() for r in caplog.records if r.name == "seahaven.openenv"]
+    assert len(logged) == 1, "one User-Agent is logged once"
+    assert "GET /seahaven/schemas is deprecated: read GET /schema instead" in logged[0]
+    assert "Python-urllib" in logged[0]
 
 
 def test_the_deprecated_route_is_not_in_the_openapi_schema() -> None:
@@ -175,7 +212,6 @@ def test_the_deprecated_route_is_not_in_the_openapi_schema() -> None:
     assert SCHEMAS_PATH not in paths
 
 
-@pytest.mark.filterwarnings("ignore:GET /seahaven/schemas is deprecated:DeprecationWarning")
 def test_the_deprecated_route_is_served_without_the_console(world: World) -> None:
     with serving(world, console=False) as url:
         assert "reset" in _get(url + SCHEMAS_PATH)
@@ -187,21 +223,33 @@ def test_a_missing_upstream_schema_route_fails_the_build() -> None:
         _serve_schemas(served)
 
 
-def test_a_sync_upstream_handler_is_aliased_too(world: World) -> None:
+def test_a_sync_upstream_handler_is_served_and_aliased_too(world: World) -> None:
     served = FastAPI()
-    reset = SeahavenResetRequest.for_world(world).model_json_schema()
+    upstream = SchemaResponse(
+        action={"title": "A"},
+        observation={"title": "O"},
+        state={"title": "S"},
+        reset=SeahavenResetRequest.for_world(world).model_json_schema(),
+        reset_observation={"title": "R"},
+    )
 
     def get_schemas() -> SchemaResponse:
-        return SchemaResponse(action={}, observation={}, state={}, reset=reset)
+        return upstream
 
     served.router.routes.append(APIRoute("/schema", get_schemas, methods=["GET"]))
     _serve_schemas(served)
+    with serving_app(served) as url:
+        assert _get(url + UPSTREAM_SCHEMA_PATH) == upstream.model_dump()
+        assert _get(url + SCHEMAS_PATH) == upstream.model_dump()
 
-    route = next(r for r in served.router.routes if getattr(r, "path", None) == SCHEMAS_PATH)
-    with pytest.warns(DeprecationWarning):
-        answer = asyncio.run(route.endpoint(Response()))  # ty: ignore[unresolved-attribute]
-    assert answer.action == {}
-    assert answer.reset["title"] == "SeahavenResetRequest"
+
+def test_the_deprecated_response_model_warns_when_imported() -> None:
+    with pytest.warns(DeprecationWarning, match="SeahavenSchemaResponse is deprecated"):
+        from seahaven.openenv import SeahavenSchemaResponse
+    assert SeahavenSchemaResponse.model_fields["reset"].is_required()
+    with pytest.warns(DeprecationWarning, match="SeahavenSchemaResponse is deprecated"):
+        assert seahaven.openenv.env.SeahavenSchemaResponse is SeahavenSchemaResponse
+    assert "SeahavenSchemaResponse" not in seahaven.openenv.__all__
 
 
 # --- fixtures and formats -------------------------------------------------------
@@ -441,4 +489,4 @@ def test_the_startup_properties_are_the_accepted_startup_kwargs() -> None:
 
 
 def test_the_models_are_exported() -> None:
-    assert {"SeahavenResetRequest", "SeahavenSchemaResponse"} <= set(seahaven.openenv.__all__)
+    assert "SeahavenResetRequest" in seahaven.openenv.__all__

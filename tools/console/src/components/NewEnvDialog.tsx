@@ -72,8 +72,8 @@ export function NewEnvDialog({
   const [rawNote, setRawNote] = useState<string | null>(null)
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
-  const { fields, startupOpen } = useMemo(
-    () => (resetSchema ? resetFieldsOf(resetSchema) : { fields: [], startupOpen: false }),
+  const { fields, startupOpen, open } = useMemo(
+    () => (resetSchema ? resetFieldsOf(resetSchema) : { fields: [], startupOpen: false, open: false }),
     [resetSchema],
   )
   // The form restarts when the target world changes, not on every render: the
@@ -249,7 +249,11 @@ export function NewEnvDialog({
               onChange={(name, value) => setValues((current) => ({ ...current, [name]: value }))}
             />
           )}
-          {startupOpen && !raw ? (
+          {open && !raw ? (
+            <p className="text-[12.5px] text-muted">
+              This environment also accepts reset arguments it does not list. Add them with Raw JSON.
+            </p>
+          ) : startupOpen && !raw ? (
             <p className="text-[12.5px] text-muted">
               This world also accepts startup keywords it does not list. Add them with Raw JSON.
             </p>
@@ -263,8 +267,8 @@ export function NewEnvDialog({
         >
           <div className="flex flex-col gap-2">
             <p className="text-[12.5px] leading-snug text-muted">
-              OpenEnv publishes no schema for these, so this is the one box the UI cannot generate a
-              form for. Whatever the environment's `reset()` accepts goes here, as a JSON object:
+              This server published no reset schema, or this page could not read it, so there is no
+              form for these. Whatever the environment's `reset()` accepts goes here, as a JSON object:
               commonly <code className="font-mono text-fg">seed</code> and{" "}
               <code className="font-mono text-fg">episode_id</code>, plus whatever that environment
               adds. A key the environment does not accept is the server's to judge: some servers

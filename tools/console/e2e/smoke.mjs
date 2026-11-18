@@ -330,12 +330,16 @@ plain.on("pageerror", (error) => problems.push(`page error: ${error.message}`))
 await plain.goto("http://127.0.0.1:8001/console", { waitUntil: "networkidle" })
 await plain.getByRole("button", { name: "New environment" }).first().click()
 await plain.waitForTimeout(700)
-// No `reset` on `/schema` here, so the reset arguments are the JSON box.
-await plain.getByText("Advanced: reset arguments").click()
+// OpenEnv's default `ResetRequest` here: a form of its two fields, and a note
+// that the environment takes keys the form does not list.
 await shot(plain, "plain-new-env")
 check(
-  await plain.getByPlaceholder(/"fixture": "small_startup"/).isVisible(),
-  "an environment with no reset schema did not get the JSON box",
+  await plain.getByText("Seed", { exact: true }).isVisible(),
+  "an environment publishing the default reset schema did not get its form",
+)
+check(
+  await plain.getByText(/also accepts reset arguments it does not list/).isVisible(),
+  "an open reset schema did not say it takes unlisted keys",
 )
 await plain.getByRole("button", { name: "Open environment" }).click()
 await plain.waitForTimeout(700)

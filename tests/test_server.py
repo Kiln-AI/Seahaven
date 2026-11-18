@@ -313,7 +313,7 @@ def test_upstreams_tool_client_reads_an_error_as_data_and_raises_legibly(world: 
     """The client Seahaven used to break: `step` parses, `call_tool` raises in words.
 
     `MCPToolClient.call_tool` raises on any non-null `error`, conformant or not
-    (`mcp_client.py` lines 538-542 in openenv 0.5.0). What the shape fixes is
+    (`MCPToolClient.call_tool` in openenv 0.13.0). What the shape fixes is
     which failure: a `RuntimeError` naming the message and the type, rather than
     a pydantic `ValidationError` three fields deep in the parse. That parse is
     `MCPClientBase._parse_result`, whose `ToolError(**obs_data["error"])` is the
@@ -1633,7 +1633,7 @@ def test_a_session_that_ends_normally_leaves_nothing_in_the_error_log(world: Wor
     0.4.2, whose `/ws` handler closed the connection in a `finally` guarded by
     `except RuntimeError` and so logged `ERROR: Exception in ASGI application`
     for every normal close. openenv 0.5.0 catches `WebSocketDisconnect` there as
-    well (`http_server.py` lines 1290 and 1767), both workarounds are gone, and
+    well (`websocket_endpoint` and `mcp_websocket_endpoint`), both workarounds are gone, and
     this test is what says upstream really does hold the line now.
     """
     with _watched(world) as (url, records), SeahavenClient(base_url=url) as env:

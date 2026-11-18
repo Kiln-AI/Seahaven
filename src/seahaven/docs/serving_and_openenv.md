@@ -487,7 +487,7 @@ one JSON object holding a JSON Schema document under each of five keys.
 | `observation` | `SeahavenObservation`, the shape of a tool call's answer |
 | `state` | `SeahavenState`, the whole state document |
 | `reset` | `SeahavenResetRequest`, the reset message for this world |
-| `reset_observation` | `SeahavenObservation`, the shape of a reset's answer |
+| `reset_observation` | OpenEnv's `Observation`: a reset calls no tool, and its facts are in `metadata` |
 
 Every field Seahaven declares carries the description this page gives it, so a generated client
 carries the descriptions too. The `state` document is the world's own model rather than OpenEnv's
