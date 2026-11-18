@@ -1,4 +1,4 @@
-"""`GET /seahaven/schemas`: `/schema` plus the JSON schema of the reset message.
+"""`reset` on `GET /schema`: the JSON schema of the reset message.
 
 The route is driven through a real server where the transport is what is being
 claimed, and the model is asked for its schema directly where a server adds
@@ -31,13 +31,14 @@ pytest.importorskip(
     "seahaven.openenv", exc_type=ImportError, reason="the serve extra does not import here"
 )
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.routing import APIRoute
 from openenv.core.env_server.types import SchemaResponse
 
 import seahaven.openenv
 from seahaven.openenv import (
     SCHEMAS_PATH,
+    UPSTREAM_SCHEMA_PATH,
     SeahavenClient,
     SeahavenEnv,
     SeahavenResetRequest,
@@ -51,6 +52,12 @@ def _get(url: str) -> Any:
     with urllib.request.urlopen(url) as response:
         assert response.status == 200
         return json.loads(response.read())
+
+
+def _get_with_headers(url: str) -> tuple[Any, dict[str, str]]:
+    with urllib.request.urlopen(url) as response:
+        assert response.status == 200
+        return json.loads(response.read()), dict(response.headers)
 
 
 def _reset_schema(world: World) -> dict[str, Any]:
@@ -73,12 +80,11 @@ def _fixture_ids(schema: dict[str, Any]) -> list[str] | None:
 
 def test_the_reference_world_publishes_its_reset_message() -> None:
     with serving(projecttracker.world) as url:
-        extended = _get(url + SCHEMAS_PATH)
-        plain = _get(url + "/schema")
+        published = _get(url + UPSTREAM_SCHEMA_PATH)
 
-    assert sorted(extended) == ["action", "observation", "reset", "state"]
-    assert {key: extended[key] for key in plain} == plain
-    reset = extended["reset"]
+    assert sorted(published) == ["action", "observation", "reset", "reset_observation", "state"]
+    assert published["reset_observation"] == published["observation"]
+    reset = published["reset"]
     assert reset["title"] == "SeahavenResetRequest"
     assert reset["additionalProperties"] is False
     # In the order the console lays its form out: fixture and startup first,
@@ -107,24 +113,12 @@ def test_the_reference_world_publishes_its_reset_message() -> None:
     assert startup["additionalProperties"] is False
 
 
-def test_the_route_is_not_in_the_openapi_schema() -> None:
-    with serving(projecttracker.world) as url:
-        paths = _get(url + "/openapi.json")["paths"]
-    assert "/schema" in paths
-    assert SCHEMAS_PATH not in paths
-
-
-def test_the_route_is_served_without_the_console(world: World) -> None:
-    with serving(world, console=False) as url:
-        assert "reset" in _get(url + SCHEMAS_PATH)
-
-
 def test_a_fixture_frozen_while_serving_appears_on_the_next_request(world: World) -> None:
     with serving(world) as url:
-        assert _fixture_ids(_get(url + SCHEMAS_PATH)["reset"]) is None
+        assert _fixture_ids(_get(url + UPSTREAM_SCHEMA_PATH)["reset"]) is None
         with world.instance(None) as instance:
             instance.freeze("start", "Empty.")
-        assert _fixture_ids(_get(url + SCHEMAS_PATH)["reset"]) == ["start"]
+        assert _fixture_ids(_get(url + UPSTREAM_SCHEMA_PATH)["reset"]) == ["start"]
 
 
 def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
@@ -137,7 +131,7 @@ def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
         user_id = instance.inspect().rows("SELECT id FROM users ORDER BY id LIMIT 1")[0]["id"]
 
     with serving(world) as url:
-        schema = _get(url + SCHEMAS_PATH)["reset"]
+        schema = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
         fixture = _fixture_ids(schema)[0]  # ty: ignore[not-subscriptable]
         message = {"fixture": fixture, "seed": 7, "startup": {"user_id": user_id}}
         jsonschema.validate(message, schema)
@@ -151,23 +145,61 @@ def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
     assert state.startup == {"user_id": user_id}
 
 
+# --- the deprecated alias --------------------------------------------------------
+
+
+@pytest.mark.filterwarnings("ignore:GET /seahaven/schemas is deprecated:DeprecationWarning")
+def test_the_deprecated_route_answers_what_schema_answers_and_says_it_is_deprecated(
+    world: World,
+) -> None:
+    with serving(world) as url:
+        published = _get(url + UPSTREAM_SCHEMA_PATH)
+        aliased, headers = _get_with_headers(url + SCHEMAS_PATH)
+    assert aliased == published
+    assert headers["deprecation"] == "true"
+    assert headers["link"] == '</schema>; rel="successor-version"'
+
+
+def test_the_deprecated_route_warns_in_the_servers_process(world: World) -> None:
+    served = app(world)
+    route = next(r for r in served.router.routes if getattr(r, "path", None) == SCHEMAS_PATH)
+    with pytest.warns(DeprecationWarning, match=r"/seahaven/schemas is deprecated.*GET /schema"):
+        answer = asyncio.run(route.endpoint(Response()))  # ty: ignore[unresolved-attribute]
+    assert answer.reset["title"] == "SeahavenResetRequest"
+
+
+def test_the_deprecated_route_is_not_in_the_openapi_schema() -> None:
+    with serving(projecttracker.world) as url:
+        paths = _get(url + "/openapi.json")["paths"]
+    assert UPSTREAM_SCHEMA_PATH in paths
+    assert SCHEMAS_PATH not in paths
+
+
+@pytest.mark.filterwarnings("ignore:GET /seahaven/schemas is deprecated:DeprecationWarning")
+def test_the_deprecated_route_is_served_without_the_console(world: World) -> None:
+    with serving(world, console=False) as url:
+        assert "reset" in _get(url + SCHEMAS_PATH)
+
+
 def test_a_missing_upstream_schema_route_fails_the_build() -> None:
     served = FastAPI()
     with pytest.raises(RuntimeError, match="/schema"):
-        _serve_schemas(served, SeahavenResetRequest)
+        _serve_schemas(served)
 
 
-def test_a_sync_upstream_handler_is_extended_too(world: World) -> None:
+def test_a_sync_upstream_handler_is_aliased_too(world: World) -> None:
     served = FastAPI()
+    reset = SeahavenResetRequest.for_world(world).model_json_schema()
 
     def get_schemas() -> SchemaResponse:
-        return SchemaResponse(action={}, observation={}, state={})
+        return SchemaResponse(action={}, observation={}, state={}, reset=reset)
 
     served.router.routes.append(APIRoute("/schema", get_schemas, methods=["GET"]))
-    _serve_schemas(served, SeahavenResetRequest.for_world(world))
+    _serve_schemas(served)
 
     route = next(r for r in served.router.routes if getattr(r, "path", None) == SCHEMAS_PATH)
-    answer = asyncio.run(route.endpoint())  # ty: ignore[unresolved-attribute]
+    with pytest.warns(DeprecationWarning):
+        answer = asyncio.run(route.endpoint(Response()))  # ty: ignore[unresolved-attribute]
     assert answer.action == {}
     assert answer.reset["title"] == "SeahavenResetRequest"
 

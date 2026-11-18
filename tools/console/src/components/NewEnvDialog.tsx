@@ -6,9 +6,9 @@
  * has been reset twice is two different runs sharing one row in the list, which
  * is exactly the confusion this dialog exists to remove.
  *
- * The reset form is Seahaven-specific: it is built from the `reset` schema that
- * `GET /seahaven/schemas` publishes, and any environment that publishes none
- * gets the JSON box instead.
+ * The reset form is built from the `reset` schema that `GET /schema` publishes
+ * (OpenEnv 0.11.0 and later), and an environment that publishes none gets the
+ * JSON box instead.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react"

@@ -18,6 +18,7 @@ app, mounted at `/`, which is the shape a hub expects.
 
 import inspect
 import json
+import warnings
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, NoReturn
@@ -33,7 +34,6 @@ from openenv.core.env_server.mcp_types import (
     ListToolsObservation,
 )
 from openenv.core.env_server.types import ConcurrencyConfig
-from starlette.concurrency import run_in_threadpool
 
 from seahaven.openenv.client import SeahavenClient
 from seahaven.openenv.env import (
@@ -152,7 +152,7 @@ def _http_episode_control_refusal(route: str) -> dict[str, Any]:
             "use_instead": "/ws",
             "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
             "upstream": {
-                "package": "openenv >=0.5.0,<0.6 (verified against 0.5.0)",
+                "package": "openenv >=0.13.0,<0.14 (verified against 0.13.0)",
                 "file": "openenv/core/env_server/http_server.py",
                 "regression": "86a222d",
                 "defect": (
@@ -292,7 +292,7 @@ def _mcp_transport_refusal(method: str | None) -> dict[str, Any]:
             "use_instead": "/ws",
             "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
             "upstream": {
-                "package": "openenv >=0.5.0,<0.6 (verified against 0.5.0)",
+                "package": "openenv >=0.13.0,<0.14 (verified against 0.13.0)",
                 "file": "openenv/core/env_server/http_server.py",
                 "dispatches": [
                     "openenv/session/create",
@@ -490,15 +490,22 @@ def _serve_console(served: FastAPI) -> None:
 SCHEMAS_PATH = "/seahaven/schemas"
 UPSTREAM_SCHEMA_PATH = "/schema"
 
+# RFC 9745 and RFC 8288: the two headers an HTTP client can read a deprecation
+# from without parsing the body.
+_SCHEMAS_DEPRECATION_HEADERS = {
+    "Deprecation": "true",
+    "Link": f'<{UPSTREAM_SCHEMA_PATH}>; rel="successor-version"',
+}
 
-def _serve_schemas(served: FastAPI, reset_cls: type[SeahavenResetRequest]) -> None:
-    """Add `GET /seahaven/schemas`: upstream's `GET /schema` answer plus a `reset` key.
 
-    OpenEnv publishes no schema for the reset message. This route answers what
-    `create_app(reset_cls=...)` and a `reset` key on `/schema` would, which is
-    the change proposed upstream; if OpenEnv accepts it, this route goes and
-    `app()` passes `reset_cls` instead. The three shared keys come from
-    upstream's own handler, so the two routes cannot disagree.
+def _serve_schemas(served: FastAPI) -> None:
+    """Add `GET /seahaven/schemas`, a deprecated alias of upstream's `GET /schema`.
+
+    The route predates `reset` on `/schema` (openenv 0.11.0, `reset_cls`), and is
+    kept so that a client written against it keeps working. It answers exactly
+    what upstream's handler answers, from that handler, so the two cannot
+    disagree. Every request warns in the server's process and carries the
+    deprecation headers.
 
     Kept out of the OpenAPI schema for the reason `/console` is: `openenv push`
     classifies an app by its path names.
@@ -516,17 +523,21 @@ def _serve_schemas(served: FastAPI, reset_cls: type[SeahavenResetRequest]) -> No
     if upstream is None:
         raise RuntimeError(
             f"OpenEnv's app has no GET {UPSTREAM_SCHEMA_PATH} route, which "
-            f"GET {SCHEMAS_PATH} extends; the installed openenv is not one Seahaven supports"
+            f"GET {SCHEMAS_PATH} aliases; the installed openenv is not one Seahaven supports"
         )
 
     @served.get(SCHEMAS_PATH, include_in_schema=False, response_model=SeahavenSchemaResponse)
-    async def schemas() -> SeahavenSchemaResponse:
+    async def schemas(response: Response) -> SeahavenSchemaResponse:
+        warnings.warn(
+            f"GET {SCHEMAS_PATH} is deprecated: read GET {UPSTREAM_SCHEMA_PATH} instead",
+            DeprecationWarning,
+            stacklevel=1,
+        )
+        response.headers.update(_SCHEMAS_DEPRECATION_HEADERS)
         base = upstream()
         if inspect.isawaitable(base):
             base = await base
-        return SeahavenSchemaResponse(
-            **base.model_dump(), reset=await run_in_threadpool(reset_cls.model_json_schema)
-        )
+        return SeahavenSchemaResponse.model_validate(base.model_dump())
 
 
 def app(
@@ -559,11 +570,12 @@ def app(
     reach an instance. The websocket transport at `/ws` is the product and is
     untouched, `{"type": "mcp"}` frames included.
 
-    `GET /seahaven/schemas` answers what `GET /schema` answers plus `reset`, the
-    JSON schema of the reset message for this world: its fixture ids, read on
-    every request, its state formats and its startup keywords. It is served
-    whatever `console` says. A startup hook that schema cannot describe makes
-    this function raise a `WorldBug`, so a server with one does not start.
+    `GET /schema` publishes `reset`, the JSON schema of the reset message for
+    this world: its fixture ids, read on every request, its state formats and its
+    startup keywords. A startup hook that schema cannot describe makes this
+    function raise a `WorldBug`, so a server with one does not start.
+    `GET /seahaven/schemas` is a deprecated alias of `GET /schema`, served
+    whatever `console` says.
 
     `session_timeout` is seconds of inactivity before OpenEnv reaps a session,
     or `None` for no reaper. It is passed as part of a `ConcurrencyConfig`
@@ -604,6 +616,11 @@ def app(
         # 0.5.0, which is what closed huggingface/OpenEnv#1155; 0.4.2 had no way
         # to say this.
         state_cls=SeahavenState,
+        # `GET /schema` publishes `reset_cls.model_json_schema()` under `reset`,
+        # read on every request. It is a schema only: upstream still parses the
+        # reset message with its own `ResetRequest`, and `SeahavenEnv.reset`
+        # does the refusing.
+        reset_cls=reset_cls,
         concurrency_config=ConcurrencyConfig(
             max_concurrent_envs=max_concurrent_envs,
             session_timeout=session_timeout,
@@ -611,7 +628,7 @@ def app(
     )
     _refuse_http_episode_control(served)
     _refuse_mcp_transport(served)
-    _serve_schemas(served, reset_cls)
+    _serve_schemas(served)
     if console:
         _serve_console(served)
     return served

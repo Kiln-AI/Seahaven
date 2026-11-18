@@ -454,7 +454,11 @@ class SeahavenResetRequest(ResetRequest):
 
 
 class SeahavenSchemaResponse(SchemaResponse):
-    """`GET /schema`'s answer plus the reset message, as OpenEnv would answer with a `reset_cls`."""
+    """The answer of the deprecated `GET /seahaven/schemas`: `GET /schema` with `reset` required.
+
+    Deprecated with that route. Read `SchemaResponse` from `GET /schema`, which
+    has published `reset` since openenv 0.11.0.
+    """
 
     reset: dict[str, Any] = Field(description="JSON schema for the reset message")
 
@@ -565,7 +569,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         # Three key names never reach this method: `self`, `session_id` and
         # `func` are the arguments of OpenEnv's own call frame
         # (`_run_in_session_executor` in `openenv/core/env_server/http_server.py`,
-        # verified against 0.5.0, which now receives them because a `**kwargs`
+        # verified against 0.13.0, which receives them because a `**kwargs`
         # signature makes it forward every key). A client sending one gets
         # upstream's `TypeError` as the error frame instead of the refusal below,
         # and the session survives it either way.

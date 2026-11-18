@@ -102,8 +102,8 @@ and `openenv.yaml` serve `<package>.openenv_app:app`.
 
 A world with the hub files differs from the environment `openenv init` makes in three ways:
 
-- `openenv.yaml` has no `validation:` block, so `openenv validate` reports one failure,
-  ``openenv.yaml has no `validation:` block``. The block declares a reward range and a reward
+- `openenv.yaml` has no `validation:` block, so `openenv validate --level static` reports one
+  failure, ``openenv.yaml has no `validation:` block``. The block declares a reward range and a reward
   oracle, and a Seahaven world has no reward
   ([why](../serving_and_openenv.md#why-there-are-no-rewards)).
 - There is no `server/app.py`. The root `Dockerfile` and the `app` key in `openenv.yaml` name

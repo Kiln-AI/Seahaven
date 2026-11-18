@@ -12,8 +12,8 @@
  *     any other key by name, which this mock does not yet copy.
  *   - `GET /schema` and `GET /metadata` answer, and **no CORS headers are set**,
  *     because the real server sets none either.
- *   - `GET /seahaven/schemas` answers `/schema` plus a `reset` schema shaped
- *     like Seahaven's; `--plain` answers 404 there, as any other environment does.
+ *   - `GET /schema` includes a `reset` schema shaped like Seahaven's; `--plain`
+ *     leaves it out, as an OpenEnv server older than 0.11.0 does.
  *   - `/reset`, `/step` and `/state` over HTTP answer 501, as Seahaven's do.
  *   - the built console is served at `/console`, on this same origin.
  *
@@ -510,9 +510,7 @@ const server = createServer((request, response) => {
     case "/health":
       return json(response, 200, { status: "healthy" })
     case "/schema":
-      return json(response, 200, SCHEMA)
-    case "/seahaven/schemas":
-      if (PLAIN) return json(response, 404, { detail: "Not Found" })
+      if (PLAIN) return json(response, 200, SCHEMA)
       return json(response, 200, { ...SCHEMA, reset: RESET_SCHEMA })
     case "/metadata":
       return json(response, 200, METADATA)

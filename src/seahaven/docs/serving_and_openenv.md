@@ -4,7 +4,7 @@ A world can run as a server, so that an eval harness, an RL trainer or an agent 
 over the network instead of importing it. Each connection gets its own session, and each session
 gets its own private instance. Hundreds of sessions run against one process.
 
-Seahaven speaks [OpenEnv](https://github.com/huggingface/OpenEnv) (v0.5.x), an open standard for
+Seahaven speaks [OpenEnv](https://github.com/huggingface/OpenEnv) (v0.13.x), an open standard for
 connecting to reinforcement-learning environments. A server hosts an environment, a client connects,
 and the session is `reset` / `step` / `state` / `close` over a WebSocket, with JSON frames on the
 wire. Seahaven took that standard rather than inventing a protocol, which means two useful things:
@@ -476,20 +476,26 @@ The action type for a tool call is OpenEnv's `CallToolAction`, and the server al
 `ListToolsAction`, which returns every registered tool as `{name, description, input_schema}` —
 OpenEnv's own `Tool` shape. Control tools are never in that list.
 
-### `GET /schema` publishes the three models
+### `GET /schema` publishes the models
 
 A client can read the shapes off the running server instead of off this page. `GET /schema` answers
-one JSON object holding a JSON Schema document under each of three keys.
+one JSON object holding a JSON Schema document under each of five keys.
 
 | Key | The model it describes |
 |---|---|
 | `action` | `CallToolAction`, the shape of a tool call |
 | `observation` | `SeahavenObservation`, the shape of a tool call's answer |
 | `state` | `SeahavenState`, the whole state document |
+| `reset` | `SeahavenResetRequest`, the reset message for this world |
+| `reset_observation` | `SeahavenObservation`, the shape of a reset's answer |
 
 Every field Seahaven declares carries the description this page gives it, so a generated client
 carries the descriptions too. The `state` document is the world's own model rather than OpenEnv's
-base `State`. Publishing the world's own model needs openenv 0.5 or newer on the server.
+base `State`. The `reset` document lists the world's fixture ids, its state formats and the
+keywords its startup hooks take. The server reads the fixture ids again on each request, so a
+fixture frozen while the server runs appears on the next one.
+
+`GET /seahaven/schemas` answers the same object and is deprecated. Read `GET /schema` instead.
 
 ### Reading an error from your own client
 
@@ -722,7 +728,7 @@ triple the rest of the framework uses:
       "use_instead": "/ws",
       "clients": ["seahaven.openenv.SeahavenClient", "openenv.EnvClient"],
       "upstream": {
-        "package": "openenv >=0.5.0,<0.6 (verified against 0.5.0)",
+        "package": "openenv >=0.13.0,<0.14 (verified against 0.13.0)",
         "file": "openenv/core/env_server/http_server.py",
         "regression": "86a222d",
         "defect": "each handler builds an Environment from the factory and closes it ..."

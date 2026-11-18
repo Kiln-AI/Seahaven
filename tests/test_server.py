@@ -863,7 +863,7 @@ def test_the_http_episode_routes_refuse_rather_than_answer_a_throwaway_environme
             assert refusal["details"]["use_instead"] == "/ws"
             assert refusal["details"]["upstream"]["regression"] == "86a222d"
             assert refusal["details"]["upstream"]["package"] == (
-                "openenv >=0.5.0,<0.6 (verified against 0.5.0)"
+                "openenv >=0.13.0,<0.14 (verified against 0.13.0)"
             )
             assert "/ws" in refusal["message"]
             assert "SeahavenClient" in refusal["message"]
@@ -923,7 +923,7 @@ def test_refusing_the_episode_routes_leaves_the_rest_of_the_http_surface_alone(
         assert metadata[1]["name"] == world.name
         schema = _request(url + "/schema")
         assert schema[0] == 200
-        assert sorted(schema[1]) == ["action", "observation", "state"]
+        assert sorted(schema[1]) == ["action", "observation", "reset", "reset_observation", "state"]
 
 
 def test_a_websocket_session_is_untouched_by_the_refusal(world: World) -> None:
