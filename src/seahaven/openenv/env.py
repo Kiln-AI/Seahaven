@@ -411,8 +411,8 @@ class SeahavenResetRequest(ResetRequest):
     def for_world(cls, world: World) -> type[SeahavenResetRequest]:
         """This model narrowed to one world: its fixtures, its formats, its startup keywords.
 
-        The fixture ids are read from the fixtures directory on every
-        `model_json_schema()`, so a fixture frozen while a server runs is
+        The fixture ids and descriptions are read from the fixtures directory on
+        every `model_json_schema()`, so a fixture frozen while a server runs is
         published without a restart. Everything else is fixed here, and a
         startup hook the schema cannot describe is a `WorldBug` here.
         """
@@ -420,11 +420,23 @@ class SeahavenResetRequest(ResetRequest):
         # A world cannot register a built-in's name, so the two lists never overlap.
         formats = (*sorted(BUILTIN_FORMATS), *sorted(world.state_formats))
 
-        def fill_fixture_ids(schema: dict[str, Any]) -> None:
-            ids = [fixture.id for fixture in world.fixtures()]
+        def fill_fixtures(schema: dict[str, Any]) -> None:
+            fixtures = world.fixtures()
+            ids = [fixture.id for fixture in fixtures]
             # Null-only rather than an empty `enum`, which is not valid JSON Schema.
             schema["anyOf"] = [{"type": "string", "enum": ids}] if ids else []
             schema["anyOf"].append({"type": "null"})
+            # In the field's own description rather than `oneOf` with a `const` per id:
+            # a client that builds a form from the schema reads `enum` and `description`,
+            # and some refuse `oneOf` outright.
+            described = [
+                f"- `{fixture.id}`: {_indent_continuation(fixture.description.strip())}"
+                for fixture in fixtures
+                if fixture.description.strip()
+            ]
+            if described:
+                listing = "\n".join(described)
+                schema["description"] = f"{schema['description']}\n\nThe fixtures:\n{listing}"
 
         # The subclass takes the base's own name, so the schema's `title` is
         # `SeahavenResetRequest` and no generated name reaches the wire. No
@@ -436,9 +448,7 @@ class SeahavenResetRequest(ResetRequest):
             fixture=(
                 Annotated[
                     str | None,
-                    Field(
-                        description=base["fixture"].description, json_schema_extra=fill_fixture_ids
-                    ),
+                    Field(description=base["fixture"].description, json_schema_extra=fill_fixtures),
                 ],
                 None,
             ),
@@ -451,6 +461,11 @@ class SeahavenResetRequest(ResetRequest):
                 Field(default=None, description=base["startup"].description),
             ),
         )
+
+
+def _indent_continuation(text: str) -> str:
+    """`text` with each line after the first indented, so it stays inside a Markdown list item."""
+    return text.replace("\n", "\n  ")
 
 
 class SeahavenSchemaResponse(SchemaResponse):

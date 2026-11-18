@@ -365,7 +365,8 @@ timestamp. `fork` takes no `--now`, because a fork's clock starts at its parent'
 ## Writing a description
 
 The `description` is the one field written for a person, or for an agent, choosing between fixtures.
-It is what `seahaven fixture list` prints. Say what the data contains and what scenarios it
+It is what `seahaven fixture list` prints, and an OpenEnv server publishes it in the reset schema,
+in the `fixture` argument's description. Say what the data contains and what scenarios it
 supports:
 
 > A twelve-person agency: three teams, nine projects including a finished one, six hundred issues
