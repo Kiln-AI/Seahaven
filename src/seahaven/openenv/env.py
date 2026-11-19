@@ -407,10 +407,10 @@ class SeahavenResetRequest(ResetRequest):
 
     @classmethod
     def for_world(cls, world: World) -> type[SeahavenResetRequest]:
-        """This model narrowed to one world: its fixtures, its formats, its startup keywords.
+        """This model narrowed to one world: its fixtures, formats, startup keywords, setup notes.
 
-        The fixture ids are read from the fixtures directory on every
-        `model_json_schema()`, so a fixture frozen while a server runs is
+        The fixture ids and descriptions are read from the fixtures directory on
+        every `model_json_schema()`, so a fixture frozen while a server runs is
         published without a restart. A fixtures directory that cannot be read
         publishes `fixture` as any string and logs why, so `GET /schema` still
         answers. Everything else is fixed here, and a startup hook the schema
@@ -422,9 +422,9 @@ class SeahavenResetRequest(ResetRequest):
 
         unreadable: list[str] = []
 
-        def fill_fixture_ids(schema: dict[str, Any]) -> None:
+        def fill_fixtures(schema: dict[str, Any]) -> None:
             try:
-                ids = [fixture.id for fixture in world.fixtures()]
+                fixtures = world.fixtures()
             except WorldBug as error:
                 # Logged once per distinct problem: the console and hub probes
                 # read `/schema` again and again.
@@ -433,9 +433,21 @@ class SeahavenResetRequest(ResetRequest):
                     _log.error("cannot list fixtures for the reset schema: %s", error)
                 schema["anyOf"] = [{"type": "string"}, {"type": "null"}]
                 return
+            ids = [fixture.id for fixture in fixtures]
             # Null-only rather than an empty `enum`, which is not valid JSON Schema.
             schema["anyOf"] = [{"type": "string", "enum": ids}] if ids else []
             schema["anyOf"].append({"type": "null"})
+            # In the field's own description rather than `oneOf` with a `const` per id:
+            # a client that builds a form from the schema reads `enum` and `description`,
+            # and some refuse `oneOf` outright.
+            described = [
+                f"- `{fixture.id}`: {_indent_continuation(fixture.description.strip())}"
+                for fixture in fixtures
+                if fixture.description.strip()
+            ]
+            if described:
+                listing = "\n".join(described)
+                schema["description"] = f"{schema['description']}\n\nThe fixtures:\n{listing}"
 
         # The subclass takes the base's own name, so the schema's `title` is
         # `SeahavenResetRequest` and no generated name reaches the wire. No
@@ -447,9 +459,7 @@ class SeahavenResetRequest(ResetRequest):
             fixture=(
                 Annotated[
                     str | None,
-                    Field(
-                        description=base["fixture"].description, json_schema_extra=fill_fixture_ids
-                    ),
+                    Field(description=base["fixture"].description, json_schema_extra=fill_fixtures),
                 ],
                 None,
             ),
@@ -461,7 +471,26 @@ class SeahavenResetRequest(ResetRequest):
                 _startup_model(world) | None,
                 Field(default=None, description=base["startup"].description),
             ),
+            setup_sql=(
+                str | None,
+                Field(
+                    default=None,
+                    description=_with_notes(base["setup_sql"].description, world.setup_sql_notes),
+                ),
+            ),
         )
+
+
+def _with_notes(description: str | None, notes: str | None) -> str | None:
+    """`description` followed by the world's own `notes`, or alone when they are blank."""
+    if notes is None or not notes.strip():
+        return description
+    return f"{description}\n\n{notes.strip()}"
+
+
+def _indent_continuation(text: str) -> str:
+    """`text` with each line after the first indented, so it stays inside a Markdown list item."""
+    return text.replace("\n", "\n  ")
 
 
 class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
