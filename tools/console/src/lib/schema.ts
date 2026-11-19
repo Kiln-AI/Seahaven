@@ -285,15 +285,18 @@ export const STARTUP_PREFIX = "startup."
  * `startupOpen` is true when the world accepts startup keywords the schema does
  * not name; those can only be sent as raw JSON.
  */
-export function resetFieldsOf(reset: JsonSchema): { fields: Field[]; startupOpen: boolean } {
+export function resetFieldsOf(reset: JsonSchema): { fields: Field[]; startupOpen: boolean; open: boolean } {
   // A property that only accepts null offers nothing to fill in: Seahaven
   // publishes `fixture` that way for a world with no fixtures.
   const nullOnly = Object.entries(reset.properties ?? {})
     .filter(([, property]) => isNullOnly(property))
     .map(([name]) => name)
   const top = fieldsOf(reset, nullOnly, { untypedAsText: true })
+  // JSON Schema allows unlisted keys unless `additionalProperties` is `false`.
+  // OpenEnv's default `ResetRequest` allows them; Seahaven's model does not.
+  const open = reset.additionalProperties !== false
   const raw = reset.properties?.startup
-  if (!raw) return { fields: top, startupOpen: false }
+  if (!raw) return { fields: top, startupOpen: false, open }
   const startup = unwrapNullable(deref(raw, reset), reset)
   const inner = fieldsOf({ ...startup, $defs: reset.$defs }, [], { untypedAsText: true }).map((field) => ({
     ...field,
@@ -301,7 +304,7 @@ export function resetFieldsOf(reset: JsonSchema): { fields: Field[]; startupOpen
     label: `startup · ${field.label}`,
   }))
   const fields = top.flatMap((field) => (field.name === "startup" ? inner : [field]))
-  return { fields, startupOpen: startup.additionalProperties === true }
+  return { fields, startupOpen: startup.additionalProperties === true, open }
 }
 
 function isNullOnly(schema: JsonSchema): boolean {

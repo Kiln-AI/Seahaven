@@ -29,7 +29,6 @@ export default defineConfig({
     proxy: {
       "/ws": { target: TARGET, ws: true, changeOrigin: true },
       "/schema": { target: TARGET, changeOrigin: true },
-      "/seahaven": { target: TARGET, changeOrigin: true },
       "/metadata": { target: TARGET, changeOrigin: true },
       "/health": { target: TARGET, changeOrigin: true },
     },

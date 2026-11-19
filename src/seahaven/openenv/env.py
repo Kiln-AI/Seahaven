@@ -47,7 +47,6 @@ from openenv.core.env_server.types import (
     EnvironmentMetadata,
     Observation,
     ResetRequest,
-    SchemaResponse,
     State,
 )
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -80,7 +79,6 @@ __all__ = [
     "SeahavenEnv",
     "SeahavenObservation",
     "SeahavenResetRequest",
-    "SeahavenSchemaResponse",
     "SeahavenState",
     "WorldRef",
 ]
@@ -114,8 +112,8 @@ class SeahavenObservation(CallToolObservation):
     It subclasses OpenEnv's `CallToolObservation` rather than `Observation` so
     that upstream's MCP `tools/call` path, which checks for that type, keeps
     working. `/mcp` itself is refused, but a `{"type": "mcp"}` frame on a `/ws`
-    connection reaches the same check (`http_server.py` line 1020 in openenv
-    0.5.0), which answers an internal error to anything that is not one. That
+    connection reaches the same check (`mcp_handler` in `http_server.py`,
+    openenv 0.13.0), which answers an internal error to anything that is not one. That
     check is on the step path only; `reset` has its own handler and no check.
 
     `error` is a tool's own error: data the agent reads, which never closes the
@@ -174,7 +172,7 @@ class SeahavenObservation(CallToolObservation):
         Read from this observation's own `metadata`, which is the copy that
         travels inside the observation. OpenEnv's serializer copies a non-empty
         `metadata` to the top level of the wire envelope as well
-        (`serialization.py` lines 183-184 in openenv 0.5.0, deliberately, for a
+        (`serialize_observation` in openenv 0.13.0, deliberately, for a
         client that reads the generic format), so the triple is on an error frame
         twice and a client should pick one. This is the one Seahaven's own client
         reads.
@@ -413,15 +411,28 @@ class SeahavenResetRequest(ResetRequest):
 
         The fixture ids and descriptions are read from the fixtures directory on
         every `model_json_schema()`, so a fixture frozen while a server runs is
-        published without a restart. Everything else is fixed here, and a
-        startup hook the schema cannot describe is a `WorldBug` here.
+        published without a restart. A fixtures directory that cannot be read
+        publishes `fixture` as any string and logs why, so `GET /schema` still
+        answers. Everything else is fixed here, and a startup hook the schema
+        cannot describe is a `WorldBug` here.
         """
         base = cls.model_fields
         # A world cannot register a built-in's name, so the two lists never overlap.
         formats = (*sorted(BUILTIN_FORMATS), *sorted(world.state_formats))
 
+        unreadable: list[str] = []
+
         def fill_fixtures(schema: dict[str, Any]) -> None:
-            fixtures = world.fixtures()
+            try:
+                fixtures = world.fixtures()
+            except WorldBug as error:
+                # Logged once per distinct problem: the console and hub probes
+                # read `/schema` again and again.
+                if str(error) not in unreadable:
+                    unreadable.append(str(error))
+                    _log.error("cannot list fixtures for the reset schema: %s", error)
+                schema["anyOf"] = [{"type": "string"}, {"type": "null"}]
+                return
             ids = [fixture.id for fixture in fixtures]
             # Null-only rather than an empty `enum`, which is not valid JSON Schema.
             schema["anyOf"] = [{"type": "string", "enum": ids}] if ids else []
@@ -480,12 +491,6 @@ def _with_notes(description: str | None, notes: str | None) -> str | None:
 def _indent_continuation(text: str) -> str:
     """`text` with each line after the first indented, so it stays inside a Markdown list item."""
     return text.replace("\n", "\n  ")
-
-
-class SeahavenSchemaResponse(SchemaResponse):
-    """`GET /schema`'s answer plus the reset message, as OpenEnv would answer with a `reset_cls`."""
-
-    reset: dict[str, Any] = Field(description="JSON schema for the reset message")
 
 
 class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
@@ -594,7 +599,7 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         # Three key names never reach this method: `self`, `session_id` and
         # `func` are the arguments of OpenEnv's own call frame
         # (`_run_in_session_executor` in `openenv/core/env_server/http_server.py`,
-        # verified against 0.5.0, which now receives them because a `**kwargs`
+        # verified against 0.13.0, which receives them because a `**kwargs`
         # signature makes it forward every key). A client sending one gets
         # upstream's `TypeError` as the error frame instead of the refusal below,
         # and the session survives it either way.
@@ -760,8 +765,8 @@ class SeahavenEnv(Environment[Action, Observation, SeahavenState]):
         The second and third outcomes are scrubbed here, because this is the wire
         boundary and nothing deeper is one. A propagating `SeahavenError` is
         re-raised with a message that says nothing: OpenEnv renders a failed frame
-        as `WSErrorResponse(data={"message": str(e)})` (`http_server.py` lines
-        1720-1726 in openenv 0.5.0), so whatever the author wrote for themselves
+        as `WSErrorResponse(data={"message": str(e)})` (`websocket_endpoint` in
+        `http_server.py`, openenv 0.13.0), so whatever the author wrote for themselves
         would otherwise go out verbatim. It still hard-fails the frame, which is
         the point -- turning it into an observation would let an eval quietly
         score a broken world. In process, `Instance.call` still raises the real

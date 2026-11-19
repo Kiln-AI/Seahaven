@@ -58,7 +58,7 @@ check(await page.getByText("No environment open").isVisible(), "the empty state 
 
 // --- new environment, through the generated reset form ---------------------
 //
-// The default mock answers `GET /seahaven/schemas`, so the dialog builds the
+// The default mock publishes `reset` on `GET /schema`, so the dialog builds the
 // reset message as a form. The frame the browser sends is the proof: the
 // startup keywords go back under `startup`, and untouched fields are left out.
 
@@ -330,12 +330,16 @@ plain.on("pageerror", (error) => problems.push(`page error: ${error.message}`))
 await plain.goto("http://127.0.0.1:8001/console", { waitUntil: "networkidle" })
 await plain.getByRole("button", { name: "New environment" }).first().click()
 await plain.waitForTimeout(700)
-// No `/seahaven/schemas` here, so the reset arguments are the JSON box.
-await plain.getByText("Advanced: reset arguments").click()
+// OpenEnv's default `ResetRequest` here: a form of its two fields, and a note
+// that the environment takes keys the form does not list.
 await shot(plain, "plain-new-env")
 check(
-  await plain.getByPlaceholder(/"fixture": "small_startup"/).isVisible(),
-  "an environment with no reset schema did not get the JSON box",
+  await plain.getByText("Seed", { exact: true }).isVisible(),
+  "an environment publishing the default reset schema did not get its form",
+)
+check(
+  await plain.getByText(/also accepts reset arguments it does not list/).isVisible(),
+  "an open reset schema did not say it takes unlisted keys",
 )
 await plain.getByRole("button", { name: "Open environment" }).click()
 await plain.waitForTimeout(700)
@@ -358,7 +362,7 @@ const slow = await context.newPage()
 slow.on("pageerror", (error) => problems.push(`page error: ${error.message}`))
 let release
 const held = new Promise((resolve) => (release = resolve))
-await slow.route("**/seahaven/schemas", async (route) => {
+await slow.route("**/schema", async (route) => {
   await held
   await route.continue()
 })

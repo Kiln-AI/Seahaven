@@ -32,7 +32,7 @@ from openenv.core.containers.runtime._server_config import (
     parse_dockerfile_cmd,
     parse_openenv_app_field,
 )
-from openenv.validation import CheckStatus, load_policy, run_validation
+from openenv.validation import CheckStatus, Level, run_validation
 from uvicorn.importer import import_from_string
 
 from tests.serving import serving_app
@@ -41,7 +41,7 @@ pytestmark = pytest.mark.usefixtures("isolated_imports")
 
 WORLD = "hubbed"
 
-# The one finding `openenv validate` has on a scaffold, and the deviation
+# The one finding `openenv validate --level static` has on a scaffold, and the deviation
 # `serving_and_openenv.md` documents: the block declares a reward range and a
 # reward oracle, and a Seahaven world has no reward.
 NO_VALIDATION_BLOCK = "openenv.yaml has no `validation:` block"
@@ -84,10 +84,25 @@ def get(url: str) -> bytes:
 
 
 def test_openenv_validate_reports_only_the_missing_validation_block(published: Path) -> None:
-    report = run_validation(published, policy=load_policy())
+    report = run_validation(published, max_level=Level.STATIC)
     assert [(result.check_id, result.status, result.evidence) for result in report.results] == [
         ("static.manifest", CheckStatus.FAIL, [NO_VALIDATION_BLOCK])
     ]
+
+
+def test_openenv_validate_at_its_default_level_fails_nothing_else(published: Path) -> None:
+    """The level `openenv validate` runs bare, without the image build a test cannot do.
+
+    The checks that need the image are skipped, so this guards every runtime or
+    semantic check that can fail a scaffold without one.
+    """
+    report = run_validation(published, skip_build=True)
+    failed = [
+        (result.check_id, result.evidence)
+        for result in report.results
+        if result.status is CheckStatus.FAIL
+    ]
+    assert failed == [("static.manifest", [NO_VALIDATION_BLOCK])]
 
 
 def test_the_scaffold_has_the_structure_openenv_push_requires(published: Path) -> None:
