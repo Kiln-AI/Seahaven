@@ -116,7 +116,9 @@ def test_a_fixture_frozen_while_serving_appears_on_the_next_request(world: World
         assert _fixture_ids(_get(url + UPSTREAM_SCHEMA_PATH)["reset"]) is None
         with world.instance(None) as instance:
             instance.freeze("start", "Empty.")
-        assert _fixture_ids(_get(url + UPSTREAM_SCHEMA_PATH)["reset"]) == ["start"]
+        reset = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
+        assert _fixture_ids(reset) == ["start"]
+        assert reset["properties"]["fixture"]["description"].endswith("- `start`: Empty.")
 
 
 def test_a_message_built_from_the_schema_validates_and_resets_over_the_socket(
@@ -211,6 +213,53 @@ def test_a_world_with_no_fixtures_directory_publishes_fixture_as_null_only(
 ) -> None:
     world = build_world(tmp_path, fixtures_dir=tmp_path / "nowhere")
     assert _reset_schema(world)["properties"]["fixture"]["anyOf"] == [{"type": "null"}]
+
+
+def test_the_reference_world_describes_each_fixture_in_the_fixture_field() -> None:
+    world = projecttracker.world
+    description = _reset_schema(world)["properties"]["fixture"]["description"]
+    base = SeahavenResetRequest.model_fields["fixture"].description
+    assert description.startswith(f"{base}\n\nThe fixtures:\n")
+    lines = description.split("\n\nThe fixtures:\n")[1].split("\n")
+    assert lines == [
+        f"- `{fixture.id}`: {fixture.description.strip()}" for fixture in world.fixtures()
+    ]
+
+
+def test_a_blank_fixture_description_is_left_out(world: World) -> None:
+    with world.instance(None) as instance:
+        instance.freeze("described", "One team.\n| teams | 1 |")
+        instance.freeze("blank", "  ")
+    description = _reset_schema(world)["properties"]["fixture"]["description"]
+    # A later line is indented to stay inside its list item, so a table survives.
+    assert description.endswith("The fixtures:\n- `described`: One team.\n  | teams | 1 |")
+    assert "`blank`" not in description
+
+
+def test_a_world_with_no_described_fixtures_keeps_the_plain_description(world: World) -> None:
+    with world.instance(None) as instance:
+        instance.freeze("blank", "")
+    description = _reset_schema(world)["properties"]["fixture"]["description"]
+    assert description == SeahavenResetRequest.model_fields["fixture"].description
+
+
+def test_a_worlds_setup_sql_notes_follow_the_framework_sentence(tmp_path: Path) -> None:
+    notes = "  Issues are stored in `tickets`.\nEach ticket needs a `ticket_index` row.\n"
+    world = build_world(tmp_path, setup_sql_notes=notes)
+    with serving(world) as url:
+        reset = _get(url + UPSTREAM_SCHEMA_PATH)["reset"]
+    description = reset["properties"]["setup_sql"]["description"]
+    base = SeahavenResetRequest.model_fields["setup_sql"].description
+    assert description == f"{base}\n\n{notes.strip()}"
+
+
+@pytest.mark.parametrize("notes", [None, "", " \n "])
+def test_a_world_with_no_setup_sql_notes_keeps_the_plain_description(
+    tmp_path: Path, notes: str | None
+) -> None:
+    world = build_world(tmp_path, setup_sql_notes=notes)
+    description = _reset_schema(world)["properties"]["setup_sql"]["description"]
+    assert description == SeahavenResetRequest.model_fields["setup_sql"].description
 
 
 def test_registered_state_formats_follow_the_built_ins(world: World) -> None:
